@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { fetchListPage, fetchDetailPage, type JobDetail } from "@/lib/crawler";
 import { summarizeJob, type JobSummary } from "@/lib/summarizer";
 import { getCache, setCache } from "@/lib/cache";
+import { CRAWL_PAGES } from "@/lib/config";
 
 const CACHE_KEY = "jobs";
-const DEFAULT_PAGES = 1; // 10건
 const DELAY_MS = 1000;
 
 function sleep(ms: number) {
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const refresh = searchParams.get("refresh") === "true";
   const pages = Math.min(
-    parseInt(searchParams.get("pages") || String(DEFAULT_PAGES)),
+    parseInt(searchParams.get("pages") || String(CRAWL_PAGES)),
     15
   );
 

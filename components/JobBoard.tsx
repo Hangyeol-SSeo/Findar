@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { categorizePositions } from "@/lib/position-categories";
+import { CRAWL_PAGES } from "@/lib/config";
 
 interface JobSummary {
   seq: string;
@@ -64,7 +65,7 @@ export default function JobBoard() {
 
     try {
       const res = await fetch(
-        `/api/jobs${refresh ? "?refresh=true" : ""}`,
+        `/api/jobs?pages=${CRAWL_PAGES}${refresh ? "&refresh=true" : ""}`,
         { signal: controller.signal }
       );
 
