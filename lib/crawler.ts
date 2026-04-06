@@ -68,7 +68,7 @@ export async function fetchDetailPage(seq: string): Promise<JobDetail | null> {
     table.find('th:contains("회원사명")').first().next("td").text().trim() || "";
   const applicationPeriod =
     table.find('th:contains("접수기간")').first().next("td").text().trim() || "";
-  const siteUrl =
+  const rawSiteUrl =
     table
       .find('th:contains("사이트바로가기")')
       .first()
@@ -76,6 +76,9 @@ export async function fetchDetailPage(seq: string): Promise<JobDetail | null> {
       .find("a")
       .text()
       .trim() || "";
+  const siteUrl = rawSiteUrl && !/^https?:\/\//.test(rawSiteUrl)
+    ? `https://${rawSiteUrl}`
+    : rawSiteUrl;
 
   const attachments: { name: string; url: string }[] = [];
   table.find('th:contains("첨부")').each((_, el) => {
