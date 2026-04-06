@@ -64,7 +64,7 @@ export default function JobBoard() {
 
     try {
       const res = await fetch(
-        `/api/jobs?pages=7${refresh ? "&refresh=true" : ""}`,
+        `/api/jobs${refresh ? "?refresh=true" : ""}`,
         { signal: controller.signal }
       );
 
@@ -152,6 +152,7 @@ export default function JobBoard() {
             case "done":
               setJobs(data.jobs);
               setFromCache(false);
+              setLoading(false);
               setProgress((p) => ({
                 ...p,
                 phase: "done",
@@ -161,15 +162,14 @@ export default function JobBoard() {
 
             case "error":
               setError(data.message);
+              setLoading(false);
               break;
           }
         }
       }
     } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setError("데이터를 불러오는데 실패했습니다.");
-      }
-    } finally {
+      if ((e as Error).name === "AbortError") return;
+      setError("데이터를 불러오는데 실패했습니다.");
       setLoading(false);
     }
   }, []);

@@ -4,7 +4,7 @@ import { summarizeJob, type JobSummary } from "@/lib/summarizer";
 import { getCache, setCache } from "@/lib/cache";
 
 const CACHE_KEY = "jobs";
-const DEFAULT_PAGES = 7;
+const DEFAULT_PAGES = 1; // 10건
 const DELAY_MS = 1000;
 
 function sleep(ms: number) {
