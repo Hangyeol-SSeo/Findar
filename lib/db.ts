@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
 import type { JobSummary } from "./summarizer";
+import type { JobMatch } from "./matcher";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DATA_DIR, "findar.db");
@@ -37,6 +38,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_jobs_date ON jobs(date);
 `);
 
+function addColumnIfMissing(column: string, definition: string): void {
+  const cols = db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+addColumnIfMissing("matchScore", "INTEGER");
+addColumnIfMissing("matchVerdict", "TEXT");
+addColumnIfMissing("matchStrengths", "TEXT");
+addColumnIfMissing("matchGaps", "TEXT");
+addColumnIfMissing("matchReasoning", "TEXT");
+addColumnIfMissing("matchProfileHash", "TEXT");
+
+db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_matchScore ON jobs(matchScore)`);
+
 interface JobRow {
   seq: string;
   company: string;
@@ -55,10 +72,20 @@ interface JobRow {
   deadline: string;
   summarizedAt: number | null;
   createdAt: number;
+  matchScore: number | null;
+  matchVerdict: string | null;
+  matchStrengths: string | null;
+  matchGaps: string | null;
+  matchReasoning: string | null;
+  matchProfileHash: string | null;
 }
 
-function rowToSummary(row: JobRow): JobSummary {
-  return {
+export type JobWithMatch = JobSummary & Partial<JobMatch> & {
+  matchProfileHash?: string | null;
+};
+
+function rowToJobWithMatch(row: JobRow): JobWithMatch {
+  const base: JobSummary = {
     seq: row.seq,
     company: row.company,
     title: row.title,
@@ -69,10 +96,18 @@ function rowToSummary(row: JobRow): JobSummary {
     positionType: row.positionType,
     experienceYears: row.experienceYears,
     positions: JSON.parse(row.positions),
-    categories: JSON.parse(row.categories),
     qualifications: JSON.parse(row.qualifications),
     jdSummary: row.jdSummary,
     deadline: row.deadline,
+  };
+  return {
+    ...base,
+    matchScore: row.matchScore ?? undefined,
+    matchVerdict: (row.matchVerdict as JobMatch["matchVerdict"] | null) ?? undefined,
+    matchStrengths: row.matchStrengths ? JSON.parse(row.matchStrengths) : undefined,
+    matchGaps: row.matchGaps ? JSON.parse(row.matchGaps) : undefined,
+    matchReasoning: row.matchReasoning ?? undefined,
+    matchProfileHash: row.matchProfileHash,
   };
 }
 
@@ -95,7 +130,7 @@ const upsertJobStmt = db.prepare(`
     qualifications, jdSummary, deadline, summarizedAt, createdAt
   ) VALUES (
     @seq, @company, @title, @date, @applicationPeriod, @siteUrl, @rawContent,
-    @attachments, @positionType, @experienceYears, @positions, @categories,
+    @attachments, @positionType, @experienceYears, @positions, '[]',
     @qualifications, @jdSummary, @deadline, @summarizedAt, @createdAt
   )
   ON CONFLICT(seq) DO UPDATE SET
@@ -109,7 +144,6 @@ const upsertJobStmt = db.prepare(`
     positionType = excluded.positionType,
     experienceYears = excluded.experienceYears,
     positions = excluded.positions,
-    categories = excluded.categories,
     qualifications = excluded.qualifications,
     jdSummary = excluded.jdSummary,
     deadline = excluded.deadline,
@@ -136,13 +170,58 @@ export function upsertJob({ summary, rawContent, summarizedOk }: UpsertJobInput)
     positionType: summary.positionType,
     experienceYears: summary.experienceYears,
     positions: JSON.stringify(summary.positions),
-    categories: JSON.stringify(summary.categories),
     qualifications: JSON.stringify(summary.qualifications),
     jdSummary: summary.jdSummary,
     deadline: summary.deadline,
     summarizedAt: summarizedOk ? now : null,
     createdAt: now,
   });
+}
+
+const updateMatchStmt = db.prepare(`
+  UPDATE jobs SET
+    matchScore = @matchScore,
+    matchVerdict = @matchVerdict,
+    matchStrengths = @matchStrengths,
+    matchGaps = @matchGaps,
+    matchReasoning = @matchReasoning,
+    matchProfileHash = @matchProfileHash
+  WHERE seq = @seq
+`);
+
+export function updateJobMatch(seq: string, match: JobMatch, profileHash: string): void {
+  updateMatchStmt.run({
+    seq,
+    matchScore: match.matchScore,
+    matchVerdict: match.matchVerdict,
+    matchStrengths: JSON.stringify(match.matchStrengths),
+    matchGaps: JSON.stringify(match.matchGaps),
+    matchReasoning: match.matchReasoning,
+    matchProfileHash: profileHash,
+  });
+}
+
+const selectJobsNeedingMatchStmt = db.prepare(`
+  SELECT * FROM jobs
+  WHERE summarizedAt IS NOT NULL
+    AND (matchProfileHash IS NULL OR matchProfileHash != ?)
+`);
+
+export function getJobsNeedingMatch(profileHash: string): JobWithMatch[] {
+  const rows = selectJobsNeedingMatchStmt.all(profileHash) as JobRow[];
+  return rows.map(rowToJobWithMatch);
+}
+
+export function clearAllMatches(): void {
+  db.exec(`
+    UPDATE jobs SET
+      matchScore = NULL,
+      matchVerdict = NULL,
+      matchStrengths = NULL,
+      matchGaps = NULL,
+      matchReasoning = NULL,
+      matchProfileHash = NULL
+  `);
 }
 
 function todayYmd(): string {
@@ -164,10 +243,14 @@ function applicationPeriodEnd(period: string): string {
 }
 
 const selectActiveJobsStmt = db.prepare(
-  `SELECT * FROM jobs WHERE summarizedAt IS NOT NULL ORDER BY date DESC`
+  `SELECT * FROM jobs WHERE summarizedAt IS NOT NULL
+   ORDER BY
+     CASE WHEN matchScore IS NULL THEN 1 ELSE 0 END,
+     matchScore DESC,
+     date DESC`
 );
 
-export function getActiveJobs(): JobSummary[] {
+export function getActiveJobs(): JobWithMatch[] {
   const today = todayYmd();
   const rows = selectActiveJobsStmt.all() as JobRow[];
   return rows
@@ -178,7 +261,7 @@ export function getActiveJobs(): JobSummary[] {
       if (periodEnd) return periodEnd >= today;
       return true;
     })
-    .map(rowToSummary);
+    .map(rowToJobWithMatch);
 }
 
 function migrateLegacyCache(): void {
@@ -203,7 +286,6 @@ function migrateLegacyCache(): void {
             positionType: s.positionType,
             experienceYears: s.experienceYears,
             positions: JSON.stringify(s.positions || []),
-            categories: JSON.stringify(s.categories?.length ? s.categories : ["기타"]),
             qualifications: JSON.stringify(s.qualifications || []),
             jdSummary: s.jdSummary,
             deadline: s.deadline,

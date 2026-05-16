@@ -6,6 +6,8 @@
 # database
 /data
 
+/resume
+
 # dependencies
 /node_modules
 /.pnp

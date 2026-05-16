@@ -18,12 +18,18 @@ interface JobSummary {
   jdSummary: string;
   qualifications: string[];
   deadline: string;
+  matchScore?: number;
+  matchVerdict?: "추천" | "보통" | "비추천";
+  matchStrengths?: string[];
+  matchGaps?: string[];
+  matchReasoning?: string;
 }
 
 type FilterType = "전체" | "신입" | "경력" | "인턴" | "신입경력";
+type SortType = "추천순" | "최신순";
 
 interface Progress {
-  phase: "idle" | "crawl" | "detail" | "summarize" | "done";
+  phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "rematch" | "done";
   message: string;
   current: number;
   total: number;
@@ -39,6 +45,8 @@ export default function JobBoard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
   const [newCount, setNewCount] = useState<number | null>(null);
+  const [hasProfile, setHasProfile] = useState(false);
+  const [sort, setSort] = useState<SortType>("추천순");
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -129,7 +137,6 @@ export default function JobBoard() {
                 total: data.total,
                 remainingSeconds: data.remainingSeconds,
               }));
-              // 요약된 공고 실시간 추가
               if (data.job) {
                 setJobs((prev) => {
                   const exists = prev.some((j) => j.seq === data.job.seq);
@@ -138,9 +145,29 @@ export default function JobBoard() {
               }
               break;
 
+            case "rematch-progress":
+              setProgress((p) => ({
+                ...p,
+                phase: "rematch",
+                message: `기존 공고 재평가 중... (${data.current}/${data.total})`,
+                current: data.current,
+                total: data.total,
+              }));
+              if (data.job) {
+                setJobs((prev) =>
+                  prev.map((j) => (j.seq === data.job.seq ? data.job : j))
+                );
+              }
+              break;
+
+            case "profile-ready":
+              setHasProfile(data.status !== "missing" && data.status !== "error");
+              break;
+
             case "done":
               setJobs(data.jobs);
               setNewCount(typeof data.newCount === "number" ? data.newCount : null);
+              setHasProfile(!!data.hasProfile);
               setLoading(false);
               setProgress((p) => ({
                 ...p,
@@ -178,7 +205,7 @@ export default function JobBoard() {
   }, [jobs]);
 
   const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
+    const filtered = jobs.filter((job) => {
       const matchType =
         filter === "전체" || job.positionType.includes(filter);
       const matchPosition =
@@ -193,7 +220,24 @@ export default function JobBoard() {
         job.jdSummary.toLowerCase().includes(q);
       return matchType && matchPosition && matchSearch;
     });
-  }, [jobs, filter, positionFilter, searchQuery]);
+
+    if (sort === "추천순" && hasProfile) {
+      return [...filtered].sort((a, b) => {
+        const sa = a.matchScore ?? -1;
+        const sb = b.matchScore ?? -1;
+        if (sb !== sa) return sb - sa;
+        return b.date.localeCompare(a.date);
+      });
+    }
+    return [...filtered].sort((a, b) => b.date.localeCompare(a.date));
+  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile]);
+
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return "bg-emerald-500 text-white";
+    if (score >= 60) return "bg-blue-500 text-white";
+    if (score >= 40) return "bg-amber-400 text-white";
+    return "bg-gray-300 text-gray-700";
+  };
 
   const getBadgeColor = (type: string) => {
     if (type.includes("신입") && type.includes("경력"))
@@ -339,19 +383,38 @@ export default function JobBoard() {
                 <span className="text-emerald-600"> · 신규 {newCount}건</span>
               )}
             </span>
-            <button
-              onClick={() => fetchJobs()}
-              disabled={loading}
-              className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-            >
-              {loading && (
-                <svg className="animate-spin h-3.5 w-3.5 text-gray-500" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+            <div className="flex items-center gap-2">
+              {hasProfile && (
+                <div className="flex bg-gray-100 rounded-lg p-0.5">
+                  {(["추천순", "최신순"] as SortType[]).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setSort(s)}
+                      className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                        sort === s
+                          ? "bg-white text-gray-900 shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               )}
-              {loading ? "로딩 중..." : "새로고침"}
-            </button>
+              <button
+                onClick={() => fetchJobs()}
+                disabled={loading}
+                className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+              >
+                {loading && (
+                  <svg className="animate-spin h-3.5 w-3.5 text-gray-500" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {loading ? "로딩 중..." : "새로고침"}
+              </button>
+            </div>
           </div>
 
           {/* Error */}
@@ -392,6 +455,14 @@ export default function JobBoard() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
+                      {typeof job.matchScore === "number" && (
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-bold ${getScoreColor(job.matchScore)}`}
+                          title={job.matchReasoning}
+                        >
+                          {job.matchScore}
+                        </span>
+                      )}
                       <span className="text-sm font-medium text-blue-600">
                         {job.company}
                       </span>
@@ -473,6 +544,55 @@ export default function JobBoard() {
             {/* Panel body */}
             <div className="flex-1 overflow-y-auto p-5">
               <h2 className="text-xl font-bold mb-4">{selectedJob.title}</h2>
+
+              {typeof selectedJob.matchScore === "number" && (
+                <div className="mb-5 p-4 rounded-xl bg-gradient-to-br from-gray-50 to-white border border-gray-100">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div
+                      className={`text-2xl font-bold w-14 h-14 rounded-xl flex items-center justify-center ${getScoreColor(selectedJob.matchScore)}`}
+                    >
+                      {selectedJob.matchScore}
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-400">매칭 점수</div>
+                      <div className="text-sm font-semibold text-gray-700">
+                        {selectedJob.matchVerdict ?? "-"}
+                      </div>
+                    </div>
+                  </div>
+                  {selectedJob.matchReasoning && (
+                    <p className="text-sm text-gray-600 leading-relaxed">
+                      {selectedJob.matchReasoning}
+                    </p>
+                  )}
+                  {selectedJob.matchStrengths && selectedJob.matchStrengths.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-emerald-700 mb-1">강점</div>
+                      <ul className="text-sm text-gray-700 space-y-1">
+                        {selectedJob.matchStrengths.map((s, i) => (
+                          <li key={i} className="flex gap-2">
+                            <span className="text-emerald-500 shrink-0">+</span>
+                            <span>{s}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {selectedJob.matchGaps && selectedJob.matchGaps.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-amber-700 mb-1">갭</div>
+                      <ul className="text-sm text-gray-700 space-y-1">
+                        {selectedJob.matchGaps.map((g, i) => (
+                          <li key={i} className="flex gap-2">
+                            <span className="text-amber-500 shrink-0">-</span>
+                            <span>{g}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3 mb-5">
                 <InfoItem label="채용 유형" value={selectedJob.positionType} />

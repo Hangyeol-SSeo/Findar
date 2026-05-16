@@ -1,6 +1,14 @@
 import { fetchListPage, fetchDetailPage, type JobDetail } from "@/lib/crawler";
 import { summarizeJob } from "@/lib/summarizer";
-import { getExistingSeqs, upsertJob, getActiveJobs } from "@/lib/db";
+import {
+  getExistingSeqs,
+  upsertJob,
+  getActiveJobs,
+  updateJobMatch,
+  getJobsNeedingMatch,
+} from "@/lib/db";
+import { ensureProfile } from "@/lib/profile";
+import { matchJob } from "@/lib/matcher";
 import { CRAWL_PAGES } from "@/lib/config";
 
 const DELAY_MS = 1000;
@@ -32,6 +40,27 @@ export async function GET(request: Request) {
       }
 
       try {
+        // 0단계: 프로필 확보
+        send({ type: "phase", phase: "profile", message: "프로필 확인 중..." });
+        const profileResult = await ensureProfile({
+          onProgress: (msg) =>
+            send({ type: "phase", phase: "profile", message: msg }),
+        });
+        const profile = profileResult.profile;
+        if (profile) {
+          send({
+            type: "profile-ready",
+            status: profileResult.status,
+            name: profile.name,
+          });
+        } else {
+          send({
+            type: "profile-ready",
+            status: profileResult.status,
+            error: profileResult.error,
+          });
+        }
+
         // 1단계: 리스트 크롤링
         send({ type: "phase", phase: "crawl", message: "공고 목록 수집 중..." });
 
@@ -49,7 +78,6 @@ export async function GET(request: Request) {
           if (page < pages) await sleep(DELAY_MS);
         }
 
-        // 신규 + 재시도 대상 추출 (DB에 없거나 summarizedAt IS NULL)
         const allSeqs = allListItems.map((i) => i.seq);
         const existingSeqs = getExistingSeqs(allSeqs);
         const newItems = allListItems.filter((i) => !existingSeqs.has(i.seq));
@@ -77,7 +105,7 @@ export async function GET(request: Request) {
           });
         }
 
-        // 3단계: AI 요약 + DB 저장
+        // 3단계: AI 요약 + 매칭 + DB 저장
         send({
           type: "phase",
           phase: "summarize",
@@ -119,6 +147,17 @@ export async function GET(request: Request) {
 
           upsertJob({ summary, rawContent: detail.content, summarizedOk });
 
+          // 매칭 (프로필이 있고 요약 성공한 경우만)
+          let matched: Awaited<ReturnType<typeof matchJob>> | undefined;
+          if (profile && summarizedOk) {
+            try {
+              matched = await matchJob(profile, summary);
+              updateJobMatch(summary.seq, matched, profile.sourcesHash);
+            } catch (e) {
+              console.error(`Failed to match ${summary.seq}:`, e);
+            }
+          }
+
           const elapsed = Date.now() - startTime;
           const avgPerJob = elapsed / (i + 1);
           const remaining = Math.round((avgPerJob * (details.length - i - 1)) / 1000);
@@ -128,13 +167,46 @@ export async function GET(request: Request) {
             current: i + 1,
             total: details.length,
             remainingSeconds: remaining,
-            job: summary,
+            job: { ...summary, ...(matched ?? {}) },
           });
         }
 
-        // DB에서 마감일 안 지난 공고 전부 반환
+        // 4단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
+        if (profile) {
+          const toRematch = getJobsNeedingMatch(profile.sourcesHash);
+          if (toRematch.length > 0) {
+            send({
+              type: "phase",
+              phase: "rematch",
+              message: `기존 공고 ${toRematch.length}건 재평가 중...`,
+              total: toRematch.length,
+            });
+            for (let i = 0; i < toRematch.length; i++) {
+              const job = toRematch[i];
+              try {
+                const m = await matchJob(profile, job);
+                updateJobMatch(job.seq, m, profile.sourcesHash);
+                send({
+                  type: "rematch-progress",
+                  current: i + 1,
+                  total: toRematch.length,
+                  job: { ...job, ...m },
+                });
+              } catch (e) {
+                console.error(`Failed to rematch ${job.seq}:`, e);
+              }
+            }
+          }
+        }
+
+        // 응답: 마감일 안 지난 공고 전부 (매칭 점수 내림차순 정렬)
         const activeJobs = getActiveJobs();
-        send({ type: "done", jobs: activeJobs, newCount: details.length });
+        send({
+          type: "done",
+          jobs: activeJobs,
+          newCount: details.length,
+          hasProfile: !!profile,
+        });
       } catch (error) {
         console.error("SSE error:", error);
         send({ type: "error", message: "처리 중 오류가 발생했습니다." });
