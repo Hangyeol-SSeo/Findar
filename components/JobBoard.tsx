@@ -38,7 +38,7 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
-  const [fromCache, setFromCache] = useState(false);
+  const [newCount, setNewCount] = useState<number | null>(null);
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -48,13 +48,14 @@ export default function JobBoard() {
   });
   const abortRef = useRef<AbortController | null>(null);
 
-  const fetchJobs = useCallback(async (refresh = false) => {
+  const fetchJobs = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
     setLoading(true);
     setError("");
+    setNewCount(null);
     setProgress({
       phase: "crawl",
       message: "연결 중...",
@@ -64,23 +65,10 @@ export default function JobBoard() {
     });
 
     try {
-      const res = await fetch(
-        `/api/jobs?pages=${CRAWL_PAGES}${refresh ? "&refresh=true" : ""}`,
-        { signal: controller.signal }
-      );
+      const res = await fetch(`/api/jobs?pages=${CRAWL_PAGES}`, {
+        signal: controller.signal,
+      });
 
-      // 캐시 히트 시 JSON 응답
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const data = await res.json();
-        setJobs(data.jobs);
-        setFromCache(data.fromCache);
-        setProgress((p) => ({ ...p, phase: "done", message: "완료" }));
-        setLoading(false);
-        return;
-      }
-
-      // SSE 스트리밍
       const reader = res.body?.getReader();
       if (!reader) throw new Error("Stream not available");
 
@@ -152,7 +140,7 @@ export default function JobBoard() {
 
             case "done":
               setJobs(data.jobs);
-              setFromCache(false);
+              setNewCount(typeof data.newCount === "number" ? data.newCount : null);
               setLoading(false);
               setProgress((p) => ({
                 ...p,
@@ -347,14 +335,12 @@ export default function JobBoard() {
                   ? `${jobs.length}건 로드됨...`
                   : "데이터 수집 중..."
                 : `${filteredJobs.length}건`}
-              {fromCache && !loading && " (캐시)"}
+              {!loading && newCount !== null && newCount > 0 && (
+                <span className="text-emerald-600"> · 신규 {newCount}건</span>
+              )}
             </span>
             <button
-              onClick={() => {
-                setJobs([]);
-                setFromCache(false);
-                fetchJobs(true);
-              }}
+              onClick={() => fetchJobs()}
               disabled={loading}
               className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
             >

@@ -3,6 +3,9 @@
 # cache
 /.cache
 
+# database
+/data
+
 # dependencies
 /node_modules
 /.pnp

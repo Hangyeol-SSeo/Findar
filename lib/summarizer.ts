@@ -45,6 +45,7 @@ JSON 형식:
   for await (const message of query({
     prompt,
     options: {
+      model: "claude-haiku-4-5",
       maxTurns: 1,
       allowedTools: [],
     },
