@@ -235,7 +235,6 @@ export default function JobBoard() {
   const getScoreColor = (score: number) => {
     if (score >= 80) return "bg-emerald-500 text-white";
     if (score >= 60) return "bg-blue-500 text-white";
-    if (score >= 40) return "bg-amber-400 text-white";
     return "bg-gray-300 text-gray-700";
   };
 

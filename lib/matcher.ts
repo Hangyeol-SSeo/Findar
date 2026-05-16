@@ -24,13 +24,9 @@ function clampScore(n: unknown): number {
   return Math.max(0, Math.min(100, Math.round(v)));
 }
 
-function normalizeVerdict(v: unknown, score: number): JobMatch["matchVerdict"] {
-  const s = String(v ?? "");
-  if (s.includes("추천") && !s.includes("비")) return "추천";
-  if (s.includes("비추")) return "비추천";
-  if (s.includes("보통")) return "보통";
-  if (score >= 75) return "추천";
-  if (score >= 50) return "보통";
+function normalizeVerdict(score: number): JobMatch["matchVerdict"] {
+  if (score >= 80) return "추천";
+  if (score >= 60) return "보통";
   return "비추천";
 }
 
@@ -65,10 +61,14 @@ ${job.qualifications.map((q) => `- ${q}`).join("\n")}
 - 채용유형과 경력 수준 적합성 (신입공고에 경력 지원자도 매칭 가능하다고 봐)
 - 도메인 적합성
 
+점수 기준:
+- 80 이상: 강하게 추천 (대부분의 자격요건 충족 + 도메인/경력 적합)
+- 60~79: 적합 (핵심 요건 충족, 일부 갭 있음)
+- 60 미만: 비추천 (요건 미달 또는 미스매치 큼)
+
 JSON 형식:
 {
   "matchScore": 0~100 정수,
-  "matchVerdict": "추천 / 보통 / 비추천 중 하나",
   "matchStrengths": ["적합한 강점 1-3개"],
   "matchGaps": ["부족한/우려되는 부분 1-3개"],
   "matchReasoning": "한두 문장 종합 평가"
@@ -96,7 +96,7 @@ JSON 형식:
     const score = clampScore(parsed.matchScore);
     return {
       matchScore: score,
-      matchVerdict: normalizeVerdict(parsed.matchVerdict, score),
+      matchVerdict: normalizeVerdict(score),
       matchStrengths: Array.isArray(parsed.matchStrengths)
         ? parsed.matchStrengths.slice(0, 5)
         : [],
