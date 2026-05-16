@@ -15,16 +15,19 @@ const CATEGORY_RULES: [string, string[]][] = [
   ["트레이딩", ["트레이더", "트레이딩", "매매", "딜링"]],
 ];
 
-export function categorizePosition(position: string): string {
+export function categorizePosition(position: unknown): string {
+  const s = typeof position === "string" ? position : String(position ?? "");
+  if (!s) return "기타";
   for (const [category, keywords] of CATEGORY_RULES) {
-    if (keywords.some((kw) => position.includes(kw))) {
+    if (keywords.some((kw) => s.includes(kw))) {
       return category;
     }
   }
   return "기타";
 }
 
-export function categorizePositions(positions: string[]): string[] {
+export function categorizePositions(positions: unknown): string[] {
+  if (!Array.isArray(positions)) return [];
   const categories = new Set<string>();
   for (const pos of positions) {
     categories.add(categorizePosition(pos));

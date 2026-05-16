@@ -63,6 +63,13 @@ JSON 형식:
 
     const parsed = JSON.parse(jsonMatch?.[1]?.trim() || "{}");
 
+    const toStringArray = (v: unknown): string[] => {
+      if (!Array.isArray(v)) return [];
+      return v
+        .map((x) => (typeof x === "string" ? x : String(x ?? "")))
+        .filter((s) => s.trim().length > 0);
+    };
+
     return {
       seq: job.seq,
       company: job.company,
@@ -71,12 +78,12 @@ JSON 형식:
       applicationPeriod: job.applicationPeriod,
       siteUrl: job.siteUrl,
       attachments: job.attachments,
-      positionType: parsed.positionType || "미분류",
-      experienceYears: parsed.experienceYears || "미분류",
-      positions: parsed.positions || [],
-      jdSummary: parsed.jdSummary || "",
-      qualifications: parsed.qualifications || [],
-      deadline: parsed.deadline || "",
+      positionType: typeof parsed.positionType === "string" ? parsed.positionType : "미분류",
+      experienceYears: typeof parsed.experienceYears === "string" ? parsed.experienceYears : "미분류",
+      positions: toStringArray(parsed.positions),
+      jdSummary: typeof parsed.jdSummary === "string" ? parsed.jdSummary : "",
+      qualifications: toStringArray(parsed.qualifications),
+      deadline: typeof parsed.deadline === "string" ? parsed.deadline : "",
     };
   } catch {
     return {
