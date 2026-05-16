@@ -110,6 +110,7 @@ export async function GET(request: Request) {
               positionType: "미분류",
               experienceYears: "미분류",
               positions: [],
+              categories: ["기타"],
               jdSummary: "요약 실패",
               qualifications: [],
               deadline: "",
