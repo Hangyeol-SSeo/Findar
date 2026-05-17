@@ -265,7 +265,7 @@ export default function JobBoard() {
       <div
         className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${selectedJob ? "mr-[480px]" : ""}`}
       >
-        <div className="flex-1 overflow-y-auto px-6 py-8">
+        <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
           {/* Header */}
           <header className="mb-6">
             <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
