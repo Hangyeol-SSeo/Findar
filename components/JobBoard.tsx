@@ -664,18 +664,16 @@ export default function JobBoard() {
             </div>
 
             {/* Panel footer */}
-            {selectedJob.siteUrl && (
-              <div className="p-5 border-t border-gray-100">
-                <a
-                  href={selectedJob.siteUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-                >
-                  원문 보기
-                </a>
-              </div>
-            )}
+            <div className="p-5 border-t border-gray-100">
+              <a
+                href={`https://www.kofia.or.kr/brd/m_96/view.do?seq=${selectedJob.seq}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+              >
+                원문 보기
+              </a>
+            </div>
           </div>
         )}
       </div>
