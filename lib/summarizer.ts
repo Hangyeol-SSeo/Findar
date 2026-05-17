@@ -13,36 +13,39 @@ export interface JobSummary {
   positionType: string; // 신입, 경력, 인턴, 신입/경력
   experienceYears: string; // e.g. "3~5년", "무관"
   positions: string[]; // 모집 직무들
-  categories: string[]; // 직군 카테고리
   jdSummary: string; // JD 요약
   qualifications: string[]; // 자격 요건
   deadline: string; // 마감일
 }
 
 export async function summarizeJob(job: JobDetail): Promise<JobSummary> {
-  const CATEGORIES = [
-    "IT/개발", "운용", "리서치/분석", "투자/IB", "경영/기획",
-    "영업/RM", "디자인/UX", "법무/컴플라이언스", "리스크",
-    "재무/회계", "인사/총무", "퇴직연금", "부동산", "트레이딩", "마케팅",
-  ];
+  const prompt = `다음 채용공고를 분석해서 아래 JSON 형식으로만 응답해. 마크다운이나 설명 없이 순수 JSON만 반환해.
 
-  const prompt = `채용공고를 분석해서 JSON으로만 응답해. 설명 없이 순수 JSON만.
-
-규칙:
-- categories: 아래 목록에서 해당하는 것을 모두 선택. 반드시 1개 이상.
-- 가능한 categories: ${CATEGORIES.join(", ")}
-- 목록에 없으면 "기타"
-
-${job.title} | ${job.company} | 접수:${job.applicationPeriod}
-${job.content.slice(0, 2000)}
+채용공고:
 ---
-{"positionType":"신입/경력/인턴/신입경력","experienceYears":"","positions":[],"categories":[],"jdSummary":"","qualifications":[],"deadline":"YYYY-MM-DD"}`;
+회원사: ${job.company}
+제목: ${job.title}
+접수기간: ${job.applicationPeriod}
+내용:
+${job.content.slice(0, 3000)}
+---
+
+JSON 형식:
+{
+  "positionType": "신입/경력/인턴/신입경력 중 하나",
+  "experienceYears": "경력 연차 (예: 3~5년, 무관, 신입)",
+  "positions": ["모집 직무1", "모집 직무2"],
+  "jdSummary": "핵심 업무내용 2-3문장 요약",
+  "qualifications": ["자격요건1", "자격요건2"],
+  "deadline": "마감일 (YYYY-MM-DD 형식, 모르면 빈 문자열)"
+}`;
 
   let resultText = "";
 
   for await (const message of query({
     prompt,
     options: {
+      model: "claude-haiku-4-5",
       maxTurns: 1,
       allowedTools: [],
     },
@@ -60,6 +63,13 @@ ${job.content.slice(0, 2000)}
 
     const parsed = JSON.parse(jsonMatch?.[1]?.trim() || "{}");
 
+    const toStringArray = (v: unknown): string[] => {
+      if (!Array.isArray(v)) return [];
+      return v
+        .map((x) => (typeof x === "string" ? x : String(x ?? "")))
+        .filter((s) => s.trim().length > 0);
+    };
+
     return {
       seq: job.seq,
       company: job.company,
@@ -68,13 +78,12 @@ ${job.content.slice(0, 2000)}
       applicationPeriod: job.applicationPeriod,
       siteUrl: job.siteUrl,
       attachments: job.attachments,
-      positionType: parsed.positionType || "미분류",
-      experienceYears: parsed.experienceYears || "미분류",
-      positions: parsed.positions || [],
-      categories: parsed.categories?.length ? parsed.categories : ["기타"],
-      jdSummary: parsed.jdSummary || "",
-      qualifications: parsed.qualifications || [],
-      deadline: parsed.deadline || "",
+      positionType: typeof parsed.positionType === "string" ? parsed.positionType : "미분류",
+      experienceYears: typeof parsed.experienceYears === "string" ? parsed.experienceYears : "미분류",
+      positions: toStringArray(parsed.positions),
+      jdSummary: typeof parsed.jdSummary === "string" ? parsed.jdSummary : "",
+      qualifications: toStringArray(parsed.qualifications),
+      deadline: typeof parsed.deadline === "string" ? parsed.deadline : "",
     };
   } catch {
     return {
@@ -88,7 +97,6 @@ ${job.content.slice(0, 2000)}
       positionType: "미분류",
       experienceYears: "미분류",
       positions: [],
-      categories: ["기타"],
       jdSummary: "요약 실패",
       qualifications: [],
       deadline: "",
@@ -118,7 +126,6 @@ export async function summarizeJobs(
         positionType: "미분류",
         experienceYears: "미분류",
         positions: [],
-        categories: ["기타"],
         jdSummary: "요약 실패",
         qualifications: [],
         deadline: "",
