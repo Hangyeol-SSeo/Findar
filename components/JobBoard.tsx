@@ -25,7 +25,7 @@ interface JobSummary {
   matchReasoning?: string;
 }
 
-type FilterType = "전체" | "신입" | "경력" | "인턴" | "신입경력";
+type FilterType = "전체" | "신입" | "경력" | "인턴";
 type SortType = "추천순" | "최신순";
 
 interface Progress {
@@ -322,7 +322,7 @@ export default function JobBoard() {
             {/* 채용유형 필터 */}
             <div className="flex gap-2 flex-wrap">
               {(
-                ["전체", "신입", "경력", "인턴", "신입경력"] as FilterType[]
+                ["전체", "신입", "경력", "인턴"] as FilterType[]
               ).map((f) => (
                 <button
                   key={f}
