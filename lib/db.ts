@@ -212,6 +212,20 @@ export function getJobsNeedingMatch(profileHash: string): JobWithMatch[] {
   return rows.map(rowToJobWithMatch);
 }
 
+const skipLowScoreMatchesStmt = db.prepare(`
+  UPDATE jobs SET matchProfileHash = ?
+  WHERE summarizedAt IS NOT NULL
+    AND matchProfileHash IS NOT NULL
+    AND matchProfileHash != ?
+    AND matchScore IS NOT NULL
+    AND matchScore <= ?
+`);
+
+export function skipLowScoreMatches(profileHash: string, minScore: number): number {
+  const result = skipLowScoreMatchesStmt.run(profileHash, profileHash, minScore);
+  return result.changes;
+}
+
 export function clearAllMatches(): void {
   db.exec(`
     UPDATE jobs SET

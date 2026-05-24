@@ -6,10 +6,11 @@ import {
   getActiveJobs,
   updateJobMatch,
   getJobsNeedingMatch,
+  skipLowScoreMatches,
 } from "@/lib/db";
 import { ensureProfile } from "@/lib/profile";
-import { matchJob } from "@/lib/matcher";
-import { CRAWL_PAGES } from "@/lib/config";
+import { matchJob, matchJobBatch, FALLBACK_MATCH } from "@/lib/matcher";
+import { CRAWL_PAGES, REMATCH_SKIP_THRESHOLD, REMATCH_BATCH_SIZE } from "@/lib/config";
 
 const DELAY_MS = 1000;
 
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const pages = Math.min(
     parseInt(searchParams.get("pages") || String(CRAWL_PAGES)),
-    15
+    50
   );
 
   const encoder = new TextEncoder();
@@ -173,27 +174,33 @@ export async function GET(request: Request) {
 
         // 4단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
         if (profile) {
+          const skipped = skipLowScoreMatches(profile.sourcesHash, REMATCH_SKIP_THRESHOLD);
           const toRematch = getJobsNeedingMatch(profile.sourcesHash);
           if (toRematch.length > 0) {
             send({
               type: "phase",
               phase: "rematch",
-              message: `기존 공고 ${toRematch.length}건 재평가 중...`,
+              message: `기존 공고 ${toRematch.length}건 재평가 중...${skipped > 0 ? ` (저점수 ${skipped}건 스킵)` : ""}`,
               total: toRematch.length,
             });
-            for (let i = 0; i < toRematch.length; i++) {
-              const job = toRematch[i];
+            for (let i = 0; i < toRematch.length; i += REMATCH_BATCH_SIZE) {
+              const batch = toRematch.slice(i, i + REMATCH_BATCH_SIZE);
+              let matchResults = new Map<string, Awaited<ReturnType<typeof matchJob>>>();
               try {
-                const m = await matchJob(profile, job);
+                matchResults = await matchJobBatch(profile, batch);
+              } catch (e) {
+                console.error(`Failed to rematch batch at ${i}:`, e);
+              }
+              for (let j = 0; j < batch.length; j++) {
+                const job = batch[j];
+                const m = matchResults.get(job.seq) ?? FALLBACK_MATCH;
                 updateJobMatch(job.seq, m, profile.sourcesHash);
                 send({
                   type: "rematch-progress",
-                  current: i + 1,
+                  current: i + j + 1,
                   total: toRematch.length,
                   job: { ...job, ...m },
                 });
-              } catch (e) {
-                console.error(`Failed to rematch ${job.seq}:`, e);
               }
             }
           }
