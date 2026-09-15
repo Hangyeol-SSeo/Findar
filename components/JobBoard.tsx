@@ -28,6 +28,16 @@ interface JobSummary {
 type FilterType = "전체" | "신입" | "경력" | "인턴";
 type SortType = "추천순" | "최신순";
 
+const MATCH_ENABLED_KEY = "findar:matchEnabled";
+
+function readStoredMatchEnabled(): boolean | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(MATCH_ENABLED_KEY);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
 interface Progress {
   phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "rematch" | "done";
   message: string;
@@ -47,6 +57,9 @@ export default function JobBoard() {
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
+  const [matchEnabled, setMatchEnabled] = useState<boolean | null>(() =>
+    readStoredMatchEnabled()
+  );
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -56,7 +69,12 @@ export default function JobBoard() {
   });
   const abortRef = useRef<AbortController | null>(null);
 
-  const fetchJobs = useCallback(async () => {
+  const chooseMatchEnabled = useCallback((enabled: boolean) => {
+    window.localStorage.setItem(MATCH_ENABLED_KEY, String(enabled));
+    setMatchEnabled(enabled);
+  }, []);
+
+  const fetchJobs = useCallback(async (enabled: boolean) => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -73,7 +91,7 @@ export default function JobBoard() {
     });
 
     try {
-      const res = await fetch(`/api/jobs?pages=${CRAWL_PAGES}`, {
+      const res = await fetch(`/api/jobs?pages=${CRAWL_PAGES}&match=${enabled}`, {
         signal: controller.signal,
       });
 
@@ -100,6 +118,12 @@ export default function JobBoard() {
           const data = JSON.parse(dataLine.slice(6));
 
           switch (data.type) {
+            case "cached":
+              if (Array.isArray(data.jobs) && data.jobs.length > 0) {
+                setJobs(data.jobs);
+              }
+              break;
+
             case "phase":
               setProgress((p) => ({
                 ...p,
@@ -161,7 +185,11 @@ export default function JobBoard() {
               break;
 
             case "profile-ready":
-              setHasProfile(data.status !== "missing" && data.status !== "error");
+              setHasProfile(
+                data.status !== "missing" &&
+                  data.status !== "error" &&
+                  data.status !== "disabled"
+              );
               break;
 
             case "done":
@@ -191,9 +219,10 @@ export default function JobBoard() {
   }, []);
 
   useEffect(() => {
-    fetchJobs();
+    if (matchEnabled === null) return; // 최초 접속 & 아직 게이트에서 선택 전
+    fetchJobs(matchEnabled);
     return () => abortRef.current?.abort();
-  }, [fetchJobs]);
+  }, [matchEnabled, fetchJobs]);
 
   // 직군 카테고리 추출
   const allCategories = useMemo(() => {
@@ -258,6 +287,38 @@ export default function JobBoard() {
     progress.total > 0
       ? Math.round((progress.current / progress.total) * 100)
       : 0;
+
+  if (matchEnabled === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6">
+        <div className="max-w-md w-full bg-white rounded-xl border border-gray-100 p-8 text-center">
+          <h1 className="text-2xl font-bold tracking-tight mb-2">Findar</h1>
+          <p className="text-gray-500 mb-6">
+            이력서/포트폴리오와 채용공고를 비교해 적합도 점수를 매기는
+            <br />
+            AI 매칭 기능을 사용할까요?
+          </p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={() => chooseMatchEnabled(true)}
+              className="px-4 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              매칭 사용
+            </button>
+            <button
+              onClick={() => chooseMatchEnabled(false)}
+              className="px-4 py-2.5 rounded-lg bg-white border border-gray-200 text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              사용 안 함
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-4">
+            선택한 값은 저장되며, 나중에 언제든 화면에서 바꿀 수 있어요.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -401,7 +462,18 @@ export default function JobBoard() {
                 </div>
               )}
               <button
-                onClick={() => fetchJobs()}
+                onClick={() => chooseMatchEnabled(!matchEnabled)}
+                title="이력서 매칭 사용 여부"
+                className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                  matchEnabled
+                    ? "bg-blue-50 border-blue-200 text-blue-700"
+                    : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                }`}
+              >
+                매칭 {matchEnabled ? "켜짐" : "꺼짐"}
+              </button>
+              <button
+                onClick={() => fetchJobs(matchEnabled)}
                 disabled={loading}
                 className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
               >
