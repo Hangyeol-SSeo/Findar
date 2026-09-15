@@ -27,6 +27,7 @@ interface JobSummary {
 
 type FilterType = "전체" | "신입" | "경력" | "인턴";
 type SortType = "추천순" | "최신순";
+type ViewMode = "list" | "hidden";
 
 interface Progress {
   phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "rematch" | "done";
@@ -47,6 +48,8 @@ export default function JobBoard() {
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -195,6 +198,35 @@ export default function JobBoard() {
     return () => abortRef.current?.abort();
   }, [fetchJobs]);
 
+  useEffect(() => {
+    fetch("/api/jobs/hide")
+      .then((r) => r.json())
+      .then(({ seqs }: { seqs: string[] }) => setHiddenSeqs(new Set(seqs)))
+      .catch(() => {});
+  }, []);
+
+  const hideJob = useCallback((seq: string) => {
+    setHiddenSeqs((prev) => new Set([...prev, seq]));
+    fetch("/api/jobs/hide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seq, hidden: true }),
+    }).catch(() => {});
+  }, []);
+
+  const unhideJob = useCallback((seq: string) => {
+    setHiddenSeqs((prev) => {
+      const next = new Set(prev);
+      next.delete(seq);
+      return next;
+    });
+    fetch("/api/jobs/hide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seq, hidden: false }),
+    }).catch(() => {});
+  }, []);
+
   // 직군 카테고리 추출
   const allCategories = useMemo(() => {
     const catSet = new Set<string>();
@@ -204,8 +236,14 @@ export default function JobBoard() {
     return Array.from(catSet).sort();
   }, [jobs]);
 
+  const hiddenJobs = useMemo(
+    () => jobs.filter((job) => hiddenSeqs.has(job.seq)),
+    [jobs, hiddenSeqs]
+  );
+
   const filteredJobs = useMemo(() => {
     const filtered = jobs.filter((job) => {
+      if (hiddenSeqs.has(job.seq)) return false;
       const matchType =
         filter === "전체" || job.positionType.includes(filter);
       const matchPosition =
@@ -230,7 +268,7 @@ export default function JobBoard() {
       });
     }
     return [...filtered].sort((a, b) => b.date.localeCompare(a.date));
-  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile]);
+  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile, hiddenSeqs]);
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return "bg-emerald-500 text-white";
@@ -373,17 +411,38 @@ export default function JobBoard() {
           {/* Status bar */}
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-gray-500">
-              {loading
-                ? jobs.length > 0
-                  ? `${jobs.length}건 로드됨...`
-                  : "데이터 수집 중..."
-                : `${filteredJobs.length}건`}
-              {!loading && newCount !== null && newCount > 0 && (
-                <span className="text-emerald-600"> · 신규 {newCount}건</span>
+              {viewMode === "hidden" ? (
+                <span className="text-gray-400">숨긴 공고 {hiddenJobs.length}건</span>
+              ) : loading ? (
+                jobs.length > 0 ? `${jobs.length}건 로드됨...` : "데이터 수집 중..."
+              ) : (
+                <>
+                  {filteredJobs.length}건
+                  {!loading && newCount !== null && newCount > 0 && (
+                    <span className="text-emerald-600"> · 신규 {newCount}건</span>
+                  )}
+                </>
               )}
             </span>
             <div className="flex items-center gap-2">
-              {hasProfile && (
+              {hiddenSeqs.size > 0 && (
+                <button
+                  onClick={() => setViewMode((v) => v === "hidden" ? "list" : "hidden")}
+                  className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                    viewMode === "hidden"
+                      ? "bg-gray-700 text-white border-gray-700"
+                      : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                    <line x1="1" y1="1" x2="23" y2="23"/>
+                  </svg>
+                  숨긴 공고 {hiddenSeqs.size}건
+                </button>
+              )}
+              {viewMode === "list" && hasProfile && (
                 <div className="flex bg-gray-100 rounded-lg p-0.5">
                   {(["추천순", "최신순"] as SortType[]).map((s) => (
                     <button
@@ -400,19 +459,21 @@ export default function JobBoard() {
                   ))}
                 </div>
               )}
-              <button
-                onClick={() => fetchJobs()}
-                disabled={loading}
-                className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-              >
-                {loading && (
-                  <svg className="animate-spin h-3.5 w-3.5 text-gray-500" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                )}
-                {loading ? "로딩 중..." : "새로고침"}
-              </button>
+              {viewMode === "list" && (
+                <button
+                  onClick={() => fetchJobs()}
+                  disabled={loading}
+                  className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                >
+                  {loading && (
+                    <svg className="animate-spin h-3.5 w-3.5 text-gray-500" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                  {loading ? "로딩 중..." : "새로고침"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -440,80 +501,76 @@ export default function JobBoard() {
           )}
 
           {/* Job list */}
-          <div className="space-y-3 pb-8">
-            {filteredJobs.map((job) => (
-              <div
-                key={job.seq}
-                onClick={() => setSelectedJob(job)}
-                className={`bg-white rounded-xl p-5 border transition-all cursor-pointer ${
-                  selectedJob?.seq === job.seq
-                    ? "border-blue-400 shadow-md ring-1 ring-blue-200"
-                    : "border-gray-100 hover:border-blue-200 hover:shadow-md"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      {typeof job.matchScore === "number" && (
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded-full font-bold ${getScoreColor(job.matchScore)}`}
-                          title={job.matchReasoning}
-                        >
-                          {job.matchScore}
-                        </span>
-                      )}
-                      <span className="text-sm font-medium text-blue-600">
-                        {job.company}
-                      </span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full font-medium ${getBadgeColor(job.positionType)}`}
-                      >
-                        {job.positionType}
-                      </span>
-                      {job.experienceYears &&
-                        job.experienceYears !== "미분류" && (
-                          <span className="text-xs text-gray-400">
-                            {job.experienceYears}
-                          </span>
-                        )}
-                    </div>
-                    <h3 className="font-semibold text-gray-900 mb-1.5 truncate">
-                      {job.title}
-                    </h3>
-                    {job.jdSummary && (
-                      <p className="text-sm text-gray-500 line-clamp-2">
-                        {job.jdSummary}
-                      </p>
-                    )}
-                    {job.positions.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-2">
-                        {job.positions.map((pos, i) => (
-                          <span
-                            key={i}
-                            className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded"
-                          >
-                            {pos}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs text-gray-400">{job.date}</div>
-                    {job.deadline && (
-                      <div className="text-xs text-red-500 mt-0.5">
-                        ~{job.deadline}
-                      </div>
-                    )}
-                  </div>
-                </div>
+          {viewMode === "list" && (
+            <>
+              <div className="space-y-3 pb-8">
+                {filteredJobs.map((job) => (
+                  <JobCard
+                    key={job.seq}
+                    job={job}
+                    isSelected={selectedJob?.seq === job.seq}
+                    onSelect={setSelectedJob}
+                    onHide={hideJob}
+                    getScoreColor={getScoreColor}
+                    getBadgeColor={getBadgeColor}
+                  />
+                ))}
               </div>
-            ))}
-          </div>
+              {!loading && filteredJobs.length === 0 && jobs.length > 0 && (
+                <div className="text-center py-12 text-gray-400">
+                  검색 결과가 없습니다
+                </div>
+              )}
+            </>
+          )}
 
-          {!loading && filteredJobs.length === 0 && jobs.length > 0 && (
-            <div className="text-center py-12 text-gray-400">
-              검색 결과가 없습니다
+          {/* Hidden jobs view */}
+          {viewMode === "hidden" && (
+            <div className="space-y-3 pb-8">
+              {hiddenJobs.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  숨긴 공고가 없습니다
+                </div>
+              ) : (
+                hiddenJobs.map((job) => (
+                  <div
+                    key={job.seq}
+                    className="bg-white rounded-xl p-5 border border-gray-100 opacity-70"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-sm font-medium text-blue-600">
+                            {job.company}
+                          </span>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-medium ${getBadgeColor(job.positionType)}`}
+                          >
+                            {job.positionType}
+                          </span>
+                        </div>
+                        <h3 className="font-semibold text-gray-700 mb-1 truncate">
+                          {job.title}
+                        </h3>
+                        {job.jdSummary && (
+                          <p className="text-sm text-gray-400 line-clamp-1">
+                            {job.jdSummary}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <div className="text-xs text-gray-400">{job.date}</div>
+                        <button
+                          onClick={() => unhideJob(job.seq)}
+                          className="text-xs px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors whitespace-nowrap"
+                        >
+                          숨김 해제
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -676,6 +733,93 @@ export default function JobBoard() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function JobCard({
+  job,
+  isSelected,
+  onSelect,
+  onHide,
+  getScoreColor,
+  getBadgeColor,
+}: {
+  job: JobSummary;
+  isSelected: boolean;
+  onSelect: (job: JobSummary) => void;
+  onHide: (seq: string) => void;
+  getScoreColor: (score: number) => string;
+  getBadgeColor: (type: string) => string;
+}) {
+  return (
+    <div
+      onClick={() => onSelect(job)}
+      className={`group bg-white rounded-xl p-5 border transition-all cursor-pointer ${
+        isSelected
+          ? "border-blue-400 shadow-md ring-1 ring-blue-200"
+          : "border-gray-100 hover:border-blue-200 hover:shadow-md"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            {typeof job.matchScore === "number" && (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full font-bold ${getScoreColor(job.matchScore)}`}
+                title={job.matchReasoning}
+              >
+                {job.matchScore}
+              </span>
+            )}
+            <span className="text-sm font-medium text-blue-600">
+              {job.company}
+            </span>
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full font-medium ${getBadgeColor(job.positionType)}`}
+            >
+              {job.positionType}
+            </span>
+            {job.experienceYears && job.experienceYears !== "미분류" && (
+              <span className="text-xs text-gray-400">{job.experienceYears}</span>
+            )}
+          </div>
+          <h3 className="font-semibold text-gray-900 mb-1.5 truncate">
+            {job.title}
+          </h3>
+          {job.jdSummary && (
+            <p className="text-sm text-gray-500 line-clamp-2">{job.jdSummary}</p>
+          )}
+          {job.positions.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {job.positions.map((pos, i) => (
+                <span
+                  key={i}
+                  className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded"
+                >
+                  {pos}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <div className="text-xs text-gray-400">{job.date}</div>
+          {job.deadline && (
+            <div className="text-xs text-red-500">~{job.deadline}</div>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onHide(job.seq);
+            }}
+            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-all"
+            title="숨기기"
+          >
+            숨기기
+          </button>
+        </div>
       </div>
     </div>
   );

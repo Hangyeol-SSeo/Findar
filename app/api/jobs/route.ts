@@ -148,17 +148,6 @@ export async function GET(request: Request) {
 
           upsertJob({ summary, rawContent: detail.content, summarizedOk });
 
-          // 매칭 (프로필이 있고 요약 성공한 경우만)
-          let matched: Awaited<ReturnType<typeof matchJob>> | undefined;
-          if (profile && summarizedOk) {
-            try {
-              matched = await matchJob(profile, summary);
-              updateJobMatch(summary.seq, matched, profile.sourcesHash);
-            } catch (e) {
-              console.error(`Failed to match ${summary.seq}:`, e);
-            }
-          }
-
           const elapsed = Date.now() - startTime;
           const avgPerJob = elapsed / (i + 1);
           const remaining = Math.round((avgPerJob * (details.length - i - 1)) / 1000);
@@ -168,8 +157,18 @@ export async function GET(request: Request) {
             current: i + 1,
             total: details.length,
             remainingSeconds: remaining,
-            job: { ...summary, ...(matched ?? {}) },
+            job: { ...summary },
           });
+
+          // 매칭은 progress 이벤트 전송 후 처리 (바가 멈추지 않도록)
+          if (profile && summarizedOk) {
+            try {
+              const matched = await matchJob(profile, summary);
+              updateJobMatch(summary.seq, matched, profile.sourcesHash);
+            } catch (e) {
+              console.error(`Failed to match ${summary.seq}:`, e);
+            }
+          }
         }
 
         // 4단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
