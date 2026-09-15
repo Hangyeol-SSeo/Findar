@@ -155,47 +155,39 @@ export async function GET(request: Request) {
             }
           }
 
-          const finalSummaries = new Map<string, JobSummary>();
           const chunkSummaries: JobSummary[] = [];
           for (const detail of chunk) {
             const summary = summarized.get(detail.seq);
             const summarizedOk = !!summary && summary.jdSummary !== "요약 실패";
             const finalSummary = summary ?? fallbackSummary(detail);
-            finalSummaries.set(detail.seq, finalSummary);
             upsertJob({ summary: finalSummary, rawContent: detail.content, summarizedOk });
             if (summarizedOk) chunkSummaries.push(finalSummary);
-          }
 
-          // 매칭 (프로필이 있고 이번 청크에서 요약에 성공한 공고만, 한 번에 배치 호출)
-          const matchResults = new Map<string, JobMatch>();
-          if (profile && chunkSummaries.length > 0) {
-            try {
-              const matched = await matchJobBatch(profile, chunkSummaries);
-              for (const [seq, m] of matched) {
-                matchResults.set(seq, m);
-                updateJobMatch(seq, m, profile.sourcesHash);
-              }
-            } catch (e) {
-              console.error(`Failed to match chunk at ${i}:`, e);
-            }
-          }
-
-          for (const detail of chunk) {
             processed += 1;
             const elapsed = Date.now() - startTime;
             const avgPerJob = elapsed / processed;
             const remaining = Math.round((avgPerJob * (details.length - processed)) / 1000);
 
+            // 매칭 전에 먼저 전송 (매칭 배치 호출 때문에 progress bar가 멈춰 보이지 않도록)
             send({
               type: "summarize-progress",
               current: processed,
               total: details.length,
               remainingSeconds: remaining,
-              job: {
-                ...finalSummaries.get(detail.seq)!,
-                ...(matchResults.get(detail.seq) ?? {}),
-              },
+              job: { ...finalSummary },
             });
+          }
+
+          // 매칭 (프로필이 있고 이번 청크에서 요약에 성공한 공고만, 한 번에 배치 호출)
+          if (profile && chunkSummaries.length > 0) {
+            try {
+              const matched = await matchJobBatch(profile, chunkSummaries);
+              for (const [seq, m] of matched) {
+                updateJobMatch(seq, m, profile.sourcesHash);
+              }
+            } catch (e) {
+              console.error(`Failed to match chunk at ${i}:`, e);
+            }
           }
         }
 
