@@ -38,6 +38,9 @@ export async function GET(request: Request) {
 
   const encoder = new TextEncoder();
   let closed = false;
+  request.signal.addEventListener("abort", () => {
+    closed = true;
+  });
   const stream = new ReadableStream({
     async start(controller) {
       function send(data: Record<string, unknown>) {
@@ -81,11 +84,14 @@ export async function GET(request: Request) {
           send({ type: "profile-ready", status: "disabled" });
         }
 
+        if (closed) return; // 클라이언트가 이미 연결을 끊었으면 여기서 중단
+
         // 2단계: 리스트 크롤링
         send({ type: "phase", phase: "crawl", message: "공고 목록 수집 중..." });
 
         const allListItems: { seq: string; company: string; title: string; date: string }[] = [];
         for (let page = 1; page <= pages; page++) {
+          if (closed) return; // 새로고침/페이지 수 변경 등으로 클라이언트가 연결을 끊으면 남은 페이지 크롤링을 건너뜀
           const items = await fetchListPage(page);
           allListItems.push(...items);
           send({
@@ -115,6 +121,7 @@ export async function GET(request: Request) {
         // 3단계: 신규만 상세 페이지 크롤링
         const details: JobDetail[] = [];
         for (let i = 0; i < newItems.length; i++) {
+          if (closed) return;
           await sleep(DELAY_MS);
           const detail = await fetchDetailPage(newItems[i].seq);
           if (detail) details.push(detail);
@@ -140,6 +147,7 @@ export async function GET(request: Request) {
         let processed = 0;
 
         for (let i = 0; i < details.length; i += SUMMARIZE_BATCH_SIZE) {
+          if (closed) return; // 남은 배치의 AI 요약/매칭 호출을 시작하지 않음
           const chunk = details.slice(i, i + SUMMARIZE_BATCH_SIZE);
 
           const summarized = await summarizeJobBatch(chunk);
@@ -192,7 +200,7 @@ export async function GET(request: Request) {
         }
 
         // 5단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
-        if (profile) {
+        if (profile && !closed) {
           const skipped = skipLowScoreMatches(profile.sourcesHash, REMATCH_SKIP_THRESHOLD);
           const toRematch = getJobsNeedingMatch(profile.sourcesHash);
           if (toRematch.length > 0) {
@@ -203,6 +211,7 @@ export async function GET(request: Request) {
               total: toRematch.length,
             });
             for (let i = 0; i < toRematch.length; i += REMATCH_BATCH_SIZE) {
+              if (closed) return; // 남은 재매칭 배치를 시작하지 않음
               const batch = toRematch.slice(i, i + REMATCH_BATCH_SIZE);
               let matchResults = new Map<string, JobMatch>();
               try {
