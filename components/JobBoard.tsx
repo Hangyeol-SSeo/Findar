@@ -31,7 +31,8 @@ type ViewMode = "list" | "hidden";
 
 const MATCH_ENABLED_KEY = "findar:matchEnabled";
 const CRAWL_PAGES_KEY = "findar:crawlPages";
-const PAGE_OPTIONS = [1, 2, 3, 5, 10, 15];
+const MIN_PAGES = 1;
+const MAX_PAGES = 50; // 서버(app/api/jobs/route.ts)의 상한과 동일
 
 function readStoredMatchEnabled(): boolean | null {
   if (typeof window === "undefined") return null;
@@ -70,6 +71,7 @@ export default function JobBoard() {
     readStoredMatchEnabled()
   );
   const [pages, setPages] = useState<number>(() => readStoredPages() ?? CRAWL_PAGES);
+  const [pagesInput, setPagesInput] = useState<string>(String(pages));
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Progress>({
@@ -90,6 +92,15 @@ export default function JobBoard() {
     window.localStorage.setItem(CRAWL_PAGES_KEY, String(n));
     setPages(n);
   }, []);
+
+  const commitPagesInput = useCallback(() => {
+    const parsed = Math.round(Number(pagesInput));
+    const clamped = Number.isFinite(parsed)
+      ? Math.min(Math.max(parsed, MIN_PAGES), MAX_PAGES)
+      : pages;
+    setPagesInput(String(clamped));
+    if (clamped !== pages) choosePages(clamped);
+  }, [pagesInput, pages, choosePages]);
 
   const fetchJobs = useCallback(async (enabled: boolean, pagesArg: number) => {
     if (abortRef.current) abortRef.current.abort();
@@ -536,19 +547,30 @@ export default function JobBoard() {
               )}
               {viewMode === "list" && (
                 <>
-                  <select
-                    value={pages}
-                    onChange={(e) => choosePages(Number(e.target.value))}
-                    disabled={loading}
+                  <label
+                    className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 ${loading ? "opacity-50" : ""}`}
                     title="수집할 페이지 수 (1페이지 = 10건)"
-                    className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50"
                   >
-                    {PAGE_OPTIONS.map((n) => (
-                      <option key={n} value={n}>
-                        {n}페이지 ({n * 10}건)
-                      </option>
-                    ))}
-                  </select>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={MIN_PAGES}
+                      max={MAX_PAGES}
+                      value={pagesInput}
+                      disabled={loading}
+                      onChange={(e) => setPagesInput(e.target.value)}
+                      onBlur={commitPagesInput}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitPagesInput();
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                      className="w-10 text-right bg-transparent focus:outline-none"
+                    />
+                    페이지 ({pages * 10}건)
+                  </label>
                   <button
                     onClick={() => chooseMatchEnabled(!matchEnabled)}
                     title="이력서 매칭 사용 여부"
