@@ -30,6 +30,8 @@ type SortType = "추천순" | "최신순";
 type ViewMode = "list" | "hidden";
 
 const MATCH_ENABLED_KEY = "findar:matchEnabled";
+const CRAWL_PAGES_KEY = "findar:crawlPages";
+const PAGE_OPTIONS = [1, 2, 3, 5, 10, 15];
 
 function readStoredMatchEnabled(): boolean | null {
   if (typeof window === "undefined") return null;
@@ -37,6 +39,12 @@ function readStoredMatchEnabled(): boolean | null {
   if (raw === "true") return true;
   if (raw === "false") return false;
   return null;
+}
+
+function readStoredPages(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = Number(window.localStorage.getItem(CRAWL_PAGES_KEY));
+  return Number.isInteger(raw) && raw > 0 ? raw : null;
 }
 
 interface Progress {
@@ -61,6 +69,7 @@ export default function JobBoard() {
   const [matchEnabled, setMatchEnabled] = useState<boolean | null>(() =>
     readStoredMatchEnabled()
   );
+  const [pages, setPages] = useState<number>(() => readStoredPages() ?? CRAWL_PAGES);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Progress>({
@@ -77,7 +86,12 @@ export default function JobBoard() {
     setMatchEnabled(enabled);
   }, []);
 
-  const fetchJobs = useCallback(async (enabled: boolean) => {
+  const choosePages = useCallback((n: number) => {
+    window.localStorage.setItem(CRAWL_PAGES_KEY, String(n));
+    setPages(n);
+  }, []);
+
+  const fetchJobs = useCallback(async (enabled: boolean, pagesArg: number) => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -94,7 +108,7 @@ export default function JobBoard() {
     });
 
     try {
-      const res = await fetch(`/api/jobs?pages=${CRAWL_PAGES}&match=${enabled}`, {
+      const res = await fetch(`/api/jobs?pages=${pagesArg}&match=${enabled}`, {
         signal: controller.signal,
       });
 
@@ -223,9 +237,9 @@ export default function JobBoard() {
 
   useEffect(() => {
     if (matchEnabled === null) return; // 최초 접속 & 아직 게이트에서 선택 전
-    fetchJobs(matchEnabled);
+    fetchJobs(matchEnabled, pages);
     return () => abortRef.current?.abort();
-  }, [matchEnabled, fetchJobs]);
+  }, [matchEnabled, pages, fetchJobs]);
 
   useEffect(() => {
     fetch("/api/jobs/hide")
@@ -522,6 +536,19 @@ export default function JobBoard() {
               )}
               {viewMode === "list" && (
                 <>
+                  <select
+                    value={pages}
+                    onChange={(e) => choosePages(Number(e.target.value))}
+                    disabled={loading}
+                    title="수집할 페이지 수 (1페이지 = 10건)"
+                    className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50"
+                  >
+                    {PAGE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n}페이지 ({n * 10}건)
+                      </option>
+                    ))}
+                  </select>
                   <button
                     onClick={() => chooseMatchEnabled(!matchEnabled)}
                     title="이력서 매칭 사용 여부"
@@ -534,7 +561,7 @@ export default function JobBoard() {
                     매칭 {matchEnabled ? "켜짐" : "꺼짐"}
                   </button>
                   <button
-                    onClick={() => fetchJobs(matchEnabled)}
+                    onClick={() => fetchJobs(matchEnabled, pages)}
                     disabled={loading}
                     className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
                   >
