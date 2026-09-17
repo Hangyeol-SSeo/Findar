@@ -58,6 +58,7 @@ ${job.qualifications.map((q) => `- ${q}`).join("\n")}`
 도메인: ${profile.domains.join(", ")}
 프로젝트:
 ${profile.projects.map((p) => `- ${p.name} (${p.role}, ${p.stack.join("/")}) — ${p.summary}`).join("\n")}
+비개발 직군 전이 강점: ${(profile.transferableStrengths ?? []).join(", ") || "(없음)"}
 
 소개:
 ${profile.narrative}
@@ -66,7 +67,10 @@ ${profile.narrative}
 ${jobList}
 
 평가 기준:
-- 보유 기술/경험과 자격요건의 일치도
+- 지원자는 리스크관리, 컴플라이언스, 자산운용, 트레이딩, WM/PB, 백오피스/운영, 퀀트, IB, 개발/IT, 경영지원 등
+  금융 전 직군에 지원 가능성을 열어두고 있음 — 공고의 직군 카테고리가 개발/IT가 아니라는 이유만으로 감점하지 마.
+- 보유 기술/경험과 자격요건의 일치도. 개발/데이터 역량은 IT 직군 적합성뿐 아니라 리스크/퀀트 분석 등에 쓰일
+  수 있는 분석적 역량으로도 평가해 (위 "비개발 직군 전이 강점" 참고).
 - 채용유형과 경력 수준 적합성 (신입공고에 경력 지원자도 매칭 가능하다고 봐)
 - 도메인 적합성
 
@@ -143,6 +147,7 @@ export async function matchJob(
 도메인: ${profile.domains.join(", ")}
 프로젝트:
 ${profile.projects.map((p) => `- ${p.name} (${p.role}, ${p.stack.join("/")}) — ${p.summary}`).join("\n")}
+비개발 직군 전이 강점: ${(profile.transferableStrengths ?? []).join(", ") || "(없음)"}
 
 소개:
 ${profile.narrative}
@@ -157,7 +162,10 @@ ${profile.narrative}
 ${job.qualifications.map((q) => `- ${q}`).join("\n")}
 
 평가 기준:
-- 보유 기술/경험과 자격요건의 일치도
+- 지원자는 리스크관리, 컴플라이언스, 자산운용, 트레이딩, WM/PB, 백오피스/운영, 퀀트, IB, 개발/IT, 경영지원 등
+  금융 전 직군에 지원 가능성을 열어두고 있음 — 공고의 직군 카테고리가 개발/IT가 아니라는 이유만으로 감점하지 마.
+- 보유 기술/경험과 자격요건의 일치도. 개발/데이터 역량은 IT 직군 적합성뿐 아니라 리스크/퀀트 분석 등에 쓰일
+  수 있는 분석적 역량으로도 평가해 (위 "비개발 직군 전이 강점" 참고).
 - 채용유형과 경력 수준 적합성 (신입공고에 경력 지원자도 매칭 가능하다고 봐)
 - 도메인 적합성
 

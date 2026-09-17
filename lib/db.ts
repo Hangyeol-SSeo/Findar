@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
 import type { JobSummary } from "./summarizer";
 import type { JobMatch } from "./matcher";
+import { categorizePositions } from "./position-categories";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DATA_DIR, "findar.db");
@@ -83,6 +84,7 @@ interface JobRow {
 }
 
 export type JobWithMatch = JobSummary & Partial<JobMatch> & {
+  categories: string[];
   matchProfileHash?: string | null;
 };
 
@@ -104,6 +106,7 @@ function rowToJobWithMatch(row: JobRow): JobWithMatch {
   };
   return {
     ...base,
+    categories: JSON.parse(row.categories),
     matchScore: row.matchScore ?? undefined,
     matchVerdict: (row.matchVerdict as JobMatch["matchVerdict"] | null) ?? undefined,
     matchStrengths: row.matchStrengths ? JSON.parse(row.matchStrengths) : undefined,
@@ -132,7 +135,7 @@ const upsertJobStmt = db.prepare(`
     qualifications, jdSummary, deadline, summarizedAt, createdAt
   ) VALUES (
     @seq, @company, @title, @date, @applicationPeriod, @siteUrl, @rawContent,
-    @attachments, @positionType, @experienceYears, @positions, '[]',
+    @attachments, @positionType, @experienceYears, @positions, @categories,
     @qualifications, @jdSummary, @deadline, @summarizedAt, @createdAt
   )
   ON CONFLICT(seq) DO UPDATE SET
@@ -146,6 +149,7 @@ const upsertJobStmt = db.prepare(`
     positionType = excluded.positionType,
     experienceYears = excluded.experienceYears,
     positions = excluded.positions,
+    categories = excluded.categories,
     qualifications = excluded.qualifications,
     jdSummary = excluded.jdSummary,
     deadline = excluded.deadline,
@@ -172,6 +176,7 @@ export function upsertJob({ summary, rawContent, summarizedOk }: UpsertJobInput)
     positionType: summary.positionType,
     experienceYears: summary.experienceYears,
     positions: JSON.stringify(summary.positions),
+    categories: JSON.stringify(categorizePositions(summary.positions)),
     qualifications: JSON.stringify(summary.qualifications),
     jdSummary: summary.jdSummary,
     deadline: summary.deadline,
@@ -316,6 +321,7 @@ function migrateLegacyCache(): void {
             positionType: s.positionType,
             experienceYears: s.experienceYears,
             positions: JSON.stringify(s.positions || []),
+            categories: JSON.stringify(categorizePositions(s.positions || [])),
             qualifications: JSON.stringify(s.qualifications || []),
             jdSummary: s.jdSummary,
             deadline: s.deadline,
@@ -334,3 +340,23 @@ function migrateLegacyCache(): void {
 }
 
 migrateLegacyCache();
+
+// categories 컬럼이 죽어있던 시절('[]' 하드코딩)에 저장된 기존 행을 1회성으로 백필한다.
+// AI 호출 없이 이미 저장된 positions로부터 순수 계산만 하므로 반복 실행돼도 저렴하다.
+function backfillCategories(): void {
+  const rows = db
+    .prepare(`SELECT seq, positions FROM jobs WHERE categories = '[]'`)
+    .all() as { seq: string; positions: string }[];
+  if (rows.length === 0) return;
+  const stmt = db.prepare(`UPDATE jobs SET categories = ? WHERE seq = ?`);
+  const tx = db.transaction((items: typeof rows) => {
+    for (const row of items) {
+      const positions = JSON.parse(row.positions) as unknown;
+      stmt.run(JSON.stringify(categorizePositions(positions)), row.seq);
+    }
+  });
+  tx(rows);
+  console.log(`[migrate] backfilled categories for ${rows.length} jobs`);
+}
+
+backfillCategories();
