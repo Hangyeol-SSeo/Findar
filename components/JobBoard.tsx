@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import Link from "next/link";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -423,11 +424,19 @@ export default function JobBoard() {
       >
         <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
           {/* Header */}
-          <header className="mb-6">
-            <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
-            <p className="text-gray-500 mt-1">
-              금융투자협회 회원사 채용공고를 한눈에
-            </p>
+          <header className="mb-6 flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
+              <p className="text-gray-500 mt-1">
+                금융투자협회 회원사 채용공고를 한눈에
+              </p>
+            </div>
+            <Link
+              href="/settings"
+              className="text-sm text-gray-400 hover:text-gray-600 transition-colors mt-1"
+            >
+              설정
+            </Link>
           </header>
 
           {/* Progress bar */}
