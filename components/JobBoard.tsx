@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
+import CompanyResearchPanel from "./CompanyResearchPanel";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -83,6 +84,7 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
+  const [panelTab, setPanelTab] = useState<"detail" | "company">("detail");
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
@@ -270,6 +272,10 @@ export default function JobBoard() {
     fetchJobs(matchEnabled, pages);
     return () => abortRef.current?.abort();
   }, [matchEnabled, pages, fetchJobs]);
+
+  useEffect(() => {
+    setPanelTab("detail");
+  }, [selectedJob?.seq]);
 
   useEffect(() => {
     fetch("/api/jobs/hide")
@@ -762,7 +768,29 @@ export default function JobBoard() {
               </button>
             </div>
 
+            {/* Panel tabs */}
+            <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
+              {(["detail", "company"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setPanelTab(tab)}
+                  className={`text-sm px-3 py-2 -mb-px border-b-2 transition-colors ${
+                    panelTab === tab
+                      ? "border-blue-600 text-blue-600 font-medium"
+                      : "border-transparent text-gray-400 hover:text-gray-600"
+                  }`}
+                >
+                  {tab === "detail" ? "공고 상세" : "회사 리서치"}
+                </button>
+              ))}
+            </div>
+
             {/* Panel body */}
+            {panelTab === "company" ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <CompanyResearchPanel companyName={selectedJob.company} />
+              </div>
+            ) : (
             <div className="flex-1 overflow-y-auto p-5">
               <h2 className="text-xl font-bold mb-3">{selectedJob.title}</h2>
 
@@ -904,6 +932,7 @@ export default function JobBoard() {
                 </Section>
               )}
             </div>
+            )}
 
             {/* Panel footer */}
             <div className="p-5 border-t border-gray-100 space-y-2">

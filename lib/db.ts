@@ -5,6 +5,7 @@ import type { JobSummary } from "./summarizer";
 import type { JobMatch } from "./matcher";
 import { categorizePositions } from "./position-categories";
 import type { ApplicationStatus } from "./application-status";
+import { normalizeCompanyName } from "./company-normalize";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DATA_DIR, "findar.db");
@@ -47,6 +48,27 @@ db.exec(`
     submittedAt INTEGER,
     updatedAt INTEGER NOT NULL,
     createdAt INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS companies (
+    normalizedName TEXT PRIMARY KEY,
+    displayName TEXT NOT NULL,
+    dartCorpCode TEXT,
+    dartMatchConfidence TEXT,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS company_sections (
+    normalizedName TEXT NOT NULL,
+    sectionType TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    contentJson TEXT,
+    sources TEXT NOT NULL DEFAULT '[]',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ok',
+    generatedAt INTEGER NOT NULL,
+    PRIMARY KEY (normalizedName, sectionType)
   );
 `);
 
@@ -319,6 +341,127 @@ export function upsertApplicationStatus(
     submittedAt: existing?.submittedAt ?? (status === "제출완료" ? now : null),
     updatedAt: now,
     createdAt: existing?.createdAt ?? now,
+  });
+}
+
+export interface CompanyRow {
+  normalizedName: string;
+  displayName: string;
+  dartCorpCode: string | null;
+  dartMatchConfidence: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+const upsertCompanyStmt = db.prepare(`
+  INSERT INTO companies (normalizedName, displayName, createdAt, updatedAt)
+  VALUES (@normalizedName, @displayName, @createdAt, @updatedAt)
+  ON CONFLICT(normalizedName) DO UPDATE SET
+    displayName = excluded.displayName,
+    updatedAt = excluded.updatedAt
+`);
+
+// jobs.company(자유 텍스트)로부터 companies 행을 만들거나 최신 표기로 갱신한다.
+// 공고가 크롤링될 때마다 호출해도 안전하도록 멱등적으로 동작.
+export function upsertCompanySeen(displayName: string): string {
+  const normalizedName = normalizeCompanyName(displayName);
+  const now = Date.now();
+  upsertCompanyStmt.run({ normalizedName, displayName, createdAt: now, updatedAt: now });
+  return normalizedName;
+}
+
+const selectCompanyStmt = db.prepare(`SELECT * FROM companies WHERE normalizedName = ?`);
+
+export function getCompany(normalizedName: string): CompanyRow | undefined {
+  return selectCompanyStmt.get(normalizedName) as CompanyRow | undefined;
+}
+
+const setCompanyDartMatchStmt = db.prepare(`
+  UPDATE companies SET dartCorpCode = ?, dartMatchConfidence = ?, updatedAt = ? WHERE normalizedName = ?
+`);
+
+export function setCompanyDartMatch(
+  normalizedName: string,
+  corpCode: string | null,
+  confidence: string | null
+): void {
+  setCompanyDartMatchStmt.run(corpCode, confidence, Date.now(), normalizedName);
+}
+
+interface CompanySectionRow {
+  normalizedName: string;
+  sectionType: string;
+  content: string;
+  contentJson: string | null;
+  sources: string;
+  model: string;
+  status: string;
+  generatedAt: number;
+}
+
+export interface CompanySection {
+  sectionType: string;
+  content: string;
+  contentJson: unknown;
+  sources: { title: string; url: string }[];
+  model: string;
+  status: string;
+  generatedAt: number;
+}
+
+function rowToCompanySection(row: CompanySectionRow): CompanySection {
+  return {
+    sectionType: row.sectionType,
+    content: row.content,
+    contentJson: row.contentJson ? JSON.parse(row.contentJson) : null,
+    sources: JSON.parse(row.sources),
+    model: row.model,
+    status: row.status,
+    generatedAt: row.generatedAt,
+  };
+}
+
+const selectCompanySectionsStmt = db.prepare(
+  `SELECT * FROM company_sections WHERE normalizedName = ?`
+);
+
+export function getCompanySections(normalizedName: string): CompanySection[] {
+  const rows = selectCompanySectionsStmt.all(normalizedName) as CompanySectionRow[];
+  return rows.map(rowToCompanySection);
+}
+
+const upsertCompanySectionStmt = db.prepare(`
+  INSERT INTO company_sections (normalizedName, sectionType, content, contentJson, sources, model, status, generatedAt)
+  VALUES (@normalizedName, @sectionType, @content, @contentJson, @sources, @model, @status, @generatedAt)
+  ON CONFLICT(normalizedName, sectionType) DO UPDATE SET
+    content = excluded.content,
+    contentJson = excluded.contentJson,
+    sources = excluded.sources,
+    model = excluded.model,
+    status = excluded.status,
+    generatedAt = excluded.generatedAt
+`);
+
+export function saveCompanySection(
+  normalizedName: string,
+  sectionType: string,
+  data: {
+    content: string;
+    contentJson?: unknown;
+    sources: { title: string; url: string }[];
+    model: string;
+    status: "ok" | "partial" | "failed";
+  }
+): void {
+  upsertCompanySectionStmt.run({
+    normalizedName,
+    sectionType,
+    content: data.content,
+    contentJson: data.contentJson !== undefined ? JSON.stringify(data.contentJson) : null,
+    sources: JSON.stringify(data.sources),
+    model: data.model,
+    status: data.status,
+    generatedAt: Date.now(),
   });
 }
 
