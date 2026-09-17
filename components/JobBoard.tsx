@@ -15,6 +15,7 @@ interface JobSummary {
   positionType: string;
   experienceYears: string;
   positions: string[];
+  categories?: string[];
   jdSummary: string;
   qualifications: string[];
   deadline: string;
@@ -33,6 +34,12 @@ const MATCH_ENABLED_KEY = "findar:matchEnabled";
 const CRAWL_PAGES_KEY = "findar:crawlPages";
 const MIN_PAGES = 1;
 const MAX_PAGES = 50; // 서버(app/api/jobs/route.ts)의 상한과 동일
+
+// 서버가 DB에 저장한 categories를 우선 쓰고, 백필 전 데이터 등 비어있는 경우에만
+// 클라이언트에서 positions로부터 재계산한다.
+function jobCategories(job: JobSummary): string[] {
+  return job.categories?.length ? job.categories : categorizePositions(job.positions);
+}
 
 function readStoredMatchEnabled(): boolean | null {
   if (typeof window === "undefined") return null;
@@ -284,9 +291,7 @@ export default function JobBoard() {
   // 직군 카테고리 추출
   const allCategories = useMemo(() => {
     const catSet = new Set<string>();
-    jobs.forEach((job) =>
-      categorizePositions(job.positions).forEach((c) => catSet.add(c))
-    );
+    jobs.forEach((job) => jobCategories(job).forEach((c) => catSet.add(c)));
     return Array.from(catSet).sort();
   }, [jobs]);
 
@@ -301,8 +306,7 @@ export default function JobBoard() {
       const matchType =
         filter === "전체" || job.positionType.includes(filter);
       const matchPosition =
-        positionFilter === "전체" ||
-        categorizePositions(job.positions).includes(positionFilter);
+        positionFilter === "전체" || jobCategories(job).includes(positionFilter);
       const q = searchQuery.toLowerCase();
       const matchSearch =
         !q ||
@@ -844,14 +848,28 @@ export default function JobBoard() {
             </div>
 
             {/* Panel footer */}
-            <div className="p-5 border-t border-gray-100">
+            <div className="p-5 border-t border-gray-100 space-y-2">
+              {selectedJob.siteUrl && (
+                <a
+                  href={selectedJob.siteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  지원 사이트 바로가기
+                </a>
+              )}
               <a
                 href={`https://www.kofia.or.kr/brd/m_96/view.do?seq=${selectedJob.seq}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                className={
+                  selectedJob.siteUrl
+                    ? "block text-center px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                    : "block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                }
               >
-                원문 보기
+                KOFIA 원문 보기
               </a>
             </div>
           </div>

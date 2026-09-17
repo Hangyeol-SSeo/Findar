@@ -33,6 +33,9 @@ export interface Profile {
   domains: string[];
   projects: ProfileProject[];
   narrative: string;
+  // 비개발/비IT 금융 직군(리스크관리, 퀀트 등)에도 적용 가능한 전이 가능 강점.
+  // 기존 profile.json 캐시엔 없을 수 있으므로 optional — 소비하는 쪽에서 ?? [] 처리.
+  transferableStrengths?: string[];
 }
 
 function listResumePdfs(): string[] {
@@ -93,7 +96,10 @@ ${fileList}
       "summary": "1-2문장 요약 (성과/임팩트 포함)"
     }
   ],
-  "narrative": "지원자를 채용담당자에게 소개하는 2-3단락 텍스트. 강점과 차별점 위주로 자연스럽게."
+  "narrative": "지원자를 채용담당자에게 소개하는 2-3단락 텍스트. 강점과 차별점 위주로 자연스럽게.",
+  "transferableStrengths": [
+    "개발/데이터 등 IT 역량을 비개발 금융 직군(리스크관리, 퀀트, 컴플라이언스 등)에 적용할 수 있는 지점을 구체적으로 서술. 예: '복잡한 데이터 파이프라인 설계 경험 → 리스크/퀀트 분석 자동화에 적용 가능'. 지원자가 IT 외 직군에도 지원 가능성을 열어두고 있다는 전제로 작성."
+  ]
 }`;
 
   let resultText = "";
@@ -125,6 +131,9 @@ ${fileList}
     domains: Array.isArray(parsed.domains) ? parsed.domains : [],
     projects: Array.isArray(parsed.projects) ? parsed.projects : [],
     narrative: parsed.narrative || "",
+    transferableStrengths: Array.isArray(parsed.transferableStrengths)
+      ? parsed.transferableStrengths
+      : [],
   };
 }
 
