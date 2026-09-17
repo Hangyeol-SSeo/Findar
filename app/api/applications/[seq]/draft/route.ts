@@ -1,13 +1,20 @@
 import { generateApplicationDraft, getCachedApplicationDraft } from "@/lib/application-draft";
-import { saveApplicationDraft } from "@/lib/db";
+import { saveApplicationDraft, getJobBySeq } from "@/lib/db";
+import { detectSubmissionMethod } from "@/lib/application-method";
 
-// 캐시된 초안만 반환 — AI 호출 없음, 패널을 열 때마다 불러도 비용 걱정 없음.
+// 캐시된 초안 + 제출방식 추정을 함께 반환 — 둘 다 AI 호출 없음, 패널을 열 때마다 불러도
+// 비용 걱정 없음(제출방식은 DB에 저장하지 않고 매번 순수 계산 — 크롤러가 attachments를
+// 갱신하면 자동으로 최신 상태가 반영됨).
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ seq: string }> }
 ) {
   const { seq } = await params;
-  return Response.json({ draft: getCachedApplicationDraft(seq) });
+  const job = getJobBySeq(seq);
+  const submissionMethod = job
+    ? detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl)
+    : null;
+  return Response.json({ draft: getCachedApplicationDraft(seq), submissionMethod });
 }
 
 // 새로 생성(또는 재생성). 버튼을 눌렀을 때만 호출되는 명시적 트리거.

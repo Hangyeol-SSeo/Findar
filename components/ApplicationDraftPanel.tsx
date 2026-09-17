@@ -20,6 +20,18 @@ interface ApplicationDraft {
   generatedAt: number;
 }
 
+interface Attachment {
+  name: string;
+  url: string;
+}
+
+interface SubmissionMethodInfo {
+  method: "email_attachment" | "web_form" | "unknown";
+  submissionEmail: string | null;
+  templateAttachments: Attachment[];
+  consentAttachments: Attachment[];
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -42,6 +54,7 @@ function CopyButton({ text }: { text: string }) {
 
 export default function ApplicationDraftPanel({ seq }: { seq: string }) {
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
+  const [submissionMethod, setSubmissionMethod] = useState<SubmissionMethodInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,10 +63,22 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
   useEffect(() => {
     setLoading(true);
     setDraft(null);
+    setSubmissionMethod(null);
     setError("");
     fetch(`/api/applications/${seq}/draft`)
       .then((r) => r.json())
-      .then(({ draft }: { draft: ApplicationDraft | null }) => setDraft(draft))
+      .then(
+        ({
+          draft,
+          submissionMethod,
+        }: {
+          draft: ApplicationDraft | null;
+          submissionMethod: SubmissionMethodInfo | null;
+        }) => {
+          setDraft(draft);
+          setSubmissionMethod(submissionMethod);
+        }
+      )
       .catch(() => setError("불러오지 못했습니다."))
       .finally(() => setLoading(false));
   }, [seq]);
@@ -122,6 +147,54 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
 
   return (
     <div>
+      {submissionMethod && submissionMethod.method !== "unknown" && (
+        <div className="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-800">
+          {submissionMethod.method === "email_attachment" ? (
+            <div>
+              <p className="font-semibold mb-1">📎 첨부 양식 작성 후 이메일 제출로 보입니다</p>
+              {submissionMethod.submissionEmail && (
+                <p>
+                  제출 이메일: <span className="font-mono">{submissionMethod.submissionEmail}</span>
+                </p>
+              )}
+              {submissionMethod.templateAttachments.length > 0 && (
+                <div className="mt-1">
+                  <p>지원서 양식:</p>
+                  <ul className="list-disc list-inside">
+                    {submissionMethod.templateAttachments.map((a, i) => (
+                      <li key={i}>
+                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline">
+                          {a.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {submissionMethod.consentAttachments.length > 0 && (
+                <div className="mt-1">
+                  <p>개인정보 동의서(서명 필요):</p>
+                  <ul className="list-disc list-inside">
+                    {submissionMethod.consentAttachments.map((a, i) => (
+                      <li key={i}>
+                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline">
+                          {a.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="mt-1 text-blue-600">
+                양식을 다운로드해 아래 초안 내용을 직접 복사·붙여넣기 해주세요.
+              </p>
+            </div>
+          ) : (
+            <p className="font-semibold">🌐 웹 지원폼으로 보입니다 — 사이트에서 직접 채우거나, 아래 초안을 참고해 입력해주세요.</p>
+          )}
+        </div>
+      )}
+
       <div className="flex items-start justify-between mb-4 gap-3">
         <p className="text-xs text-gray-400">
           이력서 프로필 + 공고 + 회사 리서치를 바탕으로 AI가 작성한 초안입니다. 반드시 직접
