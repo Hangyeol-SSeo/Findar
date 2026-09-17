@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { JobSummary } from "./summarizer";
 import type { Profile } from "./profile";
+import { getSummaryModelOptions } from "./config";
 
 export interface JobMatch {
   matchScore: number; // 0-100
@@ -89,7 +90,7 @@ JSON 배열 형식 (공고 수만큼, seq 순서 유지):
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-haiku-4-5-20251001",
+      ...getSummaryModelOptions(),
       maxTurns: 1,
       allowedTools: [],
     },
@@ -177,7 +178,7 @@ JSON 형식:
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-haiku-4-5-20251001",
+      ...getSummaryModelOptions(),
       maxTurns: 1,
       allowedTools: [],
     },

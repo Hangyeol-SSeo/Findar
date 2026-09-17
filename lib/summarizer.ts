@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { JobDetail } from "./crawler";
+import { getSummaryModelOptions } from "./config";
 
 export interface JobSummary {
   seq: string;
@@ -45,7 +46,7 @@ JSON 형식:
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-haiku-4-5-20251001",
+      ...getSummaryModelOptions(),
       maxTurns: 1,
       allowedTools: [],
     },
@@ -150,7 +151,7 @@ JSON 배열 형식 (공고 수만큼, seq 순서 유지):
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-haiku-4-5-20251001",
+      ...getSummaryModelOptions(),
       maxTurns: 1,
       allowedTools: [],
     },
