@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import CompanyResearchPanel from "./CompanyResearchPanel";
+import ApplicationDraftPanel from "./ApplicationDraftPanel";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -84,7 +85,7 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
-  const [panelTab, setPanelTab] = useState<"detail" | "company">("detail");
+  const [panelTab, setPanelTab] = useState<"detail" | "company" | "draft">("detail");
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
@@ -770,7 +771,7 @@ export default function JobBoard() {
 
             {/* Panel tabs */}
             <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
-              {(["detail", "company"] as const).map((tab) => (
+              {(["detail", "company", "draft"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setPanelTab(tab)}
@@ -780,7 +781,7 @@ export default function JobBoard() {
                       : "border-transparent text-gray-400 hover:text-gray-600"
                   }`}
                 >
-                  {tab === "detail" ? "공고 상세" : "회사 리서치"}
+                  {tab === "detail" ? "공고 상세" : tab === "company" ? "회사 리서치" : "지원 도우미"}
                 </button>
               ))}
             </div>
@@ -789,6 +790,10 @@ export default function JobBoard() {
             {panelTab === "company" ? (
               <div className="flex-1 overflow-y-auto p-5">
                 <CompanyResearchPanel companyName={selectedJob.company} />
+              </div>
+            ) : panelTab === "draft" ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <ApplicationDraftPanel seq={selectedJob.seq} />
               </div>
             ) : (
             <div className="flex-1 overflow-y-auto p-5">

@@ -70,6 +70,13 @@ db.exec(`
     generatedAt INTEGER NOT NULL,
     PRIMARY KEY (normalizedName, sectionType)
   );
+
+  CREATE TABLE IF NOT EXISTS application_drafts (
+    seq TEXT PRIMARY KEY,
+    draftJson TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    generatedAt INTEGER NOT NULL
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -465,6 +472,32 @@ export function saveCompanySection(
   });
 }
 
+export interface ApplicationDraftRow {
+  seq: string;
+  draftJson: string;
+  model: string;
+  generatedAt: number;
+}
+
+const selectDraftStmt = db.prepare(`SELECT * FROM application_drafts WHERE seq = ?`);
+
+export function getApplicationDraftRow(seq: string): ApplicationDraftRow | undefined {
+  return selectDraftStmt.get(seq) as ApplicationDraftRow | undefined;
+}
+
+const upsertDraftStmt = db.prepare(`
+  INSERT INTO application_drafts (seq, draftJson, model, generatedAt)
+  VALUES (@seq, @draftJson, @model, @generatedAt)
+  ON CONFLICT(seq) DO UPDATE SET
+    draftJson = excluded.draftJson,
+    model = excluded.model,
+    generatedAt = excluded.generatedAt
+`);
+
+export function saveApplicationDraft(seq: string, draftJson: string, model: string): void {
+  upsertDraftStmt.run({ seq, draftJson, model, generatedAt: Date.now() });
+}
+
 export function clearAllMatches(): void {
   db.exec(`
     UPDATE jobs SET
@@ -517,6 +550,16 @@ export function getActiveJobs(): JobWithMatch[] {
       return true;
     })
     .map(rowToJobWithMatch);
+}
+
+const selectJobBySeqStmt = db.prepare(`${JOB_WITH_APPLICATION_SELECT} WHERE jobs.seq = ?`);
+
+// 지원 초안 생성(lib/application-draft.ts)에 필요한 rawContent까지 포함해서 반환한다.
+// getActiveJobs 등 목록 조회에는 일부러 rawContent를 안 실어서 응답을 가볍게 유지하므로 분리.
+export function getJobBySeq(seq: string): (JobWithMatch & { rawContent: string }) | undefined {
+  const row = selectJobBySeqStmt.get(seq) as JobRow | undefined;
+  if (!row) return undefined;
+  return { ...rowToJobWithMatch(row), rawContent: row.rawContent };
 }
 
 function migrateLegacyCache(): void {
