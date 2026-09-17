@@ -1,7 +1,7 @@
 // OpenDART(전자공시시스템 Open API) 클라이언트. KOFIA 공고에는 재무정보가 전혀 없어서
 // (lib/crawler.ts 참고) 기업 재무상태 리서치는 이 API가 사실상 유일한 무료 구조화 소스다.
 // 회사명 검색 API가 없어 전체 법인 코드 목록(corpCode.xml)을 받아 로컬에서 매칭해야 한다.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import * as cheerio from "cheerio";
@@ -58,6 +58,7 @@ async function downloadCorpCodeIndex(): Promise<DartCorpEntry[]> {
   const xml = execFileSync("unzip", ["-p", CORP_CODE_ZIP_PATH, "CORPCODE.xml"], {
     maxBuffer: 1024 * 1024 * 128,
   }).toString("utf-8");
+  unlinkSync(CORP_CODE_ZIP_PATH);
 
   const $ = cheerio.load(xml, { xmlMode: true });
   const entries: DartCorpEntry[] = [];
