@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { JobSummary } from "./summarizer";
 import type { Profile } from "./profile";
+import { getSummaryModelOptions } from "./config";
 
 export interface JobMatch {
   matchScore: number; // 0-100
@@ -10,7 +11,7 @@ export interface JobMatch {
   matchReasoning: string;
 }
 
-const FALLBACK_MATCH: JobMatch = {
+export const FALLBACK_MATCH: JobMatch = {
   matchScore: 0,
   matchVerdict: "비추천",
   matchStrengths: [],
@@ -28,6 +29,105 @@ function normalizeVerdict(score: number): JobMatch["matchVerdict"] {
   if (score >= 80) return "추천";
   if (score >= 60) return "보통";
   return "비추천";
+}
+
+export async function matchJobBatch(
+  profile: Profile,
+  jobs: JobSummary[]
+): Promise<Map<string, JobMatch>> {
+  const jobList = jobs
+    .map(
+      (job, i) => `
+## 공고 ${i + 1} (seq: ${job.seq})
+회사: ${job.company}
+제목: ${job.title}
+채용유형: ${job.positionType} (${job.experienceYears})
+모집직무: ${job.positions.join(", ")}
+업무요약: ${job.jdSummary}
+자격요건:
+${job.qualifications.map((q) => `- ${q}`).join("\n")}`
+    )
+    .join("\n");
+
+  const prompt = `지원자 프로필과 채용공고 목록을 비교해 각각 적합도를 평가해. JSON 배열로만 응답.
+
+[지원자]
+이름: ${profile.name}
+경력: ${profile.experienceYears}
+기술: ${profile.skills.join(", ")}
+도메인: ${profile.domains.join(", ")}
+프로젝트:
+${profile.projects.map((p) => `- ${p.name} (${p.role}, ${p.stack.join("/")}) — ${p.summary}`).join("\n")}
+
+소개:
+${profile.narrative}
+
+[채용공고 목록]
+${jobList}
+
+평가 기준:
+- 보유 기술/경험과 자격요건의 일치도
+- 채용유형과 경력 수준 적합성 (신입공고에 경력 지원자도 매칭 가능하다고 봐)
+- 도메인 적합성
+
+점수 기준:
+- 80 이상: 강하게 추천 (대부분의 자격요건 충족 + 도메인/경력 적합)
+- 60~79: 적합 (핵심 요건 충족, 일부 갭 있음)
+- 60 미만: 비추천 (요건 미달 또는 미스매치 큼)
+
+JSON 배열 형식 (공고 수만큼, seq 순서 유지):
+[
+  {
+    "seq": "공고 seq 값",
+    "matchScore": 0~100 정수,
+    "matchStrengths": ["적합한 강점 1-3개"],
+    "matchGaps": ["부족한/우려되는 부분 1-3개"],
+    "matchReasoning": "한두 문장 종합 평가"
+  }
+]`;
+
+  let resultText = "";
+  for await (const message of query({
+    prompt,
+    options: {
+      ...getSummaryModelOptions(),
+      maxTurns: 1,
+      allowedTools: [],
+    },
+  })) {
+    if ("result" in message) {
+      resultText = message.result;
+    }
+  }
+
+  const resultMap = new Map<string, JobMatch>();
+  try {
+    const jsonMatch =
+      resultText.match(/```(?:json)?\s*([\s\S]*?)```/) ||
+      resultText.match(/(\[[\s\S]*\])/);
+    const parsed = JSON.parse(jsonMatch?.[1]?.trim() || "[]");
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (!item.seq) continue;
+        const score = clampScore(item.matchScore);
+        resultMap.set(item.seq, {
+          matchScore: score,
+          matchVerdict: normalizeVerdict(score),
+          matchStrengths: Array.isArray(item.matchStrengths)
+            ? item.matchStrengths.slice(0, 5)
+            : [],
+          matchGaps: Array.isArray(item.matchGaps)
+            ? item.matchGaps.slice(0, 5)
+            : [],
+          matchReasoning: item.matchReasoning || "",
+        });
+      }
+    }
+  } catch {
+    // 파싱 실패 시 빈 맵 반환 → 각 job은 호출측에서 FALLBACK 처리
+  }
+
+  return resultMap;
 }
 
 export async function matchJob(
@@ -78,7 +178,7 @@ JSON 형식:
   for await (const message of query({
     prompt,
     options: {
-      model: "claude-haiku-4-5",
+      ...getSummaryModelOptions(),
       maxTurns: 1,
       allowedTools: [],
     },

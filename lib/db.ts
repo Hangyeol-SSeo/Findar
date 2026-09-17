@@ -51,6 +51,7 @@ addColumnIfMissing("matchStrengths", "TEXT");
 addColumnIfMissing("matchGaps", "TEXT");
 addColumnIfMissing("matchReasoning", "TEXT");
 addColumnIfMissing("matchProfileHash", "TEXT");
+addColumnIfMissing("hidden", "INTEGER NOT NULL DEFAULT 0");
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_matchScore ON jobs(matchScore)`);
 
@@ -78,6 +79,7 @@ interface JobRow {
   matchGaps: string | null;
   matchReasoning: string | null;
   matchProfileHash: string | null;
+  hidden: number;
 }
 
 export type JobWithMatch = JobSummary & Partial<JobMatch> & {
@@ -204,12 +206,39 @@ export function updateJobMatch(seq: string, match: JobMatch, profileHash: string
 const selectJobsNeedingMatchStmt = db.prepare(`
   SELECT * FROM jobs
   WHERE summarizedAt IS NOT NULL
+    AND hidden = 0
     AND (matchProfileHash IS NULL OR matchProfileHash != ?)
 `);
 
 export function getJobsNeedingMatch(profileHash: string): JobWithMatch[] {
   const rows = selectJobsNeedingMatchStmt.all(profileHash) as JobRow[];
   return rows.map(rowToJobWithMatch);
+}
+
+const skipLowScoreMatchesStmt = db.prepare(`
+  UPDATE jobs SET matchProfileHash = ?
+  WHERE summarizedAt IS NOT NULL
+    AND hidden = 0
+    AND matchProfileHash IS NOT NULL
+    AND matchProfileHash != ?
+    AND matchScore IS NOT NULL
+    AND matchScore <= ?
+`);
+
+export function skipLowScoreMatches(profileHash: string, minScore: number): number {
+  const result = skipLowScoreMatchesStmt.run(profileHash, profileHash, minScore);
+  return result.changes;
+}
+
+const setJobHiddenStmt = db.prepare(`UPDATE jobs SET hidden = ? WHERE seq = ?`);
+
+export function setJobHidden(seq: string, hidden: boolean): void {
+  setJobHiddenStmt.run(hidden ? 1 : 0, seq);
+}
+
+export function getHiddenSeqs(): string[] {
+  const rows = db.prepare(`SELECT seq FROM jobs WHERE hidden = 1`).all() as { seq: string }[];
+  return rows.map((r) => r.seq);
 }
 
 export function clearAllMatches(): void {
@@ -235,7 +264,8 @@ function todayYmd(): string {
 function applicationPeriodEnd(period: string): string {
   if (!period) return "";
   const parts = period.split("~");
-  const end = (parts[1] || parts[0]).trim();
+  // 끝날짜가 없으면("YYYYMMDD~") 마감 미정으로 처리
+  const end = parts[1]?.trim() ?? "";
   if (/^\d{8}$/.test(end)) {
     return `${end.slice(0, 4)}-${end.slice(4, 6)}-${end.slice(6, 8)}`;
   }
@@ -243,7 +273,7 @@ function applicationPeriodEnd(period: string): string {
 }
 
 const selectActiveJobsStmt = db.prepare(
-  `SELECT * FROM jobs WHERE summarizedAt IS NOT NULL
+  `SELECT * FROM jobs WHERE summarizedAt IS NOT NULL AND hidden = 0
    ORDER BY
      CASE WHEN matchScore IS NULL THEN 1 ELSE 0 END,
      matchScore DESC,

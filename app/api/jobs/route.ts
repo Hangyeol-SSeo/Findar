@@ -1,15 +1,26 @@
 import { fetchListPage, fetchDetailPage, type JobDetail } from "@/lib/crawler";
-import { summarizeJob } from "@/lib/summarizer";
+import {
+  summarizeJob,
+  summarizeJobBatch,
+  fallbackSummary,
+  type JobSummary,
+} from "@/lib/summarizer";
 import {
   getExistingSeqs,
   upsertJob,
   getActiveJobs,
   updateJobMatch,
   getJobsNeedingMatch,
+  skipLowScoreMatches,
 } from "@/lib/db";
-import { ensureProfile } from "@/lib/profile";
-import { matchJob } from "@/lib/matcher";
-import { CRAWL_PAGES } from "@/lib/config";
+import { ensureProfile, type Profile } from "@/lib/profile";
+import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
+import {
+  CRAWL_PAGES,
+  REMATCH_SKIP_THRESHOLD,
+  REMATCH_BATCH_SIZE,
+  SUMMARIZE_BATCH_SIZE,
+} from "@/lib/config";
 
 const DELAY_MS = 1000;
 
@@ -21,11 +32,15 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const pages = Math.min(
     parseInt(searchParams.get("pages") || String(CRAWL_PAGES)),
-    15
+    50
   );
+  const matchEnabled = searchParams.get("match") !== "false";
 
   const encoder = new TextEncoder();
   let closed = false;
+  request.signal.addEventListener("abort", () => {
+    closed = true;
+  });
   const stream = new ReadableStream({
     async start(controller) {
       function send(data: Record<string, unknown>) {
@@ -40,32 +55,43 @@ export async function GET(request: Request) {
       }
 
       try {
-        // 0단계: 프로필 확보
-        send({ type: "phase", phase: "profile", message: "프로필 확인 중..." });
-        const profileResult = await ensureProfile({
-          onProgress: (msg) =>
-            send({ type: "phase", phase: "profile", message: msg }),
-        });
-        const profile = profileResult.profile;
-        if (profile) {
-          send({
-            type: "profile-ready",
-            status: profileResult.status,
-            name: profile.name,
+        // 0단계: 캐시된 공고 즉시 전송 (크롤링/요약 시작 전, 새로고침 시 빈 화면 방지)
+        send({ type: "cached", jobs: getActiveJobs() });
+
+        // 1단계: 프로필 확보 (매칭이 꺼져 있으면 건너뜀)
+        let profile: Profile | null = null;
+        if (matchEnabled) {
+          send({ type: "phase", phase: "profile", message: "프로필 확인 중..." });
+          const profileResult = await ensureProfile({
+            onProgress: (msg) =>
+              send({ type: "phase", phase: "profile", message: msg }),
           });
+          profile = profileResult.profile;
+          if (profile) {
+            send({
+              type: "profile-ready",
+              status: profileResult.status,
+              name: profile.name,
+            });
+          } else {
+            send({
+              type: "profile-ready",
+              status: profileResult.status,
+              error: profileResult.error,
+            });
+          }
         } else {
-          send({
-            type: "profile-ready",
-            status: profileResult.status,
-            error: profileResult.error,
-          });
+          send({ type: "profile-ready", status: "disabled" });
         }
 
-        // 1단계: 리스트 크롤링
+        if (closed) return; // 클라이언트가 이미 연결을 끊었으면 여기서 중단
+
+        // 2단계: 리스트 크롤링
         send({ type: "phase", phase: "crawl", message: "공고 목록 수집 중..." });
 
         const allListItems: { seq: string; company: string; title: string; date: string }[] = [];
         for (let page = 1; page <= pages; page++) {
+          if (closed) return; // 새로고침/페이지 수 변경 등으로 클라이언트가 연결을 끊으면 남은 페이지 크롤링을 건너뜀
           const items = await fetchListPage(page);
           allListItems.push(...items);
           send({
@@ -92,9 +118,10 @@ export async function GET(request: Request) {
           total: newItems.length,
         });
 
-        // 2단계: 신규만 상세 페이지 크롤링
+        // 3단계: 신규만 상세 페이지 크롤링
         const details: JobDetail[] = [];
         for (let i = 0; i < newItems.length; i++) {
+          if (closed) return;
           await sleep(DELAY_MS);
           const detail = await fetchDetailPage(newItems[i].seq);
           if (detail) details.push(detail);
@@ -105,7 +132,7 @@ export async function GET(request: Request) {
           });
         }
 
-        // 3단계: AI 요약 + 매칭 + DB 저장
+        // 4단계: AI 요약 + 매칭 + DB 저장 (여러 건씩 묶어서 처리 — 호출 횟수/시간/토큰 절약)
         send({
           type: "phase",
           phase: "summarize",
@@ -117,83 +144,91 @@ export async function GET(request: Request) {
         });
 
         const startTime = Date.now();
+        let processed = 0;
 
-        for (let i = 0; i < details.length; i++) {
-          const detail = details[i];
-          let summarizedOk = true;
-          let summary;
-          try {
-            summary = await summarizeJob(detail);
-            if (summary.jdSummary === "요약 실패") summarizedOk = false;
-          } catch (e) {
-            console.error(`Failed to summarize ${detail.seq}:`, e);
-            summarizedOk = false;
-            summary = {
-              seq: detail.seq,
-              company: detail.company,
-              title: detail.title,
-              date: detail.date,
-              applicationPeriod: detail.applicationPeriod,
-              siteUrl: detail.siteUrl,
-              attachments: detail.attachments,
-              positionType: "미분류",
-              experienceYears: "미분류",
-              positions: [],
-              jdSummary: "요약 실패",
-              qualifications: [],
-              deadline: "",
-            };
-          }
+        for (let i = 0; i < details.length; i += SUMMARIZE_BATCH_SIZE) {
+          if (closed) return; // 남은 배치의 AI 요약/매칭 호출을 시작하지 않음
+          const chunk = details.slice(i, i + SUMMARIZE_BATCH_SIZE);
 
-          upsertJob({ summary, rawContent: detail.content, summarizedOk });
-
-          // 매칭 (프로필이 있고 요약 성공한 경우만)
-          let matched: Awaited<ReturnType<typeof matchJob>> | undefined;
-          if (profile && summarizedOk) {
-            try {
-              matched = await matchJob(profile, summary);
-              updateJobMatch(summary.seq, matched, profile.sourcesHash);
-            } catch (e) {
-              console.error(`Failed to match ${summary.seq}:`, e);
+          const summarized = await summarizeJobBatch(chunk);
+          const missing = chunk.filter((d) => !summarized.has(d.seq));
+          if (missing.length > 0) {
+            // 배치 파싱 실패분만 개별 재시도 (전체 배치를 버리지 않음)
+            for (const detail of missing) {
+              try {
+                summarized.set(detail.seq, await summarizeJob(detail));
+              } catch (e) {
+                console.error(`Failed to summarize ${detail.seq}:`, e);
+              }
             }
           }
 
-          const elapsed = Date.now() - startTime;
-          const avgPerJob = elapsed / (i + 1);
-          const remaining = Math.round((avgPerJob * (details.length - i - 1)) / 1000);
+          const chunkSummaries: JobSummary[] = [];
+          for (const detail of chunk) {
+            const summary = summarized.get(detail.seq);
+            const summarizedOk = !!summary && summary.jdSummary !== "요약 실패";
+            const finalSummary = summary ?? fallbackSummary(detail);
+            upsertJob({ summary: finalSummary, rawContent: detail.content, summarizedOk });
+            if (summarizedOk) chunkSummaries.push(finalSummary);
 
-          send({
-            type: "summarize-progress",
-            current: i + 1,
-            total: details.length,
-            remainingSeconds: remaining,
-            job: { ...summary, ...(matched ?? {}) },
-          });
+            processed += 1;
+            const elapsed = Date.now() - startTime;
+            const avgPerJob = elapsed / processed;
+            const remaining = Math.round((avgPerJob * (details.length - processed)) / 1000);
+
+            // 매칭 전에 먼저 전송 (매칭 배치 호출 때문에 progress bar가 멈춰 보이지 않도록)
+            send({
+              type: "summarize-progress",
+              current: processed,
+              total: details.length,
+              remainingSeconds: remaining,
+              job: { ...finalSummary },
+            });
+          }
+
+          // 매칭 (프로필이 있고 이번 청크에서 요약에 성공한 공고만, 한 번에 배치 호출)
+          if (profile && chunkSummaries.length > 0) {
+            try {
+              const matched = await matchJobBatch(profile, chunkSummaries);
+              for (const [seq, m] of matched) {
+                updateJobMatch(seq, m, profile.sourcesHash);
+              }
+            } catch (e) {
+              console.error(`Failed to match chunk at ${i}:`, e);
+            }
+          }
         }
 
-        // 4단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
-        if (profile) {
+        // 5단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
+        if (profile && !closed) {
+          const skipped = skipLowScoreMatches(profile.sourcesHash, REMATCH_SKIP_THRESHOLD);
           const toRematch = getJobsNeedingMatch(profile.sourcesHash);
           if (toRematch.length > 0) {
             send({
               type: "phase",
               phase: "rematch",
-              message: `기존 공고 ${toRematch.length}건 재평가 중...`,
+              message: `기존 공고 ${toRematch.length}건 재평가 중...${skipped > 0 ? ` (저점수 ${skipped}건 스킵)` : ""}`,
               total: toRematch.length,
             });
-            for (let i = 0; i < toRematch.length; i++) {
-              const job = toRematch[i];
+            for (let i = 0; i < toRematch.length; i += REMATCH_BATCH_SIZE) {
+              if (closed) return; // 남은 재매칭 배치를 시작하지 않음
+              const batch = toRematch.slice(i, i + REMATCH_BATCH_SIZE);
+              let matchResults = new Map<string, JobMatch>();
               try {
-                const m = await matchJob(profile, job);
+                matchResults = await matchJobBatch(profile, batch);
+              } catch (e) {
+                console.error(`Failed to rematch batch at ${i}:`, e);
+              }
+              for (let j = 0; j < batch.length; j++) {
+                const job = batch[j];
+                const m = matchResults.get(job.seq) ?? FALLBACK_MATCH;
                 updateJobMatch(job.seq, m, profile.sourcesHash);
                 send({
                   type: "rematch-progress",
-                  current: i + 1,
+                  current: i + j + 1,
                   total: toRematch.length,
                   job: { ...job, ...m },
                 });
-              } catch (e) {
-                console.error(`Failed to rematch ${job.seq}:`, e);
               }
             }
           }
