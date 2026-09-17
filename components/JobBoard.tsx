@@ -3,6 +3,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
+import {
+  APPLICATION_STATUSES,
+  getApplicationStatusColor,
+  type ApplicationStatus,
+} from "@/lib/application-status";
 
 interface JobSummary {
   seq: string;
@@ -24,6 +29,7 @@ interface JobSummary {
   matchStrengths?: string[];
   matchGaps?: string[];
   matchReasoning?: string;
+  applicationStatus?: ApplicationStatus;
 }
 
 type FilterType = "전체" | "신입" | "경력" | "인턴";
@@ -39,6 +45,11 @@ const MAX_PAGES = 50; // 서버(app/api/jobs/route.ts)의 상한과 동일
 // 클라이언트에서 positions로부터 재계산한다.
 function jobCategories(job: JobSummary): string[] {
   return job.categories?.length ? job.categories : categorizePositions(job.positions);
+}
+
+// summarize-progress로 막 들어온 공고는 DB 왕복 전이라 applicationStatus가 없을 수 있다.
+function jobApplicationStatus(job: JobSummary): ApplicationStatus {
+  return job.applicationStatus ?? "미지원";
 }
 
 function readStoredMatchEnabled(): boolean | null {
@@ -287,6 +298,23 @@ export default function JobBoard() {
       body: JSON.stringify({ seq, hidden: false }),
     }).catch(() => {});
   }, []);
+
+  const updateApplicationStatus = useCallback(
+    (seq: string, status: ApplicationStatus) => {
+      setJobs((prev) =>
+        prev.map((j) => (j.seq === seq ? { ...j, applicationStatus: status } : j))
+      );
+      setSelectedJob((prev) =>
+        prev && prev.seq === seq ? { ...prev, applicationStatus: status } : prev
+      );
+      fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seq, status }),
+      }).catch(() => {});
+    },
+    []
+  );
 
   // 직군 카테고리 추출
   const allCategories = useMemo(() => {
@@ -638,6 +666,7 @@ export default function JobBoard() {
                     isSelected={selectedJob?.seq === job.seq}
                     onSelect={setSelectedJob}
                     onHide={hideJob}
+                    onStatusChange={updateApplicationStatus}
                     getScoreColor={getScoreColor}
                     getBadgeColor={getBadgeColor}
                   />
@@ -726,7 +755,27 @@ export default function JobBoard() {
 
             {/* Panel body */}
             <div className="flex-1 overflow-y-auto p-5">
-              <h2 className="text-xl font-bold mb-4">{selectedJob.title}</h2>
+              <h2 className="text-xl font-bold mb-3">{selectedJob.title}</h2>
+
+              <div className="mb-4">
+                <label className="text-xs text-gray-400 block mb-1">지원 상태</label>
+                <select
+                  value={jobApplicationStatus(selectedJob)}
+                  onChange={(e) =>
+                    updateApplicationStatus(
+                      selectedJob.seq,
+                      e.target.value as ApplicationStatus
+                    )
+                  }
+                  className={`text-sm px-3 py-1.5 rounded-lg font-medium border-0 cursor-pointer ${getApplicationStatusColor(jobApplicationStatus(selectedJob))}`}
+                >
+                  {APPLICATION_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               {typeof selectedJob.matchScore === "number" && (
                 <div className="mb-5 p-4 rounded-xl bg-gradient-to-br from-gray-50 to-white border border-gray-100">
@@ -884,6 +933,7 @@ function JobCard({
   isSelected,
   onSelect,
   onHide,
+  onStatusChange,
   getScoreColor,
   getBadgeColor,
 }: {
@@ -891,9 +941,11 @@ function JobCard({
   isSelected: boolean;
   onSelect: (job: JobSummary) => void;
   onHide: (seq: string) => void;
+  onStatusChange: (seq: string, status: ApplicationStatus) => void;
   getScoreColor: (score: number) => string;
   getBadgeColor: (type: string) => string;
 }) {
+  const status = jobApplicationStatus(job);
   return (
     <div
       onClick={() => onSelect(job)}
@@ -946,6 +998,20 @@ function JobCard({
           )}
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <select
+            value={status}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              onStatusChange(job.seq, e.target.value as ApplicationStatus)
+            }
+            className={`text-xs px-2 py-0.5 rounded-full font-medium border-0 cursor-pointer ${getApplicationStatusColor(status)}`}
+          >
+            {APPLICATION_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
           <div className="text-xs text-gray-400">{job.date}</div>
           {job.deadline && (
             <div className="text-xs text-red-500">~{job.deadline}</div>

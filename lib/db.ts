@@ -4,6 +4,7 @@ import { join } from "path";
 import type { JobSummary } from "./summarizer";
 import type { JobMatch } from "./matcher";
 import { categorizePositions } from "./position-categories";
+import type { ApplicationStatus } from "./application-status";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DATA_DIR, "findar.db");
@@ -37,6 +38,16 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_jobs_deadline ON jobs(deadline);
   CREATE INDEX IF NOT EXISTS idx_jobs_date ON jobs(date);
+
+  CREATE TABLE IF NOT EXISTS applications (
+    seq TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT '미지원',
+    notes TEXT NOT NULL DEFAULT '',
+    history TEXT NOT NULL DEFAULT '[]',
+    submittedAt INTEGER,
+    updatedAt INTEGER NOT NULL,
+    createdAt INTEGER NOT NULL
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -81,11 +92,15 @@ interface JobRow {
   matchReasoning: string | null;
   matchProfileHash: string | null;
   hidden: number;
+  applicationStatus: string;
+  applicationNotes: string | null;
 }
 
 export type JobWithMatch = JobSummary & Partial<JobMatch> & {
   categories: string[];
   matchProfileHash?: string | null;
+  applicationStatus: ApplicationStatus;
+  applicationNotes: string;
 };
 
 function rowToJobWithMatch(row: JobRow): JobWithMatch {
@@ -113,6 +128,8 @@ function rowToJobWithMatch(row: JobRow): JobWithMatch {
     matchGaps: row.matchGaps ? JSON.parse(row.matchGaps) : undefined,
     matchReasoning: row.matchReasoning ?? undefined,
     matchProfileHash: row.matchProfileHash,
+    applicationStatus: (row.applicationStatus as ApplicationStatus) || "미지원",
+    applicationNotes: row.applicationNotes ?? "",
   };
 }
 
@@ -208,11 +225,22 @@ export function updateJobMatch(seq: string, match: JobMatch, profileHash: string
   });
 }
 
+// jobs 조회 시 applications를 항상 조인해 applicationStatus를 함께 채운다.
+// 이 조인이 빠지면 rowToJobWithMatch가 기본값('미지원')으로 채워버려, 재매칭 시
+// 이미 저장된 지원 상태를 실수로 덮어쓸 위험이 있다(클라이언트가 이 결과를 jobs 상태에 그대로 병합함).
+const JOB_WITH_APPLICATION_SELECT = `
+  SELECT jobs.*,
+    COALESCE(applications.status, '미지원') AS applicationStatus,
+    applications.notes AS applicationNotes
+  FROM jobs
+  LEFT JOIN applications ON applications.seq = jobs.seq
+`;
+
 const selectJobsNeedingMatchStmt = db.prepare(`
-  SELECT * FROM jobs
-  WHERE summarizedAt IS NOT NULL
-    AND hidden = 0
-    AND (matchProfileHash IS NULL OR matchProfileHash != ?)
+  ${JOB_WITH_APPLICATION_SELECT}
+  WHERE jobs.summarizedAt IS NOT NULL
+    AND jobs.hidden = 0
+    AND (jobs.matchProfileHash IS NULL OR jobs.matchProfileHash != ?)
 `);
 
 export function getJobsNeedingMatch(profileHash: string): JobWithMatch[] {
@@ -246,6 +274,54 @@ export function getHiddenSeqs(): string[] {
   return rows.map((r) => r.seq);
 }
 
+interface ApplicationRow {
+  seq: string;
+  status: string;
+  notes: string;
+  history: string;
+  submittedAt: number | null;
+  updatedAt: number;
+  createdAt: number;
+}
+
+const selectApplicationStmt = db.prepare(`SELECT * FROM applications WHERE seq = ?`);
+
+const upsertApplicationStmt = db.prepare(`
+  INSERT INTO applications (seq, status, notes, history, submittedAt, updatedAt, createdAt)
+  VALUES (@seq, @status, @notes, @history, @submittedAt, @updatedAt, @createdAt)
+  ON CONFLICT(seq) DO UPDATE SET
+    status = excluded.status,
+    notes = excluded.notes,
+    history = excluded.history,
+    submittedAt = excluded.submittedAt,
+    updatedAt = excluded.updatedAt
+`);
+
+// notes를 생략하면 기존 값을 유지한다. submittedAt은 '제출완료'로 처음 전환되는 시점에만
+// 기록하고, 이후 상태가 바뀌어도(예: 서류합격 → 면접) 최초 제출 시각을 덮어쓰지 않는다.
+export function upsertApplicationStatus(
+  seq: string,
+  status: ApplicationStatus,
+  notes?: string
+): void {
+  const now = Date.now();
+  const existing = selectApplicationStmt.get(seq) as ApplicationRow | undefined;
+  const history = existing
+    ? (JSON.parse(existing.history) as { status: string; at: number }[])
+    : [];
+  history.push({ status, at: now });
+
+  upsertApplicationStmt.run({
+    seq,
+    status,
+    notes: notes ?? existing?.notes ?? "",
+    history: JSON.stringify(history),
+    submittedAt: existing?.submittedAt ?? (status === "제출완료" ? now : null),
+    updatedAt: now,
+    createdAt: existing?.createdAt ?? now,
+  });
+}
+
 export function clearAllMatches(): void {
   db.exec(`
     UPDATE jobs SET
@@ -277,13 +353,14 @@ function applicationPeriodEnd(period: string): string {
   return "";
 }
 
-const selectActiveJobsStmt = db.prepare(
-  `SELECT * FROM jobs WHERE summarizedAt IS NOT NULL AND hidden = 0
-   ORDER BY
-     CASE WHEN matchScore IS NULL THEN 1 ELSE 0 END,
-     matchScore DESC,
-     date DESC`
-);
+const selectActiveJobsStmt = db.prepare(`
+  ${JOB_WITH_APPLICATION_SELECT}
+  WHERE jobs.summarizedAt IS NOT NULL AND jobs.hidden = 0
+  ORDER BY
+    CASE WHEN jobs.matchScore IS NULL THEN 1 ELSE 0 END,
+    jobs.matchScore DESC,
+    jobs.date DESC
+`);
 
 export function getActiveJobs(): JobWithMatch[] {
   const today = todayYmd();
