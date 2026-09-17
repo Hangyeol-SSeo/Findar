@@ -190,7 +190,20 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
               </p>
             </div>
           ) : (
-            <p className="font-semibold">🌐 웹 지원폼으로 보입니다 — 사이트에서 직접 채우거나, 아래 초안을 참고해 입력해주세요.</p>
+            <div>
+              <p className="font-semibold mb-1">🌐 웹 지원폼으로 보입니다</p>
+              <p className="mb-2">
+                사이트마다 폼 구조가 달라 자동으로 채우는 규칙을 만들기 어려웠습니다. 대신
+                Claude Code 세션에서 아래처럼 요청하면, 실제 사이트를 열어 이 초안을 참고해
+                채워드립니다 (제출은 항상 직접 해야 합니다).
+              </p>
+              <div className="flex items-center gap-2 bg-white rounded-lg px-2.5 py-1.5 border border-blue-200">
+                <code className="text-xs text-gray-700 flex-1">
+                  이 공고 지원 도와줘 (seq={seq})
+                </code>
+                <CopyButton text={`이 공고 지원 도와줘 (seq=${seq})`} />
+              </div>
+            </div>
           )}
         </div>
       )}
