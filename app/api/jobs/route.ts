@@ -13,7 +13,7 @@ import {
   getJobsNeedingMatch,
   skipLowScoreMatches,
 } from "@/lib/db";
-import { ensureProfile, type Profile } from "@/lib/profile";
+import { ensureProfile, getCachedProfile, type Profile } from "@/lib/profile";
 import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
 import {
   CRAWL_PAGES,
@@ -30,6 +30,16 @@ function sleep(ms: number) {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
+
+  // 크롤링/AI 호출 없이 이미 저장된 공고만 보여줄 때(예: 화면을 새로 마운트할 때) 쓰는
+  // 가벼운 경로 — 설정 페이지를 왔다갔다 할 때마다 전체 파이프라인이 다시 도는 걸 방지한다.
+  if (searchParams.get("cachedOnly") === "true") {
+    return Response.json({
+      jobs: getActiveJobs(),
+      hasProfile: !!getCachedProfile(),
+    });
+  }
+
   const pages = Math.min(
     parseInt(searchParams.get("pages") || String(CRAWL_PAGES)),
     50
