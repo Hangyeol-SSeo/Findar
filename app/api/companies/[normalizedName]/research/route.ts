@@ -11,7 +11,7 @@ export async function POST(
   { params }: { params: Promise<{ normalizedName: string }> }
 ) {
   const { normalizedName } = await params;
-  const { displayName, sections } = await request.json();
+  const { displayName, sections, force } = await request.json();
   if (!displayName || typeof displayName !== "string") {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
@@ -22,8 +22,8 @@ export async function POST(
       )
     : undefined;
 
-  // 이미 신선한(TTL 안 지난) 섹션은 건너뛴다 — 새로고침을 눌러도 매번 전체를 재호출하지 않음.
-  const targets = listStaleSections(normalizedName, requested);
+  // 이미 신선한(TTL 안 지난) 섹션은 건너뛴다 — 단, force=true면(개별 섹션 새로고침) 무시.
+  const targets = listStaleSections(normalizedName, requested, force === true);
 
   const encoder = new TextEncoder();
   let closed = false;

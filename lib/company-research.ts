@@ -40,14 +40,20 @@ function isStale(section: CompanySection | undefined, sectionType: CompanySectio
   return Date.now() - section.generatedAt > ttlDays * 24 * 60 * 60 * 1000;
 }
 
-// 미생성이거나 TTL이 지난 섹션만 골라준다 — "새로고침"을 눌러도 아직 신선한 섹션까지
-// 다시 AI를 호출하지 않기 위함 (기업 리서치는 비용이 드는 작업이라 점층적으로만 채운다).
+// 미생성이거나 TTL이 지난 섹션만 골라준다 — "전체 새로고침"을 눌러도 아직 신선한 섹션까지
+// 다시 AI를 호출하지 않기 위함(기업 리서치는 비용이 드는 작업이라 점층적으로만 채운다).
+// force=true면 TTL을 무시하고 요청한 섹션을 전부 돌려준다 — 개별 섹션 새로고침(↻)처럼
+// 사용자가 명시적으로 "이거 하나는 지금 당장 다시 해줘"라고 누른 경우를 위한 탈출구.
+// force 없이는 이미 최신인 섹션에 대해 새로고침이 조용히 아무 일도 안 하는 게 혼란스럽다는
+// 피드백을 받고 추가했다.
 export function listStaleSections(
   normalizedName: string,
-  requested?: CompanySectionType[]
+  requested?: CompanySectionType[],
+  force = false
 ): CompanySectionType[] {
-  const existing = new Map(getCompanySections(normalizedName).map((s) => [s.sectionType, s]));
   const candidates = requested ?? [...COMPANY_SECTION_TYPES];
+  if (force) return candidates;
+  const existing = new Map(getCompanySections(normalizedName).map((s) => [s.sectionType, s]));
   return candidates.filter((t) => isStale(existing.get(t as CompanySectionType), t as CompanySectionType));
 }
 

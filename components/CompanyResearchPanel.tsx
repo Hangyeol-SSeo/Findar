@@ -29,6 +29,7 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
   const [loading, setLoading] = useState(true);
   const [researching, setResearching] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -52,19 +53,20 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
   }, [normalizedName]);
 
   const runResearch = useCallback(
-    async (sectionTypes?: CompanySectionType[]) => {
+    async (sectionTypes?: CompanySectionType[], force = false) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       setError("");
+      setInfo("");
       setResearching(new Set(sectionTypes ?? [...COMPANY_SECTION_TYPES]));
 
       try {
         const res = await fetch(`/api/companies/${encodeURIComponent(normalizedName)}/research`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: companyName, sections: sectionTypes }),
+          body: JSON.stringify({ displayName: companyName, sections: sectionTypes, force }),
           signal: controller.signal,
         });
         const reader = res.body?.getReader();
@@ -86,6 +88,13 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
 
             if (data.type === "targets") {
               setResearching(new Set(data.sectionTypes));
+              // force 없이 눌렀는데 다시 조사할 섹션이 하나도 없으면(전부 아직 TTL 안 지남)
+              // 조용히 아무 일도 안 일어나는 게 아니라 왜 그런지 알려준다.
+              if (!force && data.sectionTypes.length === 0) {
+                setInfo(
+                  "모든 섹션이 아직 최신 상태라 다시 조사하지 않았습니다. 특정 섹션을 지금 바로 다시 조사하려면 그 섹션의 ↻ 버튼을 눌러주세요(TTL 무시하고 강제 재조사)."
+                );
+              }
             } else if (data.type === "section-done") {
               setSections((prev) => ({ ...prev, [data.sectionType]: data.section }));
               setResearching((prev) => {
@@ -129,13 +138,15 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
         <button
           onClick={() => runResearch()}
           disabled={anyResearching}
+          title="미조사·오래된 섹션만 채웁니다. 최신 섹션까지 강제로 다시 하려면 해당 섹션의 ↻를 누르세요."
           className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 ml-3"
         >
-          {anyResearching ? "조사 중..." : "전체 리서치 시작/새로고침"}
+          {anyResearching ? "조사 중..." : "미조사 항목 채우기"}
         </button>
       </div>
 
       {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
+      {info && <p className="text-xs text-amber-600 mb-3">{info}</p>}
 
       <div className="space-y-3">
         {COMPANY_SECTION_TYPES.map((type) => {
@@ -154,10 +165,10 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
                     </span>
                   )}
                   <button
-                    onClick={() => runResearch([type])}
+                    onClick={() => runResearch([type], true)}
                     disabled={anyResearching}
                     className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
-                    title="이 섹션만 새로고침"
+                    title="이 섹션만 지금 강제로 다시 조사 (TTL 무시)"
                   >
                     ↻
                   </button>
