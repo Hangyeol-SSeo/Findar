@@ -7,6 +7,11 @@ import {
 } from "./db";
 import { getCachedProfile } from "./profile";
 import { normalizeCompanyName } from "./company-normalize";
+import {
+  readApplicantProfile,
+  isApplicantProfileFilled,
+  type ApplicantProfile,
+} from "./applicant-profile";
 
 const DRAFT_MODEL = "claude-haiku-4-5-20251001";
 
@@ -44,6 +49,176 @@ function stripForbiddenFields(fields: PersonalField[]): PersonalField[] {
   return fields.filter((f) => !FORBIDDEN_FIELD_KEYWORDS.some((kw) => f.label.includes(kw)));
 }
 
+// lib/settings의 ApplicantProfile은 사용자가 직접 적은 "정확한" 데이터라 AI가 다시
+// 추론/요약할 필요가 없다 — 있는 그대로 label/value로 펼쳐서 personalFields를 채운다.
+// (반대로 essayAnswers는 여전히 AI가 공고에 맞춰 새로 써야 하므로 별도로 생성한다.)
+function buildPersonalFieldsFromApplicantProfile(ap: ApplicantProfile): PersonalField[] {
+  const fields: PersonalField[] = [
+    { label: "이름", value: ap.name },
+    { label: "영문이름", value: ap.nameEn },
+    { label: "성별", value: ap.gender },
+    { label: "생년월일", value: ap.birthDate },
+    { label: "국적", value: ap.nationality },
+    {
+      label: "주소",
+      value: [ap.postalCode && `(${ap.postalCode})`, ap.address, ap.addressDetail]
+        .filter(Boolean)
+        .join(" "),
+    },
+    { label: "이메일", value: ap.email },
+    { label: "연락처", value: ap.phone },
+    {
+      label: "장애여부",
+      value: ap.disabilityStatus === "대상" ? `대상 (${ap.disabilityDetail})` : "비대상",
+    },
+    {
+      label: "보훈여부",
+      value: ap.veteranStatus === "대상" ? `대상 (${ap.veteranDetail})` : "비대상",
+    },
+  ];
+
+  if (ap.militaryStatus) {
+    const military =
+      ap.militaryStatus === "군필" || ap.militaryStatus === "복무중"
+        ? [
+            ap.militaryStatus,
+            ap.militaryBranch,
+            ap.militarySpecialty,
+            ap.militaryRank,
+            [ap.militaryServiceStart, ap.militaryServiceEnd].filter(Boolean).join("~"),
+            ap.militaryDischargeType,
+          ]
+            .filter(Boolean)
+            .join(" / ")
+        : ap.militaryStatus;
+    fields.push({ label: "병역사항", value: military });
+  }
+
+  ap.education.forEach((e, i) => {
+    if (!e.schoolName) return;
+    const detail = [
+      e.schoolLevel,
+      e.degreeType,
+      e.major && `${e.major}${e.majorTrack ? `(${e.majorTrack})` : ""}`,
+      e.status,
+      [e.startDate, e.endDate].filter(Boolean).join("~"),
+      e.gpa && `학점 ${e.gpa}/${e.gpaMax || "4.5"}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    fields.push({ label: `학력 ${i + 1} - ${e.schoolName}`, value: detail });
+  });
+
+  ap.workExperiences.forEach((w, i) => {
+    if (!w.companyName) return;
+    const detail = [
+      w.employmentType,
+      w.department,
+      w.position,
+      [w.startDate, w.isCurrent ? "재직중" : w.endDate].filter(Boolean).join("~"),
+      w.duties,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    fields.push({ label: `경력 ${i + 1} - ${w.companyName}`, value: detail });
+  });
+
+  ap.projects.forEach((p, i) => {
+    if (!p.name) return;
+    const detail = [
+      p.client,
+      p.role,
+      [p.startDate, p.endDate].filter(Boolean).join("~"),
+      p.contributionPercent && `기여도 ${p.contributionPercent}%`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    fields.push({ label: `프로젝트 ${i + 1} - ${p.name}`, value: detail });
+  });
+
+  ap.certifications.forEach((c, i) => {
+    if (!c.name) return;
+    fields.push({
+      label: `자격증 ${i + 1} - ${c.name}`,
+      value: [c.issuer, c.issuedDate].filter(Boolean).join(" · "),
+    });
+  });
+
+  ap.languageTests.forEach((t, i) => {
+    if (!t.testName) return;
+    fields.push({
+      label: `어학시험 ${i + 1} - ${t.testName}`,
+      value: `${t.score}/${t.scoreMax} (${t.date})`,
+    });
+  });
+
+  ap.awards.forEach((a, i) => {
+    if (!a.name) return;
+    fields.push({
+      label: `수상경력 ${i + 1} - ${a.name}`,
+      value: [a.organizer, a.date, a.detail].filter(Boolean).join(" · "),
+    });
+  });
+
+  ap.activities.forEach((a, i) => {
+    if (!a.category) return;
+    fields.push({
+      label: `대외활동 ${i + 1} - ${a.category}`,
+      value: [a.organization, a.role, a.detail].filter(Boolean).join(" · "),
+    });
+  });
+
+  ap.research.forEach((r, i) => {
+    if (!r.title) return;
+    fields.push({
+      label: `연구실적 ${i + 1} - ${r.title}`,
+      value: [r.category, r.organizer, r.date].filter(Boolean).join(" · "),
+    });
+  });
+
+  if (ap.portfolioLinks) fields.push({ label: "온라인 자료", value: ap.portfolioLinks });
+  if (ap.skillsNote) fields.push({ label: "활용 가능 도구/언어", value: ap.skillsNote });
+
+  return stripForbiddenFields(fields.filter((f) => f.value));
+}
+
+// essayAnswers 프롬프트에 실제 회사명/학교명/기간 같은 구체적 사실을 실어주기 위한 요약.
+// personalFields처럼 낱개로 펼치지 않고, 모델이 문장을 자연스럽게 짜 넣을 수 있도록
+// 사람이 읽는 요약문 형태로 압축한다.
+function summarizeApplicantProfileForPrompt(ap: ApplicantProfile): string {
+  const lines: string[] = [];
+  if (ap.education.length) {
+    lines.push(
+      "학력: " +
+        ap.education
+          .map((e) => `${e.schoolName}(${e.major || e.schoolLevel}, ${e.status})`)
+          .join(", ")
+    );
+  }
+  if (ap.workExperiences.length) {
+    lines.push(
+      "경력: " +
+        ap.workExperiences
+          .map((w) => `${w.companyName}(${w.position || w.department || w.employmentType})`)
+          .join(", ")
+    );
+  }
+  if (ap.projects.length) {
+    lines.push("프로젝트: " + ap.projects.map((p) => `${p.name}(${p.role})`).join(", "));
+  }
+  if (ap.certifications.length) {
+    lines.push("자격증: " + ap.certifications.map((c) => c.name).join(", "));
+  }
+  if (ap.awards.length) {
+    lines.push("수상: " + ap.awards.map((a) => a.name).join(", "));
+  }
+  if (ap.activities.length) {
+    lines.push("대외활동: " + ap.activities.map((a) => `${a.category}(${a.role})`).join(", "));
+  }
+  if (ap.militaryStatus) lines.push(`병역: ${ap.militaryStatus}`);
+  return lines.join("\n");
+}
+
 function parseDraft(seq: string, resultText: string): ApplicationDraft | null {
   try {
     const jsonMatch =
@@ -73,6 +248,9 @@ export async function generateApplicationDraft(seq: string): Promise<Application
   const profile = getCachedProfile();
   if (!profile) return null; // 프로필이 없으면 초안을 만들 재료가 없다 (이력서 먼저 필요)
 
+  const applicantProfile = readApplicantProfile();
+  const applicantFilled = isApplicantProfileFilled(applicantProfile);
+
   const normalizedName = normalizeCompanyName(job.company);
   const sections = getCompanySections(normalizedName);
   const sectionText = sections
@@ -93,7 +271,14 @@ ${profile.projects.map((p) => `- ${p.name} (${p.role}) — ${p.summary}`).join("
 지원 의도/방향(본인 작성): ${profile.careerGoals || "(작성 안 함)"}
 소개: ${profile.narrative}
 
-[지원 공고]
+${
+  applicantFilled
+    ? `[지원 정보 (사용자가 설정에서 직접 입력, 추론 아님 — essayAnswers에 구체적으로 녹여 써도 됨)]
+${summarizeApplicantProfileForPrompt(applicantProfile)}
+
+`
+    : ""
+}[지원 공고]
 회사: ${job.company}
 제목: ${job.title}
 채용유형: ${job.positionType} (${job.experienceYears})
@@ -105,20 +290,26 @@ ${profile.projects.map((p) => `- ${p.name} (${p.role}) — ${p.summary}`).join("
 ${sectionText || "(아직 리서치되지 않음)"}
 
 아래 JSON 형식으로만 응답해. 마크다운이나 설명 없이 순수 JSON만.
-{
+{${
+    applicantFilled
+      ? ""
+      : `
   "personalFields": [
     {"label": "이름", "value": "..."},
     {"label": "이메일", "value": "..."},
     {"label": "연락처", "value": "..."},
     {"label": "최종학력", "value": "..."},
     {"label": "경력사항 요약", "value": "..."}
-  ],
+  ],`
+  }
   "essayAnswers": [
     {"question": "지원동기", "answer": "3-5문장, 회사 리서치 내용을 반영해 구체적으로"},
     {"question": "성장과정/강점", "answer": "..."},
     {"question": "입사 후 포부", "answer": "..."}
   ],
-  "notesForUser": ["초안이니 반드시 직접 검토 후 사용하라는 안내, 프로필에서 확인 안 되는 정보는 직접 채워야 한다는 안내 등"]
+  "notesForUser": ["초안이니 반드시 직접 검토 후 사용하라는 안내"${
+    applicantFilled ? "" : ', "프로필에서 확인 안 되는 정보는 직접 채워야 한다는 안내"'
+  }]
 }
 
 주의: 프로필에 실제로 없는 정보(생년월일, 주소, 전화번호 등)는 지어내지 말고 값에 "(직접 입력 필요)"라고 써. 주민등록번호/계좌번호/비밀번호 등 민감정보는 personalFields에 절대 포함하지 마.`;
@@ -138,6 +329,12 @@ ${sectionText || "(아직 리서치되지 않음)"}
 
   const draft = parseDraft(seq, resultText);
   if (!draft) return null;
+
+  // 지원 정보가 채워져 있으면 AI가 추측한 personalFields 대신 사용자가 직접 적은 정확한
+  // 값으로 통째로 교체한다 — 이름 철자, 학교명, 재직기간 같은 건 AI가 다시 요약할 이유가 없다.
+  if (applicantFilled) {
+    draft.personalFields = buildPersonalFieldsFromApplicantProfile(applicantProfile);
+  }
 
   saveApplicationDraft(seq, JSON.stringify(draft), DRAFT_MODEL);
   return draft;

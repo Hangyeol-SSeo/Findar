@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import ApplicantProfileForm from "@/components/ApplicantProfileForm";
 
 export default function SettingsPage() {
   const [careerGoals, setCareerGoals] = useState("");
@@ -34,7 +35,7 @@ export default function SettingsPage() {
   }, [careerGoals]);
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-8">
+    <div className="max-w-4xl mx-auto px-6 py-8">
       <Link
         href="/"
         className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
@@ -47,7 +48,7 @@ export default function SettingsPage() {
         이력서만으로는 알 수 없는 지원 의도를 직접 적어두면 AI 매칭이 참고합니다.
       </p>
 
-      <div className="bg-white rounded-xl border border-gray-100 p-5">
+      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-8">
         <label className="block text-sm font-semibold text-gray-700 mb-2">
           지원 의도 / 방향
         </label>
@@ -76,6 +77,12 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      <h2 className="text-lg font-bold tracking-tight mb-1">지원 정보</h2>
+      <p className="text-gray-500 mb-4">
+        실제 지원폼(인적사항/학력/경력 등)에 반복적으로 들어가는 값을 미리 채워두세요.
+      </p>
+      <ApplicantProfileForm />
     </div>
   );
 }

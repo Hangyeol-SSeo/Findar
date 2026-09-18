@@ -268,11 +268,18 @@ export default function JobBoard() {
     }
   }, []);
 
+  // 마운트될 때마다(예: 설정 페이지를 갔다가 돌아올 때) 크롤링을 새로 트리거하면 오버헤드가
+  // 크므로, 화면이 뜰 땐 이미 저장된 공고만 가볍게 불러온다. 실제 크롤링/재매칭은 오직
+  // "새로고침" 버튼을 눌렀을 때만(아래 onClick={() => fetchJobs(...)}) 실행된다.
   useEffect(() => {
-    if (matchEnabled === null) return; // 최초 접속 & 아직 게이트에서 선택 전
-    fetchJobs(matchEnabled, pages);
-    return () => abortRef.current?.abort();
-  }, [matchEnabled, pages, fetchJobs]);
+    fetch("/api/jobs?cachedOnly=true")
+      .then((r) => r.json())
+      .then(({ jobs, hasProfile }: { jobs?: JobSummary[]; hasProfile?: boolean }) => {
+        if (Array.isArray(jobs)) setJobs(jobs);
+        setHasProfile(!!hasProfile);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     setPanelTab("detail");
