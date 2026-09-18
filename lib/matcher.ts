@@ -59,6 +59,7 @@ ${job.qualifications.map((q) => `- ${q}`).join("\n")}`
 프로젝트:
 ${profile.projects.map((p) => `- ${p.name} (${p.role}, ${p.stack.join("/")}) — ${p.summary}`).join("\n")}
 비개발 직군 전이 강점: ${(profile.transferableStrengths ?? []).join(", ") || "(없음)"}
+지원 의도/방향 (본인이 직접 작성): ${profile.careerGoals || "(작성 안 함)"}
 
 소개:
 ${profile.narrative}
@@ -148,6 +149,7 @@ export async function matchJob(
 프로젝트:
 ${profile.projects.map((p) => `- ${p.name} (${p.role}, ${p.stack.join("/")}) — ${p.summary}`).join("\n")}
 비개발 직군 전이 강점: ${(profile.transferableStrengths ?? []).join(", ") || "(없음)"}
+지원 의도/방향 (본인이 직접 작성): ${profile.careerGoals || "(작성 안 함)"}
 
 소개:
 ${profile.narrative}

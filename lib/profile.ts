@@ -13,6 +13,7 @@ import { join } from "path";
 const RESUME_DIR = join(process.cwd(), "resume");
 const DATA_DIR = join(process.cwd(), "data");
 const PROFILE_PATH = join(DATA_DIR, "profile.json");
+const OVERRIDES_PATH = join(DATA_DIR, "profile-overrides.json");
 
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -36,6 +37,9 @@ export interface Profile {
   // 비개발/비IT 금융 직군(리스크관리, 퀀트 등)에도 적용 가능한 전이 가능 강점.
   // 기존 profile.json 캐시엔 없을 수 있으므로 optional — 소비하는 쪽에서 ?? [] 처리.
   transferableStrengths?: string[];
+  // 이력서로는 추론 불가능한, 사용자가 /settings에서 직접 쓰는 지원 의도/방향.
+  // 이력서 재추출과 무관하게 매번 최신 값을 병합하므로 optional.
+  careerGoals?: string;
 }
 
 function listResumePdfs(): string[] {
@@ -66,6 +70,22 @@ function readCachedProfile(): Profile | null {
 
 function writeProfile(profile: Profile): void {
   writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2));
+}
+
+// careerGoals는 이력서 추출(sourcesHash)과 무관한 별도 저장소에 둔다 — 사용자가
+// /settings에서 언제든 바꿀 수 있어야 하고, 그때마다 이력서를 재분석할 필요는 없으므로.
+export function readCareerGoals(): string {
+  if (!existsSync(OVERRIDES_PATH)) return "";
+  try {
+    const parsed = JSON.parse(readFileSync(OVERRIDES_PATH, "utf-8"));
+    return typeof parsed.careerGoals === "string" ? parsed.careerGoals : "";
+  } catch {
+    return "";
+  }
+}
+
+export function writeCareerGoals(careerGoals: string): void {
+  writeFileSync(OVERRIDES_PATH, JSON.stringify({ careerGoals }, null, 2));
 }
 
 async function extractProfile(
@@ -143,6 +163,11 @@ export interface ProfileResult {
   error?: string;
 }
 
+function withCareerGoals(profile: Profile | null): Profile | null {
+  if (!profile) return profile;
+  return { ...profile, careerGoals: readCareerGoals() };
+}
+
 export async function ensureProfile(opts?: {
   onProgress?: (msg: string) => void;
 }): Promise<ProfileResult> {
@@ -154,7 +179,7 @@ export async function ensureProfile(opts?: {
   const currentHash = hashSources(pdfs);
   const cached = readCachedProfile();
   if (cached && cached.sourcesHash === currentHash) {
-    return { profile: cached, status: "cached" };
+    return { profile: withCareerGoals(cached), status: "cached" };
   }
 
   opts?.onProgress?.(
@@ -166,11 +191,11 @@ export async function ensureProfile(opts?: {
   try {
     const profile = await extractProfile(pdfs, currentHash);
     writeProfile(profile);
-    return { profile, status: "extracted" };
+    return { profile: withCareerGoals(profile), status: "extracted" };
   } catch (e) {
     console.error("[profile] extraction failed:", e);
     return {
-      profile: cached ?? null,
+      profile: withCareerGoals(cached),
       status: "error",
       error: (e as Error).message,
     };
@@ -178,5 +203,5 @@ export async function ensureProfile(opts?: {
 }
 
 export function getCachedProfile(): Profile | null {
-  return readCachedProfile();
+  return withCareerGoals(readCachedProfile());
 }

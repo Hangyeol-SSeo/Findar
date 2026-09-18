@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import Link from "next/link";
+import CompanyResearchPanel from "./CompanyResearchPanel";
+import ApplicationDraftPanel from "./ApplicationDraftPanel";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -82,6 +85,7 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
+  const [panelTab, setPanelTab] = useState<"detail" | "company" | "draft">("detail");
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
@@ -271,6 +275,10 @@ export default function JobBoard() {
   }, [matchEnabled, pages, fetchJobs]);
 
   useEffect(() => {
+    setPanelTab("detail");
+  }, [selectedJob?.seq]);
+
+  useEffect(() => {
     fetch("/api/jobs/hide")
       .then((r) => r.json())
       .then(({ seqs }: { seqs: string[] }) => setHiddenSeqs(new Set(seqs)))
@@ -423,11 +431,19 @@ export default function JobBoard() {
       >
         <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
           {/* Header */}
-          <header className="mb-6">
-            <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
-            <p className="text-gray-500 mt-1">
-              금융투자협회 회원사 채용공고를 한눈에
-            </p>
+          <header className="mb-6 flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
+              <p className="text-gray-500 mt-1">
+                금융투자협회 회원사 채용공고를 한눈에
+              </p>
+            </div>
+            <Link
+              href="/settings"
+              className="text-sm text-gray-400 hover:text-gray-600 transition-colors mt-1"
+            >
+              설정
+            </Link>
           </header>
 
           {/* Progress bar */}
@@ -753,7 +769,33 @@ export default function JobBoard() {
               </button>
             </div>
 
+            {/* Panel tabs */}
+            <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
+              {(["detail", "company", "draft"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setPanelTab(tab)}
+                  className={`text-sm px-3 py-2 -mb-px border-b-2 transition-colors ${
+                    panelTab === tab
+                      ? "border-blue-600 text-blue-600 font-medium"
+                      : "border-transparent text-gray-400 hover:text-gray-600"
+                  }`}
+                >
+                  {tab === "detail" ? "공고 상세" : tab === "company" ? "회사 리서치" : "지원 도우미"}
+                </button>
+              ))}
+            </div>
+
             {/* Panel body */}
+            {panelTab === "company" ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <CompanyResearchPanel companyName={selectedJob.company} />
+              </div>
+            ) : panelTab === "draft" ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <ApplicationDraftPanel seq={selectedJob.seq} />
+              </div>
+            ) : (
             <div className="flex-1 overflow-y-auto p-5">
               <h2 className="text-xl font-bold mb-3">{selectedJob.title}</h2>
 
@@ -895,6 +937,7 @@ export default function JobBoard() {
                 </Section>
               )}
             </div>
+            )}
 
             {/* Panel footer */}
             <div className="p-5 border-t border-gray-100 space-y-2">
