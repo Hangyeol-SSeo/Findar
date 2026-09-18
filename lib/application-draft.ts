@@ -4,16 +4,21 @@ import {
   getCompanySections,
   getApplicationDraftRow,
   saveApplicationDraft,
+  type JobWithMatch,
 } from "./db";
-import { getCachedProfile } from "./profile";
+import { getCachedProfile, type Profile } from "./profile";
 import { normalizeCompanyName } from "./company-normalize";
 import {
   readApplicantProfile,
   isApplicantProfileFilled,
   type ApplicantProfile,
 } from "./applicant-profile";
+import { ensureEssayBank, summarizeEssayBankForPrompt } from "./essay-bank";
+import { COMMON_ESSAY_QUESTIONS, COMBINED_ESSAY_LABEL } from "./essay-questions";
 
-const DRAFT_MODEL = "claude-haiku-4-5-20251001";
+// 자소서는 실제 제출되는 글이라 품질이 중요해서, 회사 리서치와 같은 이유로 Haiku 대신
+// Sonnet을 쓴다(비용보다 "이 회사를 잘 모른다"는 인상을 안 주는 게 우선).
+const DRAFT_MODEL = "claude-sonnet-4-6";
 
 export interface PersonalField {
   label: string;
@@ -239,9 +244,18 @@ function parseDraft(seq: string, resultText: string): ApplicationDraft | null {
   }
 }
 
-// 이력서 PDF 자체를 다시 읽지 않고 이미 추출된 Profile(구조화된 정보)만 사용한다 —
-// lib/profile.ts의 extractProfile()과 달리 원본 PDF 접근 권한이 필요 없고 비용도 훨씬 싸다.
-export async function generateApplicationDraft(seq: string): Promise<ApplicationDraft | null> {
+interface DraftContext {
+  job: JobWithMatch & { rawContent: string };
+  profile: Profile;
+  applicantProfile: ApplicantProfile;
+  applicantFilled: boolean;
+  sectionText: string;
+  essayBankText: string;
+}
+
+// generateApplicationDraft와 generateCustomEssayAnswer가 똑같은 배경 정보(이력서/지원정보/
+// 공고/회사 리서치/과거 자소서)를 프롬프트에 실어야 해서 조립 로직을 한 곳에 모았다.
+async function buildDraftContext(seq: string): Promise<DraftContext | null> {
   const job = getJobBySeq(seq);
   if (!job) return null;
 
@@ -258,40 +272,68 @@ export async function generateApplicationDraft(seq: string): Promise<Application
     .map((s) => `[${s.sectionType}] ${s.content}`)
     .join("\n\n");
 
-  const prompt = `당신은 지원자의 채용 지원서 작성을 돕는 도우미입니다. 아래 정보를 바탕으로 (1) 여러 지원폼에서 반복되는 개인정보 필드 값과 (2) 자주 나오는 자기소개 항목 답변 초안을 작성해주세요. 이건 초안일 뿐이며 지원자가 반드시 직접 검토·수정 후 사용한다는 전제로, 성실하고 구체적으로 작성해.
+  // cover-letters/ 폴더가 바뀌었으면 여기서 재추출(에이전틱, Sonnet) — 매번 하는 게 아니라
+  // sourcesHash가 같으면 캐시를 그대로 반환하므로 평소엔 파일 읽기 한 번뿐이라 저렴하다.
+  const essayBank = await ensureEssayBank();
+  const essayBankText = summarizeEssayBankForPrompt(essayBank);
 
-[지원자 프로필]
-이름: ${profile.name}
-경력: ${profile.experienceYears}
-기술: ${profile.skills.join(", ")}
-도메인: ${profile.domains.join(", ")}
+  return { job, profile, applicantProfile, applicantFilled, sectionText, essayBankText };
+}
+
+function backgroundPromptBlock(ctx: DraftContext): string {
+  return `[지원자 프로필]
+이름: ${ctx.profile.name}
+경력: ${ctx.profile.experienceYears}
+기술: ${ctx.profile.skills.join(", ")}
+도메인: ${ctx.profile.domains.join(", ")}
 프로젝트:
-${profile.projects.map((p) => `- ${p.name} (${p.role}) — ${p.summary}`).join("\n")}
-비개발 직군 전이 강점: ${(profile.transferableStrengths ?? []).join(", ") || "(없음)"}
-지원 의도/방향(본인 작성): ${profile.careerGoals || "(작성 안 함)"}
-소개: ${profile.narrative}
+${ctx.profile.projects.map((p) => `- ${p.name} (${p.role}) — ${p.summary}`).join("\n")}
+비개발 직군 전이 강점: ${(ctx.profile.transferableStrengths ?? []).join(", ") || "(없음)"}
+지원 의도/방향(본인 작성): ${ctx.profile.careerGoals || "(작성 안 함)"}
+소개: ${ctx.profile.narrative}
 
 ${
-  applicantFilled
-    ? `[지원 정보 (사용자가 설정에서 직접 입력, 추론 아님 — essayAnswers에 구체적으로 녹여 써도 됨)]
-${summarizeApplicantProfileForPrompt(applicantProfile)}
+  ctx.applicantFilled
+    ? `[지원 정보 (사용자가 설정에서 직접 입력, 추론 아님 — 답변에 구체적으로 녹여 써도 됨)]
+${summarizeApplicantProfileForPrompt(ctx.applicantProfile)}
 
 `
     : ""
 }[지원 공고]
-회사: ${job.company}
-제목: ${job.title}
-채용유형: ${job.positionType} (${job.experienceYears})
-모집직무: ${job.positions.join(", ")}
-업무요약: ${job.jdSummary}
-자격요건: ${job.qualifications.join(", ")}
+회사: ${ctx.job.company}
+제목: ${ctx.job.title}
+채용유형: ${ctx.job.positionType} (${ctx.job.experienceYears})
+모집직무: ${ctx.job.positions.join(", ")}
+업무요약: ${ctx.job.jdSummary}
+자격요건: ${ctx.job.qualifications.join(", ")}
 
 [회사 리서치 참고자료 (있는 경우만, 없으면 무시)]
-${sectionText || "(아직 리서치되지 않음)"}
+${ctx.sectionText || "(아직 리서치되지 않음)"}
+${
+  ctx.essayBankText
+    ? `
+[과거 자소서 참고자료 — 문체와 자주 쓰는 소재 참고용. 그대로 베끼지 말고 이번 공고에 맞게 재구성해]
+${ctx.essayBankText}
+`
+    : ""
+}`;
+}
+
+// 이력서 PDF 자체를 다시 읽지 않고 이미 추출된 Profile(구조화된 정보)만 사용한다 —
+// lib/profile.ts의 extractProfile()과 달리 원본 PDF 접근 권한이 필요 없고 비용도 훨씬 싸다.
+export async function generateApplicationDraft(seq: string): Promise<ApplicationDraft | null> {
+  const ctx = await buildDraftContext(seq);
+  if (!ctx) return null;
+
+  const commonQuestionsSchema = COMMON_ESSAY_QUESTIONS.map((q) => `    {"question": "${q}", "answer": "..."}`).join(",\n");
+
+  const prompt = `당신은 지원자의 채용 지원서 작성을 돕는 도우미입니다. 아래 정보를 바탕으로 (1) 여러 지원폼에서 반복되는 개인정보 필드 값과 (2) 자소서에서 가장 흔히 묻는 공통 문항들의 답변 초안을 작성해주세요. 실제 공고의 문항 문구는 이것과 다를 수 있지만, 대부분 이 주제들 중 하나로 수렴하니 미리 준비해두는 용도입니다. 이건 초안일 뿐이며 지원자가 반드시 직접 검토·수정 후 사용한다는 전제로, 성실하고 구체적으로 작성해.
+
+${backgroundPromptBlock(ctx)}
 
 아래 JSON 형식으로만 응답해. 마크다운이나 설명 없이 순수 JSON만.
 {${
-    applicantFilled
+    ctx.applicantFilled
       ? ""
       : `
   "personalFields": [
@@ -303,16 +345,18 @@ ${sectionText || "(아직 리서치되지 않음)"}
   ],`
   }
   "essayAnswers": [
-    {"question": "지원동기", "answer": "3-5문장, 회사 리서치 내용을 반영해 구체적으로"},
-    {"question": "성장과정/강점", "answer": "..."},
-    {"question": "입사 후 포부", "answer": "..."}
+${commonQuestionsSchema},
+    {"question": "${COMBINED_ESSAY_LABEL}", "answer": "지원동기·장단점·특기사항·입사 후 계획을 한 편의 자연스러운 글로 엮어서, 1000자 이상"}
   ],
-  "notesForUser": ["초안이니 반드시 직접 검토 후 사용하라는 안내"${
-    applicantFilled ? "" : ', "프로필에서 확인 안 되는 정보는 직접 채워야 한다는 안내"'
+  "notesForUser": ["초안이니 반드시 직접 검토 후 사용하라는 안내", "실제 공고 문항이 위와 다르면 '지원 도우미' 탭에서 문항을 직접 붙여넣어 맞춤 초안을 새로 받으라는 안내"${
+    ctx.applicantFilled ? "" : ', "프로필에서 확인 안 되는 정보는 직접 채워야 한다는 안내"'
   }]
 }
 
-주의: 프로필에 실제로 없는 정보(생년월일, 주소, 전화번호 등)는 지어내지 말고 값에 "(직접 입력 필요)"라고 써. 주민등록번호/계좌번호/비밀번호 등 민감정보는 personalFields에 절대 포함하지 마.`;
+주의:
+- 각 essayAnswers 항목은 최소 300자 이상, 구체적 사실(회사 리서치·경력·프로젝트 내용)을 실제로 인용해서 작성해. 뭉뚱그린 일반론 금지.
+- 여러 문항에서 같은 에피소드를 반복해서 쓰지 말고, 문항 성격에 맞는 다른 경험을 배분해서 써.
+- 프로필에 실제로 없는 정보(생년월일, 주소, 전화번호 등)는 지어내지 말고 값에 "(직접 입력 필요)"라고 써. 주민등록번호/계좌번호/비밀번호 등 민감정보는 personalFields에 절대 포함하지 마.`;
 
   let resultText = "";
   try {
@@ -332,12 +376,75 @@ ${sectionText || "(아직 리서치되지 않음)"}
 
   // 지원 정보가 채워져 있으면 AI가 추측한 personalFields 대신 사용자가 직접 적은 정확한
   // 값으로 통째로 교체한다 — 이름 철자, 학교명, 재직기간 같은 건 AI가 다시 요약할 이유가 없다.
-  if (applicantFilled) {
-    draft.personalFields = buildPersonalFieldsFromApplicantProfile(applicantProfile);
+  if (ctx.applicantFilled) {
+    draft.personalFields = buildPersonalFieldsFromApplicantProfile(ctx.applicantProfile);
   }
 
   saveApplicationDraft(seq, JSON.stringify(draft), DRAFT_MODEL);
   return draft;
+}
+
+// 실제 폼/첨부양식의 정확한 문항 문구를 사용자가 붙여넣었을 때, 그 문항 하나에 맞춘 답변만
+// 새로 생성한다. 공통 문항 세트(generateApplicationDraft)와 같은 배경 정보를 쓰되 훨씬
+// 저렴한 단발 호출 — 공고당 문항이 몇 개 안 되니 매번 전체 초안을 다시 만들 필요는 없다.
+export async function generateCustomEssayAnswer(
+  seq: string,
+  question: string
+): Promise<EssayAnswer | null> {
+  const ctx = await buildDraftContext(seq);
+  if (!ctx) return null;
+
+  const prompt = `당신은 지원자의 채용 지원서 작성을 돕는 도우미입니다. 아래 배경 정보를 바탕으로, 실제 지원폼에 있는 아래 문항에 대한 답변 초안을 작성해줘. 지원자가 반드시 직접 검토·수정 후 사용한다는 전제로, 성실하고 구체적으로(최소 300자, 구체적 사실을 인용해서) 작성해.
+
+${backgroundPromptBlock(ctx)}
+
+[답변해야 할 문항 — 실제 지원폼에 적힌 문구 그대로]
+"${question}"
+
+문항 텍스트만 보고 판단해서(글자수 제한이 명시돼 있으면 그에 맞춰서, "자유롭게 기술" 같은 통합형이면 여러 주제를 자연스럽게 엮어서) 답변 텍스트만 작성해. JSON이나 설명 없이 답변 본문만 출력해.`;
+
+  let resultText = "";
+  try {
+    for await (const message of query({
+      prompt,
+      options: { model: DRAFT_MODEL, maxTurns: 1, allowedTools: [] },
+    })) {
+      if ("result" in message) resultText = message.result;
+    }
+  } catch (e) {
+    console.error("[application-draft] 맞춤 문항 답변 생성 실패:", e);
+    return null;
+  }
+
+  const answer = resultText.trim();
+  if (!answer) return null;
+
+  // 이 문항도 기존 초안(있으면)에 이어붙여서 저장 — 다음에 지원 도우미 탭을 열어도 그대로
+  // 보임. 아직 공통 문항 초안을 만든 적이 없어도(existing이 없어도) 이 답변만으로 새 초안을
+  // 만들어 저장한다 — 커스텀 문항만 물어보고 끝내는 흐름에서도 유실되지 않게.
+  const existing = getCachedApplicationDraft(seq);
+  const newAnswer: EssayAnswer = { question, answer };
+  const nextDraft: ApplicationDraft = existing
+    ? {
+        ...existing,
+        essayAnswers: [
+          ...existing.essayAnswers.filter((a) => a.question !== question),
+          newAnswer,
+        ],
+      }
+    : {
+        seq,
+        personalFields: ctx.applicantFilled
+          ? buildPersonalFieldsFromApplicantProfile(ctx.applicantProfile)
+          : [],
+        essayAnswers: [newAnswer],
+        notesForUser: [],
+        model: DRAFT_MODEL,
+        generatedAt: Date.now(),
+      };
+  saveApplicationDraft(seq, JSON.stringify(nextDraft), DRAFT_MODEL);
+
+  return newAnswer;
 }
 
 export function getCachedApplicationDraft(seq: string): ApplicationDraft | null {

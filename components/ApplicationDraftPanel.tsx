@@ -32,6 +32,29 @@ interface SubmissionMethodInfo {
   consentAttachments: Attachment[];
 }
 
+function SaveToBankButton({ company, question, answer }: { company: string; question: string; answer: string }) {
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  return (
+    <button
+      onClick={() => {
+        setState("saving");
+        fetch("/api/essay-bank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company, question, answer }),
+        })
+          .then(() => setState("saved"))
+          .catch(() => setState("idle"));
+      }}
+      disabled={state !== "idle" || !answer.trim()}
+      className="text-xs text-gray-400 hover:text-gray-600 shrink-0 disabled:opacity-40"
+      title="확정한 답변을 다음 자소서 작성 시 참고자료로 저장"
+    >
+      {state === "saved" ? "저장됨" : state === "saving" ? "저장 중..." : "자료로 저장"}
+    </button>
+  );
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -52,13 +75,21 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export default function ApplicationDraftPanel({ seq }: { seq: string }) {
+export default function ApplicationDraftPanel({
+  seq,
+  companyName,
+}: {
+  seq: string;
+  companyName: string;
+}) {
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
   const [submissionMethod, setSubmissionMethod] = useState<SubmissionMethodInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [customQuestion, setCustomQuestion] = useState("");
+  const [askingCustom, setAskingCustom] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -141,6 +172,47 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
     );
   };
 
+  const askCustomQuestion = useCallback(async () => {
+    const question = customQuestion.trim();
+    if (!question) return;
+    setAskingCustom(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/applications/${seq}/draft/question`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "답변 생성에 실패했습니다.");
+        return;
+      }
+      setDraft((prev) =>
+        prev
+          ? {
+              ...prev,
+              essayAnswers: [
+                ...prev.essayAnswers.filter((a) => a.question !== question),
+                data.answer,
+              ],
+            }
+          : {
+              seq,
+              personalFields: [],
+              essayAnswers: [data.answer],
+              notesForUser: [],
+              generatedAt: Date.now(),
+            }
+      );
+      setCustomQuestion("");
+    } catch {
+      setError("답변 생성 중 오류가 발생했습니다.");
+    } finally {
+      setAskingCustom(false);
+    }
+  }, [seq, customQuestion]);
+
   if (loading) {
     return <div className="text-sm text-gray-400 py-8 text-center">불러오는 중...</div>;
   }
@@ -211,7 +283,8 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
       <div className="flex items-start justify-between mb-4 gap-3">
         <p className="text-xs text-gray-400">
           이력서 프로필 + 공고 + 회사 리서치를 바탕으로 AI가 작성한 초안입니다. 반드시 직접
-          검토·수정한 뒤 사용하세요. 제출은 항상 직접 해야 합니다.
+          검토·수정한 뒤 사용하세요. 제출은 항상 직접 해야 합니다. (프로젝트 루트의
+          cover-letters/ 폴더에 과거 자소서 PDF를 넣어두면 문체·소재를 참고합니다.)
         </p>
         <button
           onClick={generate}
@@ -263,25 +336,70 @@ export default function ApplicationDraftPanel({ seq }: { seq: string }) {
 
           {draft.essayAnswers.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">자기소개 답변 초안</h4>
-              <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                자기소개 답변 초안 ({draft.essayAnswers.length}개)
+              </h4>
+              <div className="space-y-2">
                 {draft.essayAnswers.map((a, i) => (
-                  <div key={i} className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold text-gray-600">{a.question}</span>
-                      <CopyButton text={a.answer} />
+                  <details
+                    key={i}
+                    className="bg-gray-50 rounded-lg border border-gray-100"
+                    open={i === 0}
+                  >
+                    <summary className="flex items-center justify-between px-3 py-2 cursor-pointer list-none">
+                      <span className="text-xs font-semibold text-gray-600 truncate">
+                        {a.question}
+                      </span>
+                      <span className="text-xs text-gray-400 shrink-0 ml-2">
+                        {a.answer.length}자
+                      </span>
+                    </summary>
+                    <div className="px-3 pb-3">
+                      <textarea
+                        value={a.answer}
+                        onChange={(e) => updateEssayAnswer(i, e.target.value)}
+                        rows={8}
+                        className="w-full text-sm border border-gray-200 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                      <div className="flex items-center gap-3 mt-1.5">
+                        <CopyButton text={a.answer} />
+                        <SaveToBankButton
+                          company={companyName}
+                          question={a.question}
+                          answer={a.answer}
+                        />
+                      </div>
                     </div>
-                    <textarea
-                      value={a.answer}
-                      onChange={(e) => updateEssayAnswer(i, e.target.value)}
-                      rows={4}
-                      className="w-full text-sm border border-gray-200 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
-                  </div>
+                  </details>
                 ))}
               </div>
             </div>
           )}
+
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <h4 className="text-xs font-semibold text-gray-600 mb-1.5">
+              실제 폼의 정확한 문항으로 맞춤 초안 받기
+            </h4>
+            <p className="text-xs text-gray-400 mb-2">
+              공고마다 문항 문구가 다르니, 실제 지원폼이나 첨부 양식에 적힌 문항을 그대로
+              붙여넣으면 그 문항에 맞춘 답변을 새로 만들어줍니다.
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={customQuestion}
+                onChange={(e) => setCustomQuestion(e.target.value)}
+                placeholder="예: 지원동기, 성격(장단점), 특기사항, 희망업무, 입사 후 계획 등을 자유롭게 기술"
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+              <button
+                onClick={askCustomQuestion}
+                disabled={askingCustom || !customQuestion.trim()}
+                className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+              >
+                {askingCustom ? "작성 중..." : "초안 받기"}
+              </button>
+            </div>
+          </div>
 
           <button
             onClick={save}
