@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import ApplicantProfileForm from "@/components/ApplicantProfileForm";
+import Toast, { useToast } from "@/components/Toast";
 
 export default function SettingsPage() {
   const [careerGoals, setCareerGoals] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const { message: toastMessage, showToast } = useToast();
 
   useEffect(() => {
     fetch("/api/profile/overrides")
@@ -23,19 +24,22 @@ export default function SettingsPage() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      await fetch("/api/profile/overrides", {
+      const res = await fetch("/api/profile/overrides", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ careerGoals }),
       });
-      setSavedAt(Date.now());
+      showToast(res.ok ? "저장되었습니다" : "저장에 실패했습니다");
+    } catch {
+      showToast("저장에 실패했습니다");
     } finally {
       setSaving(false);
     }
-  }, [careerGoals]);
+  }, [careerGoals, showToast]);
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
+      <Toast message={toastMessage} />
       <Link
         href="/"
         className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
@@ -72,9 +76,6 @@ export default function SettingsPage() {
           >
             {saving ? "저장 중..." : "저장"}
           </button>
-          {savedAt && !saving && (
-            <span className="text-xs text-emerald-600">저장됨</span>
-          )}
         </div>
       </div>
 
@@ -82,7 +83,7 @@ export default function SettingsPage() {
       <p className="text-gray-500 mb-4">
         실제 지원폼(인적사항/학력/경력 등)에 반복적으로 들어가는 값을 미리 채워두세요.
       </p>
-      <ApplicantProfileForm />
+      <ApplicantProfileForm showToast={showToast} />
     </div>
   );
 }

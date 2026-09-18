@@ -122,6 +122,52 @@ function Grid({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">{children}</div>;
 }
 
+function ListEditorRow<T>({
+  item,
+  index,
+  addLabel,
+  summarize,
+  renderItem,
+  onUpdate,
+  onDelete,
+}: {
+  item: T;
+  index: number;
+  addLabel: string;
+  summarize: (item: T) => string;
+  renderItem: (item: T, update: (patch: Partial<T>) => void) => ReactNode;
+  onUpdate: (patch: Partial<T>) => void;
+  onDelete: () => void;
+}) {
+  // Initialized once from the item's initial state, then only ever changed by
+  // the user toggling <summary> (via onToggle) — never re-derived from
+  // summarize(item) on re-render, or typing into the row would force it
+  // closed/open out from under the user.
+  const [open, setOpen] = useState(() => !summarize(item));
+
+  return (
+    <details
+      className="border border-gray-200 rounded-lg group"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="flex items-center justify-between px-3 py-2 cursor-pointer text-sm text-gray-700 list-none">
+        <span className="truncate">{summarize(item) || `${addLabel} ${index + 1}`}</span>
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            onDelete();
+          }}
+          className="text-xs text-red-400 hover:text-red-600 shrink-0 ml-2"
+        >
+          삭제
+        </button>
+      </summary>
+      <div className="p-3 pt-1 grid grid-cols-2 sm:grid-cols-3 gap-3">{renderItem(item, onUpdate)}</div>
+    </details>
+  );
+}
+
 function ListEditor<T>({
   items,
   onChange,
@@ -140,27 +186,20 @@ function ListEditor<T>({
   return (
     <div className="space-y-3">
       {items.map((item, i) => (
-        <details key={i} className="border border-gray-200 rounded-lg group" open={!summarize(item)}>
-          <summary className="flex items-center justify-between px-3 py-2 cursor-pointer text-sm text-gray-700 list-none">
-            <span className="truncate">{summarize(item) || `${addLabel} ${i + 1}`}</span>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                onChange(items.filter((_, idx) => idx !== i));
-              }}
-              className="text-xs text-red-400 hover:text-red-600 shrink-0 ml-2"
-            >
-              삭제
-            </button>
-          </summary>
-          <div className="p-3 pt-1 grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {renderItem(item, (patch) => {
-              const next = [...items];
-              next[i] = { ...next[i], ...patch };
-              onChange(next);
-            })}
-          </div>
-        </details>
+        <ListEditorRow
+          key={i}
+          item={item}
+          index={i}
+          addLabel={addLabel}
+          summarize={summarize}
+          renderItem={renderItem}
+          onUpdate={(patch) => {
+            const next = [...items];
+            next[i] = { ...next[i], ...patch };
+            onChange(next);
+          }}
+          onDelete={() => onChange(items.filter((_, idx) => idx !== i))}
+        />
       ))}
       <button
         onClick={() => onChange([...items, newItem()])}
@@ -261,11 +300,14 @@ const emptyProject = (): ApplicantProjectEntry => ({
   role: "",
 });
 
-export default function ApplicantProfileForm() {
+export default function ApplicantProfileForm({
+  showToast,
+}: {
+  showToast: (message: string) => void;
+}) {
   const [profile, setProfile] = useState<ApplicantProfile>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/profile/applicant")
@@ -284,16 +326,18 @@ export default function ApplicantProfileForm() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      await fetch("/api/profile/applicant", {
+      const res = await fetch("/api/profile/applicant", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
       });
-      setSavedAt(Date.now());
+      showToast(res.ok ? "저장되었습니다" : "저장에 실패했습니다");
+    } catch {
+      showToast("저장에 실패했습니다");
     } finally {
       setSaving(false);
     }
-  }, [profile]);
+  }, [profile, showToast]);
 
   const onPhotoSelected = useCallback(
     (file: File | undefined) => {
@@ -325,7 +369,6 @@ export default function ApplicantProfileForm() {
           {saving ? "저장 중..." : "저장"}
         </button>
       </div>
-      {savedAt && !saving && <p className="text-xs text-emerald-600">저장됨</p>}
 
       <Section title="기본정보">
         <Grid>
