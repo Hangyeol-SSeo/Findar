@@ -15,6 +15,11 @@ import {
 } from "./applicant-profile";
 import { ensureEssayBank, summarizeEssayBankForPrompt } from "./essay-bank";
 import { COMMON_ESSAY_QUESTIONS, COMBINED_ESSAY_LABEL } from "./essay-questions";
+import {
+  readNarrativeProfile,
+  isNarrativeProfileFilled,
+  summarizeNarrativeForPrompt,
+} from "./narrative-profile";
 
 // 자소서는 실제 제출되는 글이라 품질이 중요해서, 회사 리서치와 같은 이유로 Haiku 대신
 // Sonnet을 쓴다(비용보다 "이 회사를 잘 모른다"는 인상을 안 주는 게 우선).
@@ -251,6 +256,7 @@ interface DraftContext {
   applicantFilled: boolean;
   sectionText: string;
   essayBankText: string;
+  narrativeText: string;
 }
 
 // generateApplicationDraft와 generateCustomEssayAnswer가 똑같은 배경 정보(이력서/지원정보/
@@ -277,7 +283,14 @@ async function buildDraftContext(seq: string): Promise<DraftContext | null> {
   const essayBank = await ensureEssayBank();
   const essayBankText = summarizeEssayBankForPrompt(essayBank);
 
-  return { job, profile, applicantProfile, applicantFilled, sectionText, essayBankText };
+  // 순수 파일 읽기라 essayBankText(조건부 AI 재추출)보다도 저렴 — await 불필요.
+  const narrativeProfile = readNarrativeProfile();
+  const jobKeywords = [job.company, job.positionType, job.jdSummary, ...job.positions, ...job.categories];
+  const narrativeText = isNarrativeProfileFilled(narrativeProfile)
+    ? summarizeNarrativeForPrompt(narrativeProfile, jobKeywords)
+    : "";
+
+  return { job, profile, applicantProfile, applicantFilled, sectionText, essayBankText, narrativeText };
 }
 
 function backgroundPromptBlock(ctx: DraftContext): string {
@@ -293,6 +306,14 @@ ${ctx.profile.projects.map((p) => `- ${p.name} (${p.role}) — ${p.summary}`).jo
 소개: ${ctx.profile.narrative}
 
 ${
+  ctx.narrativeText
+    ? `[가치관과 동기 — 사용자가 직접 쓴 진짜 생각. 지원동기/성장과정/입사 후 포부는 반드시
+이 내용을 실제 근거로 삼아서 써]
+${ctx.narrativeText}
+
+`
+    : ""
+}${
   ctx.applicantFilled
     ? `[지원 정보 (사용자가 설정에서 직접 입력, 추론 아님 — 답변에 구체적으로 녹여 써도 됨)]
 ${summarizeApplicantProfileForPrompt(ctx.applicantProfile)}
@@ -356,7 +377,8 @@ ${commonQuestionsSchema},
 주의:
 - 각 essayAnswers 항목은 최소 300자 이상, 구체적 사실(회사 리서치·경력·프로젝트 내용)을 실제로 인용해서 작성해. 뭉뚱그린 일반론 금지.
 - 여러 문항에서 같은 에피소드를 반복해서 쓰지 말고, 문항 성격에 맞는 다른 경험을 배분해서 써.
-- 프로필에 실제로 없는 정보(생년월일, 주소, 전화번호 등)는 지어내지 말고 값에 "(직접 입력 필요)"라고 써. 주민등록번호/계좌번호/비밀번호 등 민감정보는 personalFields에 절대 포함하지 마.`;
+- 프로필에 실제로 없는 정보(생년월일, 주소, 전화번호 등)는 지어내지 말고 값에 "(직접 입력 필요)"라고 써. 주민등록번호/계좌번호/비밀번호 등 민감정보는 personalFields에 절대 포함하지 마.
+- 지원 직무/산업이 이력서상 경력·전공과 거리가 있다면, 스킬을 억지로 끼워맞추지 말고 [가치관과 동기] 자료에 있는 진짜 이유로 "왜 이 회사/직무인가"를 자연스럽게 설명해.`;
 
   let resultText = "";
   try {
@@ -401,7 +423,7 @@ ${backgroundPromptBlock(ctx)}
 [답변해야 할 문항 — 실제 지원폼에 적힌 문구 그대로]
 "${question}"
 
-문항 텍스트만 보고 판단해서(글자수 제한이 명시돼 있으면 그에 맞춰서, "자유롭게 기술" 같은 통합형이면 여러 주제를 자연스럽게 엮어서) 답변 텍스트만 작성해. JSON이나 설명 없이 답변 본문만 출력해.`;
+문항 텍스트만 보고 판단해서(글자수 제한이 명시돼 있으면 그에 맞춰서, "자유롭게 기술" 같은 통합형이면 여러 주제를 자연스럽게 엮어서) 답변 텍스트만 작성해. 지원 직무/산업이 이력서상 경력·전공과 거리가 있다면, 스킬을 억지로 끼워맞추지 말고 [가치관과 동기] 자료에 있는 진짜 이유로 자연스럽게 연결해. JSON이나 설명 없이 답변 본문만 출력해.`;
 
   let resultText = "";
   try {

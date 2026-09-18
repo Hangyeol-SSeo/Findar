@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import ApplicantProfileForm from "@/components/ApplicantProfileForm";
+import NarrativeProfileForm from "@/components/NarrativeProfileForm";
 import Toast, { useToast } from "@/components/Toast";
 
 export default function SettingsPage() {
@@ -84,6 +85,13 @@ export default function SettingsPage() {
         실제 지원폼(인적사항/학력/경력 등)에 반복적으로 들어가는 값을 미리 채워두세요.
       </p>
       <ApplicantProfileForm showToast={showToast} />
+
+      <h2 className="text-lg font-bold tracking-tight mb-1 mt-8">가치관과 서사</h2>
+      <p className="text-gray-500 mb-4">
+        자소서·면접 답변이 이력과 거리가 있는 직무에서도 스킬을 억지로 갖다붙이지 않고, 진짜
+        동기로 자연스럽게 연결되도록 쓰이는 참고 자료입니다.
+      </p>
+      <NarrativeProfileForm showToast={showToast} />
     </div>
   );
 }
