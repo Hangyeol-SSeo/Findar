@@ -1,48 +1,34 @@
-import { generateApplicationDraft, getCachedApplicationDraft } from "@/lib/application-draft";
+import { isSameOrigin } from "@/lib/request-origin";
+import { getCachedApplicationDraft } from "@/lib/application-draft";
 import { saveApplicationDraft, getJobBySeq } from "@/lib/db";
 import { detectSubmissionMethod } from "@/lib/application-method";
 
-// 캐시된 초안 + 제출방식 추정을 함께 반환 — 둘 다 AI 호출 없음, 패널을 열 때마다 불러도
-// 비용 걱정 없음(제출방식은 DB에 저장하지 않고 매번 순수 계산 — 크롤러가 attachments를
-// 갱신하면 자동으로 최신 상태가 반영됨).
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ seq: string }> }
-) {
+export async function GET(_request: Request, { params }: { params: Promise<{ seq: string }> }) {
   const { seq } = await params;
   const job = getJobBySeq(seq);
-  const submissionMethod = job
-    ? detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl)
-    : null;
-  return Response.json({ draft: getCachedApplicationDraft(seq), submissionMethod });
+  if (!job) return Response.json({ error: "공고를 찾을 수 없습니다." }, { status: 404 });
+  return Response.json({ draft: getCachedApplicationDraft(seq), siteUrl: job.siteUrl,
+    submissionMethod: detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl) });
 }
 
-// 새로 생성(또는 재생성). 버튼을 눌렀을 때만 호출되는 명시적 트리거.
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ seq: string }> }
-) {
-  const { seq } = await params;
-  const draft = await generateApplicationDraft(seq);
-  if (!draft) {
-    return Response.json(
-      { error: "이력서 프로필 또는 공고 정보를 찾을 수 없습니다." },
-      { status: 400 }
-    );
-  }
-  return Response.json({ draft });
+export async function POST() {
+  return Response.json({ error: "실제 지원서 문항을 입력한 뒤 문항별 작성을 이용해주세요." }, { status: 400 });
 }
 
-// 사용자가 검토 중 직접 고친 내용을 저장. AI를 다시 부르지 않는다.
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ seq: string }> }
-) {
+export async function PUT(request: Request, { params }: { params: Promise<{ seq: string }> }) {
+  if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
   const { seq } = await params;
-  const body = await request.json();
-  if (!body || typeof body !== "object") {
-    return Response.json({ error: "Invalid request" }, { status: 400 });
-  }
-  saveApplicationDraft(seq, JSON.stringify({ ...body, seq }), body.model || "user-edited");
-  return Response.json({ ok: true });
+  try {
+    const body = await request.json();
+    const current = getCachedApplicationDraft(seq);
+    if (!current) return Response.json({ error: "저장된 답변이 없습니다." }, { status: 404 });
+    if ((body.revision ?? null) !== (current.revision ?? null))
+      return Response.json({ error: "다른 창에서 답변이 바뀌었습니다. 현재 내용을 별도로 보관한 뒤 다시 열어주세요." }, { status: 409 });
+    if (!Array.isArray(body.essayAnswers) || body.essayAnswers.length !== current.essayAnswers.length ||
+      body.essayAnswers.some((a: { question?: unknown; answer?: unknown }, i: number) => !a || a.question !== current.essayAnswers[i].question || typeof a.answer !== "string" || a.answer.length > 30000))
+      return Response.json({ error: "저장할 답변이 올바르지 않습니다." }, { status: 400 });
+    const draft = { ...current, revision: crypto.randomUUID(), essayAnswers: current.essayAnswers.map((a, i) => ({ ...a, answer: body.essayAnswers[i].answer })) };
+    saveApplicationDraft(seq, JSON.stringify(draft), current.model);
+    return Response.json({ draft });
+  } catch { return Response.json({ error: "저장 요청을 읽지 못했습니다." }, { status: 400 }); }
 }

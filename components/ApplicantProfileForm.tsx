@@ -17,6 +17,10 @@ import type {
 const EMPTY: ApplicantProfile = {
   name: "",
   nameEn: "",
+  nameHanja: "",
+  religion: "",
+  hobbies: "",
+  specialties: "",
   gender: "",
   birthDate: "",
   photoDataUrl: "",
@@ -68,6 +72,7 @@ function Field({
     <div className={className}>
       <label className="text-xs text-gray-400 block mb-1">{label}</label>
       <input
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -313,7 +318,7 @@ export default function ApplicantProfileForm({
     fetch("/api/profile/applicant")
       .then((r) => r.json())
       .then(({ profile }: { profile: ApplicantProfile }) => {
-        if (profile) setProfile(profile);
+        if (profile) setProfile({ ...EMPTY, ...profile });
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -373,6 +378,7 @@ export default function ApplicantProfileForm({
       <Section title="기본정보">
         <Grid>
           <Field label="이름" value={profile.name} onChange={(v) => patch({ name: v })} />
+          <Field label="한자 이름" value={profile.nameHanja} onChange={(v) => patch({ nameHanja: v })} placeholder="한자 성명" />
           <Field
             label="영문이름"
             value={profile.nameEn}
@@ -392,6 +398,7 @@ export default function ApplicantProfileForm({
             placeholder="YYYY-MM-DD"
           />
           <Field label="국적" value={profile.nationality} onChange={(v) => patch({ nationality: v })} />
+          <Field label="종교" value={profile.religion} onChange={(v) => patch({ religion: v })} placeholder="직접 입력 (선택)" />
         </Grid>
 
         <div className="mt-3">
@@ -422,7 +429,10 @@ export default function ApplicantProfileForm({
           </div>
         </div>
 
-        <div className="mt-3">
+      </Section>
+
+      <Section title="주소 / 연락처">
+        <div>
           <Grid>
             <Field
               label="우편번호"
@@ -854,6 +864,13 @@ export default function ApplicantProfileForm({
             </>
           )}
         />
+      </Section>
+
+      <Section title="취미 / 특기">
+        <Grid>
+          <Field label="취미" value={profile.hobbies} onChange={(v) => patch({ hobbies: v })} placeholder="평소 즐기는 활동" />
+          <Field label="특기" value={profile.specialties} onChange={(v) => patch({ specialties: v })} placeholder="자신 있는 활동이나 능력" />
+        </Grid>
       </Section>
 
       <Section title="기타">

@@ -103,6 +103,10 @@ export interface ApplicantProjectEntry {
 export interface ApplicantProfile {
   name: string;
   nameEn: string;
+  nameHanja: string;
+  religion: string;
+  hobbies: string;
+  specialties: string;
   gender: string; // 남/여
   birthDate: string; // YYYY-MM-DD
   photoDataUrl: string; // data:image/...;base64,... — 빈 문자열이면 미등록
@@ -141,6 +145,10 @@ export function emptyApplicantProfile(): ApplicantProfile {
   return {
     name: "",
     nameEn: "",
+    nameHanja: "",
+    religion: "",
+    hobbies: "",
+    specialties: "",
     gender: "",
     birthDate: "",
     photoDataUrl: "",

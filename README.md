@@ -34,3 +34,24 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## 지원 도우미
+
+**문항별 자기소개서**에 실제 지원서 문항과 글자 수 제한을 입력합니다. 저장된 경험과 과거 답변의 원문에서 근거를 고른 뒤 작성하고, 별도 편집 검토를 거칩니다. 학교·프로젝트·창업 팀명은 본문에서 제외하고 창업은 직무와 관련된 판단·행동의 경험으로만 다룹니다. 원문 근거, 수치, 글자 수를 검증하며 핵심 경험이 부족하면 보완 질문을 표시합니다. 답변은 직접 수정·저장할 수 있고, 검토한 답변만 참고 자료로 저장합니다. 이전 방식의 공통 답변은 별도 보관됩니다.
+
+**지원서 자동 입력**은 다음 두 경로를 제공합니다.
+
+- Word: 회사 DOCX 양식을 올리면 비어 있는 표 입력칸에 저장 정보를 넣은 작성본을 내려받습니다. 기존 값과 문서의 나머지 ZIP 항목을 보존합니다. DOC/HWP는 DOCX로 변환해야 하며 본문 빈줄, 텍스트 상자, 중첩 표, 체크박스, 서명은 지원하지 않습니다. Python 3가 필요하며 실행 경로는 `FINDAR_PYTHON`으로 지정할 수 있습니다.
+- Brave/Chrome: 패널에서 확장 기능 ZIP을 내려받아 압축 해제하고 브라우저의 확장 프로그램 관리 → 개발자 모드 → 압축해제된 확장 프로그램 로드로 설치합니다. Findar 새로고침 → 웹 지원서 연결 → 실제 지원서에서 확장 기능의 현재 양식 채우기를 실행합니다. 설치 상세는 [브라우저 확장 기능 안내](browser-extension/README.md)를 참고하세요.
+
+브라우저 입력은 AI가 입력칸과 저장 필드의 ID를 연결하고 코드가 저장된 원문 값을 입력합니다. 모델이 만든 개인정보는 사용하지 않습니다. 기존 입력값, 동의, 인증, 서명, 파일 첨부와 제출은 자동 처리하지 않습니다. 연결은 같은 컴퓨터의 localhost/127.0.0.1 서버에서 사용하며 20분 후 만료됩니다. 기본 input/textarea/select를 지원하고 iframe·닫힌 shadow DOM·커스텀 드롭다운은 직접 확인해야 합니다. 사이트가 입력 이벤트를 자동 저장하는 경우에는 입력하면서 저장될 수 있습니다.
+
+검증 명령:
+
+```sh
+node scripts/tests/application-assistant.cjs
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+npx tsc --noEmit
+```
+
+브라우저 회귀 검증은 별도 테스트 프로필과 가상 데이터만 사용합니다. 실행 중인 개발 서버와 테스트용 Playwright 경로를 `FINDAR_TEST_URL`, `FINDAR_PLAYWRIGHT`로, 브라우저 실행 파일을 `FINDAR_BROWSER`로 지정한 뒤 `node scripts/tests/browser-assistant.cjs` 및 `node scripts/tests/browser-extension.cjs`를 실행합니다. 앱의 런타임에는 Playwright를 사용하지 않습니다.

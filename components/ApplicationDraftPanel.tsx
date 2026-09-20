@@ -1,415 +1,170 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
+import type { ApplicationDraft } from "@/lib/application-draft";
+import type { SubmissionMethodInfo } from "@/lib/application-method";
 
-interface PersonalField {
-  label: string;
-  value: string;
-}
+const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
+const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40";
 
-interface EssayAnswer {
-  question: string;
-  answer: string;
-}
-
-interface ApplicationDraft {
-  seq: string;
-  personalFields: PersonalField[];
-  essayAnswers: EssayAnswer[];
-  notesForUser: string[];
-  generatedAt: number;
-}
-
-interface Attachment {
-  name: string;
-  url: string;
-}
-
-interface SubmissionMethodInfo {
-  method: "email_attachment" | "web_form" | "unknown";
-  submissionEmail: string | null;
-  templateAttachments: Attachment[];
-  consentAttachments: Attachment[];
-}
-
-function SaveToBankButton({ company, question, answer }: { company: string; question: string; answer: string }) {
-  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
-  return (
-    <button
-      onClick={() => {
-        setState("saving");
-        fetch("/api/essay-bank", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ company, question, answer }),
-        })
-          .then(() => setState("saved"))
-          .catch(() => setState("idle"));
-      }}
-      disabled={state !== "idle" || !answer.trim()}
-      className="text-xs text-gray-400 hover:text-gray-600 shrink-0 disabled:opacity-40"
-      title="확정한 답변을 다음 자소서 작성 시 참고자료로 저장"
-    >
-      {state === "saved" ? "저장됨" : state === "saving" ? "저장 중..." : "자료로 저장"}
-    </button>
-  );
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        navigator.clipboard
-          ?.writeText(text)
-          .then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          })
-          .catch(() => {});
-      }}
-      className="text-xs text-gray-400 hover:text-gray-600 shrink-0"
-    >
-      {copied ? "복사됨" : "복사"}
-    </button>
-  );
-}
-
-export default function ApplicationDraftPanel({
-  seq,
-  companyName,
-}: {
-  seq: string;
-  companyName: string;
-}) {
+export default function ApplicationDraftPanel({ seq, companyName }: { seq: string; companyName: string }) {
+  const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
-  const [submissionMethod, setSubmissionMethod] = useState<SubmissionMethodInfo | null>(null);
+  const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
+  const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [customQuestion, setCustomQuestion] = useState("");
-  const [askingCustom, setAskingCustom] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [maxChars, setMaxChars] = useState("");
+  const [countSpaces, setCountSpaces] = useState(true);
+  const [guidance, setGuidance] = useState("");
+  const [extension, setExtension] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [documentResult, setDocumentResult] = useState<{ href: string; filename: string; filled: number; skipped: { label: string; reason: string }[]; note: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    setDraft(null);
-    setSubmissionMethod(null);
-    setError("");
-    fetch(`/api/applications/${seq}/draft`)
-      .then((r) => r.json())
-      .then(
-        ({
-          draft,
-          submissionMethod,
-        }: {
-          draft: ApplicationDraft | null;
-          submissionMethod: SubmissionMethodInfo | null;
-        }) => {
-          setDraft(draft);
-          setSubmissionMethod(submissionMethod);
-        }
-      )
-      .catch(() => setError("불러오지 못했습니다."))
-      .finally(() => setLoading(false));
+    const abort = new AbortController();
+    controller.current = abort;
+    fetch(`/api/applications/${seq}/draft`, { signal: abort.signal }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || "");
+    }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    const receive = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      if (event.data?.type === "FINDAR_READY") setExtension(true);
+      if (event.data?.type === "FINDAR_CONNECTED") {
+        setBusy("");
+        if (event.data.error) setError(event.data.error);
+        else setNotice("지원 사이트를 열었습니다. 실제 지원서로 이동한 뒤 확장 기능의 ‘현재 양식 채우기’를 눌러주세요.");
+      }
+    };
+    window.addEventListener("message", receive);
+    window.postMessage({ type: "FINDAR_PING" }, location.origin);
+    return () => { abort.abort(); window.removeEventListener("message", receive); };
   }, [seq]);
 
-  const generate = useCallback(async () => {
-    setGenerating(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/applications/${seq}/draft`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "초안 생성에 실패했습니다.");
-        return;
-      }
-      setDraft(data.draft);
-    } catch {
-      setError("초안 생성 중 오류가 발생했습니다.");
-    } finally {
-      setGenerating(false);
-    }
-  }, [seq]);
-
-  const save = useCallback(async () => {
-    if (!draft) return;
-    setSaving(true);
-    try {
-      await fetch(`/api/applications/${seq}/draft`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
-      });
-    } finally {
-      setSaving(false);
-    }
-  }, [seq, draft]);
-
-  const updatePersonalField = (i: number, value: string) => {
-    setDraft((prev) =>
-      prev
-        ? {
-            ...prev,
-            personalFields: prev.personalFields.map((f, idx) =>
-              idx === i ? { ...f, value } : f
-            ),
-          }
-        : prev
-    );
-  };
-
-  const updateEssayAnswer = (i: number, answer: string) => {
-    setDraft((prev) =>
-      prev
-        ? {
-            ...prev,
-            essayAnswers: prev.essayAnswers.map((a, idx) =>
-              idx === i ? { ...a, answer } : a
-            ),
-          }
-        : prev
-    );
-  };
-
-  const askCustomQuestion = useCallback(async () => {
-    const question = customQuestion.trim();
-    if (!question) return;
-    setAskingCustom(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/applications/${seq}/draft/question`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "답변 생성에 실패했습니다.");
-        return;
-      }
-      setDraft((prev) =>
-        prev
-          ? {
-              ...prev,
-              essayAnswers: [
-                ...prev.essayAnswers.filter((a) => a.question !== question),
-                data.answer,
-              ],
-            }
-          : {
-              seq,
-              personalFields: [],
-              essayAnswers: [data.answer],
-              notesForUser: [],
-              generatedAt: Date.now(),
-            }
-      );
-      setCustomQuestion("");
-    } catch {
-      setError("답변 생성 중 오류가 발생했습니다.");
-    } finally {
-      setAskingCustom(false);
-    }
-  }, [seq, customQuestion]);
-
-  if (loading) {
-    return <div className="text-sm text-gray-400 py-8 text-center">불러오는 중...</div>;
+  async function api(path: string, body: unknown, method = "POST") {
+    const response = await fetch(`/api/applications/${seq}/${path}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.current?.signal });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "요청에 실패했습니다.");
+    return data;
   }
+  async function save() {
+    if (!draft || !dirty) return;
+    const data = await api("draft", draft, "PUT");
+    setDraft(data.draft); setDirty(false);
+  }
+  async function run(label: string, action: () => Promise<void>) {
+    setBusy(label); setError(""); setNotice("");
+    try { await action(); }
+    catch (e) { if (!controller.current?.signal.aborted) setError(e instanceof Error ? e.message : "처리 중 오류가 발생했습니다."); }
+    finally { if (!controller.current?.signal.aborted) setBusy(""); }
+  }
+  async function generate() {
+    await run("writing", async () => {
+      await save();
+      const data = await api("draft/question", { question, ...(maxChars ? { maxChars: Number(maxChars) } : {}), countSpaces, guidance });
+      setDraft(data.draft); setDirty(false);
+      setNotice(data.answer.status === "needs_info" ? "이 문항에 필요한 경험을 더 확인해야 합니다. 아래 보완 질문을 확인해주세요." : "문항별 답변을 작성하고 저장했습니다.");
+    });
+  }
+  function editAnswer(index: number, answer: string) {
+    setDraft((prev) => prev ? { ...prev, essayAnswers: prev.essayAnswers.map((a, i) => i === index ? { ...a, answer } : a) } : prev);
+    setDirty(true);
+  }
+  async function fillDocument() {
+    if (!file) return;
+    await run("document", async () => {
+      const form = new FormData(); form.append("file", file);
+      const response = await fetch(`/api/applications/${seq}/fill/document`, { method: "POST", body: form, signal: controller.current?.signal });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setDocumentResult({ href: data.downloadUrl, filename: data.filename, filled: data.filled, skipped: data.skipped, note: data.note });
+    });
+  }
+  if (loading) return <p className="py-8 text-center text-sm text-gray-400">지원 정보를 불러오는 중...</p>;
+  const currentAnswers = draft?.essayAnswers.map((a, index) => ({ a, index })).filter(({ a }) => a.source === "user_question") ?? [];
+  const legacyAnswers = draft?.essayAnswers.map((a, index) => ({ a, index })).filter(({ a }) => a.source !== "user_question") ?? [];
 
-  return (
-    <div>
-      {submissionMethod && submissionMethod.method !== "unknown" && (
-        <div className="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-800">
-          {submissionMethod.method === "email_attachment" ? (
-            <div>
-              <p className="font-semibold mb-1">📎 첨부 양식 작성 후 이메일 제출로 보입니다</p>
-              {submissionMethod.submissionEmail && (
-                <p>
-                  제출 이메일: <span className="font-mono">{submissionMethod.submissionEmail}</span>
-                </p>
-              )}
-              {submissionMethod.templateAttachments.length > 0 && (
-                <div className="mt-1">
-                  <p>지원서 양식:</p>
-                  <ul className="list-disc list-inside">
-                    {submissionMethod.templateAttachments.map((a, i) => (
-                      <li key={i}>
-                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline">
-                          {a.name}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {submissionMethod.consentAttachments.length > 0 && (
-                <div className="mt-1">
-                  <p>개인정보 동의서(서명 필요):</p>
-                  <ul className="list-disc list-inside">
-                    {submissionMethod.consentAttachments.map((a, i) => (
-                      <li key={i}>
-                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline">
-                          {a.name}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <p className="mt-1 text-blue-600">
-                양식을 다운로드해 아래 초안 내용을 직접 복사·붙여넣기 해주세요.
-              </p>
-            </div>
-          ) : (
-            <div>
-              <p className="font-semibold mb-1">🌐 웹 지원폼으로 보입니다</p>
-              <p className="mb-2">
-                사이트마다 폼 구조가 달라 자동으로 채우는 규칙을 만들기 어려웠습니다. 대신
-                Claude Code 세션에서 아래처럼 요청하면, 실제 사이트를 열어 이 초안을 참고해
-                채워드립니다 (제출은 항상 직접 해야 합니다).
-              </p>
-              <div className="flex items-center gap-2 bg-white rounded-lg px-2.5 py-1.5 border border-blue-200">
-                <code className="text-xs text-gray-700 flex-1">
-                  이 공고 지원 도와줘 (seq={seq})
-                </code>
-                <CopyButton text={`이 공고 지원 도와줘 (seq=${seq})`} />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex items-start justify-between mb-4 gap-3">
-        <p className="text-xs text-gray-400">
-          이력서 프로필 + 공고 + 회사 리서치를 바탕으로 AI가 작성한 초안입니다. 반드시 직접
-          검토·수정한 뒤 사용하세요. 제출은 항상 직접 해야 합니다. (프로젝트 루트의
-          cover-letters/ 폴더에 과거 자소서 PDF를 넣어두면 문체·소재를 참고합니다.)
-        </p>
-        <button
-          onClick={generate}
-          disabled={generating}
-          className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
-        >
-          {generating ? "생성 중..." : draft ? "다시 생성" : "초안 생성"}
-        </button>
-      </div>
-
-      {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
-
-      {!draft && !generating && (
-        <p className="text-sm text-gray-400 py-8 text-center">
-          아직 초안이 없습니다. &quot;초안 생성&quot;을 눌러주세요.
-        </p>
-      )}
-
-      {draft && (
-        <div className="space-y-5">
-          {draft.notesForUser.length > 0 && (
-            <div className="bg-amber-50 border border-amber-100 rounded-lg p-3">
-              <ul className="text-xs text-amber-700 space-y-1">
-                {draft.notesForUser.map((n, i) => (
-                  <li key={i}>· {n}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {draft.personalFields.length > 0 && (
-            <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">개인정보 필드</h4>
-              <div className="space-y-2">
-                {draft.personalFields.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <label className="text-xs text-gray-400 w-24 shrink-0">{f.label}</label>
-                    <input
-                      value={f.value}
-                      onChange={(e) => updatePersonalField(i, e.target.value)}
-                      className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
-                    <CopyButton text={f.value} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {draft.essayAnswers.length > 0 && (
-            <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">
-                자기소개 답변 초안 ({draft.essayAnswers.length}개)
-              </h4>
-              <div className="space-y-2">
-                {draft.essayAnswers.map((a, i) => (
-                  <details
-                    key={i}
-                    className="bg-gray-50 rounded-lg border border-gray-100"
-                    open={i === 0}
-                  >
-                    <summary className="flex items-center justify-between px-3 py-2 cursor-pointer list-none">
-                      <span className="text-xs font-semibold text-gray-600 truncate">
-                        {a.question}
-                      </span>
-                      <span className="text-xs text-gray-400 shrink-0 ml-2">
-                        {a.answer.length}자
-                      </span>
-                    </summary>
-                    <div className="px-3 pb-3">
-                      <textarea
-                        value={a.answer}
-                        onChange={(e) => updateEssayAnswer(i, e.target.value)}
-                        rows={8}
-                        className="w-full text-sm border border-gray-200 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                      />
-                      <div className="flex items-center gap-3 mt-1.5">
-                        <CopyButton text={a.answer} />
-                        <SaveToBankButton
-                          company={companyName}
-                          question={a.question}
-                          answer={a.answer}
-                        />
-                      </div>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <h4 className="text-xs font-semibold text-gray-600 mb-1.5">
-              실제 폼의 정확한 문항으로 맞춤 초안 받기
-            </h4>
-            <p className="text-xs text-gray-400 mb-2">
-              공고마다 문항 문구가 다르니, 실제 지원폼이나 첨부 양식에 적힌 문항을 그대로
-              붙여넣으면 그 문항에 맞춘 답변을 새로 만들어줍니다.
-            </p>
-            <div className="flex gap-2">
-              <input
-                value={customQuestion}
-                onChange={(e) => setCustomQuestion(e.target.value)}
-                placeholder="예: 지원동기, 성격(장단점), 특기사항, 희망업무, 입사 후 계획 등을 자유롭게 기술"
-                className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
-              />
-              <button
-                onClick={askCustomQuestion}
-                disabled={askingCustom || !customQuestion.trim()}
-                className="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors whitespace-nowrap"
-              >
-                {askingCustom ? "작성 중..." : "초안 받기"}
-              </button>
-            </div>
-          </div>
-
-          <button
-            onClick={save}
-            disabled={saving}
-            className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 disabled:opacity-50 transition-colors"
-          >
-            {saving ? "저장 중..." : "수정 내용 저장"}
+  return <div className="space-y-6">
+    <nav aria-label="지원 도우미 작업" className="flex gap-2 rounded-lg bg-gray-100 p-1">
+      {([['essay', '문항별 자기소개서'], ['fill', '지원서 자동 입력']] as const).map(([value, label]) => <button key={value} disabled={!!busy} onClick={() => { setWorkspace(value); setError(""); setNotice(""); }} aria-pressed={workspace === value} className={`flex-1 rounded-md px-3 py-2 text-sm ${workspace === value ? "bg-white font-semibold text-blue-700 shadow-sm" : "text-gray-500"}`}>{label}</button>)}
+    </nav>
+    {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    {notice && <p role="status" className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">{notice}</p>}
+    {workspace === "fill" && <section className="rounded-xl border border-gray-200 p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서에 개인정보 입력</h3><a className="text-xs text-blue-600 underline" href="/settings">저장 정보 수정</a></div>
+      <p className="text-xs leading-5 text-gray-500">설정에 저장한 정보를 실제 양식의 빈칸에 채웁니다. 입력 결과를 확인한 뒤 제출해주세요.</p>
+      {!!method?.templateAttachments.length && <div className="flex flex-wrap gap-2">{method.templateAttachments.map((a) => <a key={a.url} href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">{a.name} 내려받기</a>)}</div>}
+      <div className="rounded-lg bg-gray-50 p-3 space-y-2">
+        <h4 className="text-sm font-medium">Word 양식 작성</h4>
+        <p className="text-xs text-gray-500">DOCX 양식의 표 입력칸을 채우고 원본 형식을 유지한 작성본을 만듭니다. DOC·HWP는 DOCX로 변환해서 올려주세요.</p>
+        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-3 space-y-2">
+          <input ref={fileInputRef} aria-label="Word 지원서 양식" type="file" accept=".docx" disabled={!!busy} onChange={(e) => { setFile(e.target.files?.[0] ?? null); setDocumentResult(null); }} className="hidden" />
+          <button type="button" disabled={!!busy} onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-40">
+            <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7h7l2 2h9v10H3z" /><path d="M3 7V5h7l2 2" /></svg>
+            {file ? "다른 Word 파일 선택" : "Word 파일 선택"}
           </button>
+          <p className="break-all text-xs text-gray-600" aria-live="polite">{file ? file.name : "선택한 파일이 없습니다. DOCX 양식을 선택해주세요."}</p>
         </div>
-      )}
-    </div>
-  );
+        <button className={buttonStyle} disabled={!!busy || !file} onClick={fillDocument}>{busy === "document" ? "양식 작성 중..." : "개인정보 채운 Word 만들기"}</button>
+        {documentResult && <div className="text-xs space-y-2"><a className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700" href={documentResult.href} download={documentResult.filename}>작성본 다운로드</a><p className="break-all">{documentResult.filename} · {documentResult.filled}칸 입력 · 30분 동안 다운로드 가능</p><p className="text-gray-500">{documentResult.note}</p>{documentResult.skipped.length > 0 && <details><summary>직접 확인할 항목 {documentResult.skipped.length}개</summary>{documentResult.skipped.map((s, i) => <p key={i}>{s.label}: {s.reason}</p>)}</details>}</div>}
+      </div>
+      <div className="rounded-lg bg-gray-50 p-3 space-y-2">
+        <h4 className="text-sm font-medium">Brave · Chrome 웹 지원서 입력</h4>
+        <label className="block text-xs text-gray-500">지원 사이트 주소<input aria-label="지원 사이트 주소" type="url" className={`${inputStyle} mt-1`} value={url} onChange={(e) => setUrl(e.target.value)} disabled={!!busy} placeholder="https://..." /></label>
+        {!extension && <details className="text-xs text-gray-600" open><summary className="cursor-pointer font-medium">처음 한 번 브라우저 연결하기</summary><ol className="list-decimal pl-4 space-y-1 mt-2"><li><a className="text-blue-600 underline" href="/api/application-fill/extension">Findar 확장 기능 다운로드</a> 후 압축을 풉니다.</li><li>Brave의 확장 프로그램 관리에서 개발자 모드를 켜고 ‘압축해제된 확장 프로그램을 로드합니다’로 해당 폴더를 선택합니다.</li><li>이 페이지를 새로고침합니다. Chrome도 같은 방식으로 설치합니다.</li></ol></details>}
+        <button className={buttonStyle} disabled={!!busy || !extension || !/^https?:\/\//.test(url)} onClick={() => run("web", async () => {
+          const data = await api("fill/web", {});
+          window.postMessage({ type: "FINDAR_CONNECT", token: data.token, seq, url }, location.origin);
+          setNotice("브라우저 연결 요청을 보냈습니다. 열린 지원서에서 확장 기능을 실행해주세요.");
+        })}>웹 지원서 연결</button>
+        <p className="text-xs text-gray-500">실제 지원서 페이지에서 확장 기능의 ‘현재 양식 채우기’를 실행합니다. 입력된 값과 채우지 못한 항목을 확인할 수 있습니다.</p>
+      </div>
+    </section>}
+
+    {workspace === "essay" && <><section className="space-y-3">
+      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">문항의 의도에 맞는 경험을 고르고, 판단과 행동이 드러나도록 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다.</p></div>
+      <label className="block text-xs font-medium text-gray-700">지원서 문항<textarea className={`${inputStyle} mt-1`} rows={4} value={question} maxLength={8000} disabled={!!busy} onChange={(e) => {
+        setQuestion(e.target.value);
+        if (/공백\s*제외/.test(e.target.value)) setCountSpaces(false);
+      }} placeholder="실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요." /></label>
+      <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label="최대 글자 수" className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={maxChars} onChange={(e) => setMaxChars(e.target.value)} disabled={!!busy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={countSpaces} onChange={(e) => setCountSpaces(e.target.checked)} disabled={!!busy} />공백 포함</label></div>
+      <label className="block text-xs text-gray-600">이번 문항의 추가 경험·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={guidance} onChange={(e) => setGuidance(e.target.value)} disabled={!!busy} placeholder="쓸 경험의 구체적인 사실, 강조할 판단, 빼고 싶은 내용 등을 적어주세요." /></label>
+      <button className={buttonStyle} disabled={!!busy || !question.trim()} onClick={generate}>{busy === "writing" ? "문항 분석 · 작성 · 편집 검토 중..." : "이 문항 답변 작성"}</button>
+      {busy === "writing" && <p className="text-xs text-gray-500" role="status">저장된 경험의 근거를 확인하고 별도 편집 검토를 진행합니다. 잠시 기다려주세요.</p>}
+    </section>
+    {currentAnswers.map(({ a, index }) => {
+      const answer = a as EssayAnswer;
+      const count = characterCount(answer.answer, answer.countSpaces);
+      return <section key={index} className="rounded-xl border border-gray-200 p-4 space-y-3">
+        <h4 className="whitespace-pre-wrap text-sm font-semibold text-gray-800">{answer.question}</h4>
+        <p className="text-xs leading-5 text-gray-500">{answer.intent}</p>
+        {answer.status === "needs_info" ? <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800"><p className="font-medium">답변에 필요한 경험을 보완해주세요</p><ul className="mt-2 list-disc pl-4">{answer.missingInfo.map((info, i) => <li key={i}>{info}</li>)}</ul></div> : <>
+          <textarea aria-label={`${answer.question} 답변`} className={inputStyle} rows={12} value={answer.answer} onChange={(e) => editAnswer(index, e.target.value)} disabled={!!busy} />
+          <p className={`text-xs ${answer.maxChars && count > answer.maxChars ? "text-red-600" : "text-gray-400"}`}>{count.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""} · 공백 {answer.countSpaces ? "포함" : "제외"}{dirty ? " · 수정 내용 저장 필요" : ""}</p>
+        </>}
+        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p></div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
+        <div className="flex flex-wrap gap-3 text-xs">
+          <button disabled={!!busy} className="text-blue-600 disabled:opacity-40" onClick={() => { setQuestion(answer.question); setMaxChars(answer.maxChars?.toString() ?? ""); setCountSpaces(answer.countSpaces); setGuidance(answer.guidance); setNotice("위 문항 입력란에서 경험이나 수정 요청을 보완한 뒤 다시 작성해주세요."); }}>이 문항 보완해서 다시 작성</button>
+          {answer.answer && <><button disabled={!!busy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={!!busy} className="text-gray-500" onClick={() => run("bank", async () => {
+            await save();
+            const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company: companyName, question: answer.question, answer: answer.answer }), signal: controller.current?.signal });
+            if (!response.ok) throw new Error("확정 답변을 경험 자료로 저장하지 못했습니다.");
+            setNotice("검토한 답변을 다음 작성에 참고할 자료로 저장했습니다.");
+          })}>검토한 답변을 자료로 저장</button></>}
+        </div>
+      </section>;
+    })}
+    {!!legacyAnswers.length && <details className="rounded-lg border border-gray-200 p-3"><summary className="text-xs text-gray-500 cursor-pointer">이전 방식으로 작성한 답변 {legacyAnswers.length}개 보관됨</summary><p className="my-2 text-xs text-gray-400">자동으로 만든 공통 답변입니다. 실제 문항에 대한 새 답변과 구분해 보관합니다.</p>{legacyAnswers.map(({ a, index }) => <div key={index} className="mt-3"><p className="text-xs font-medium mb-1">{a.question}</p><textarea aria-label={`이전 답변 ${a.question}`} rows={5} value={a.answer} className={inputStyle} onChange={(e) => editAnswer(index, e.target.value)} disabled={!!busy} /></div>)}</details>}
+    {draft && <button className={buttonStyle} disabled={!!busy || !dirty} onClick={() => run("save", async () => { await save(); setNotice("수정한 답변을 저장했습니다."); })}>{busy === "save" ? "저장 중..." : dirty ? "수정한 답변 저장" : "답변 저장됨"}</button>}
+    </>}
+  </div>;
 }
