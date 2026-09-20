@@ -87,9 +87,16 @@ async function collectContext(seq: string, request: EssayRequest) {
     otherAnswers: existing.filter((a) => a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) };
 }
 
+// 근거 인용 검증까지 요구하는 무거운 프롬프트라, 짧은 타임아웃에서 실제로 180초를 넘기는
+// 호출이 나왔다(타임아웃 만료 → abortController.abort() → SDK가 이걸 실제 원인과 무관하게
+// "Claude Code process aborted by user"로 표시해, 정상적으로 끝났을 호출이 실패로 잡힘).
+// generateCustomEssayAnswer가 이 함수를 최대 3번(초안 → 편집 검토 → 검증 실패 시 재작성)
+// 순차 호출하므로, 라우트의 maxDuration(600초) 안에서 통상 2회 호출까지는 여유가 있도록 잡는다.
+const MODEL_CALL_TIMEOUT_MS = 300_000;
+
 async function askModel(prompt: string, signal?: AbortSignal): Promise<string> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180000);
+  const timeout = setTimeout(() => controller.abort(), MODEL_CALL_TIMEOUT_MS);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) controller.abort();
