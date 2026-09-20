@@ -93,6 +93,7 @@ addColumnIfMissing("matchGaps", "TEXT");
 addColumnIfMissing("matchReasoning", "TEXT");
 addColumnIfMissing("matchProfileHash", "TEXT");
 addColumnIfMissing("hidden", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("bookmarked", "INTEGER NOT NULL DEFAULT 0");
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_matchScore ON jobs(matchScore)`);
 
@@ -121,6 +122,7 @@ interface JobRow {
   matchReasoning: string | null;
   matchProfileHash: string | null;
   hidden: number;
+  bookmarked: number;
   applicationStatus: string;
   applicationNotes: string | null;
 }
@@ -128,6 +130,7 @@ interface JobRow {
 export type JobWithMatch = JobSummary & Partial<JobMatch> & {
   categories: string[];
   matchProfileHash?: string | null;
+  bookmarked: boolean;
   applicationStatus: ApplicationStatus;
   applicationNotes: string;
 };
@@ -157,6 +160,7 @@ function rowToJobWithMatch(row: JobRow): JobWithMatch {
     matchGaps: row.matchGaps ? JSON.parse(row.matchGaps) : undefined,
     matchReasoning: row.matchReasoning ?? undefined,
     matchProfileHash: row.matchProfileHash,
+    bookmarked: row.bookmarked === 1,
     applicationStatus: (row.applicationStatus as ApplicationStatus) || "미지원",
     applicationNotes: row.applicationNotes ?? "",
   };
@@ -301,6 +305,16 @@ export function setJobHidden(seq: string, hidden: boolean): void {
 export function getHiddenSeqs(): string[] {
   const rows = db.prepare(`SELECT seq FROM jobs WHERE hidden = 1`).all() as { seq: string }[];
   return rows.map((r) => r.seq);
+}
+
+// hidden과 달리 bookmarked는 getActiveJobs()가 걸러내지 않고 매 job 객체에 그대로 실어
+// 보낸다(applicationStatus와 동일한 패턴) — "찜한 공고만 보기"는 서버에서 아예 빼는 게
+// 아니라 클라이언트가 이미 가진 목록을 필터링하는 것이므로, hidden처럼 목록에서 영구히
+// 빠지면 안 된다.
+const setJobBookmarkedStmt = db.prepare(`UPDATE jobs SET bookmarked = ? WHERE seq = ?`);
+
+export function setJobBookmarked(seq: string, bookmarked: boolean): void {
+  setJobBookmarkedStmt.run(bookmarked ? 1 : 0, seq);
 }
 
 interface ApplicationRow {

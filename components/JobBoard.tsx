@@ -33,6 +33,7 @@ interface JobSummary {
   matchGaps?: string[];
   matchReasoning?: string;
   applicationStatus?: ApplicationStatus;
+  bookmarked?: boolean;
 }
 
 type FilterType = "전체" | "신입" | "경력" | "인턴";
@@ -53,6 +54,10 @@ function jobCategories(job: JobSummary): string[] {
 // summarize-progress로 막 들어온 공고는 DB 왕복 전이라 applicationStatus가 없을 수 있다.
 function jobApplicationStatus(job: JobSummary): ApplicationStatus {
   return job.applicationStatus ?? "미지원";
+}
+
+function jobBookmarked(job: JobSummary): boolean {
+  return job.bookmarked ?? false;
 }
 
 function readStoredMatchEnabled(): boolean | null {
@@ -96,6 +101,7 @@ export default function JobBoard() {
   const [pagesInput, setPagesInput] = useState<string>(String(pages));
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
+  const [bookmarkOnly, setBookmarkOnly] = useState(false);
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -331,6 +337,20 @@ export default function JobBoard() {
     []
   );
 
+  const toggleBookmark = useCallback((seq: string, bookmarked: boolean) => {
+    setJobs((prev) =>
+      prev.map((j) => (j.seq === seq ? { ...j, bookmarked } : j))
+    );
+    setSelectedJob((prev) =>
+      prev && prev.seq === seq ? { ...prev, bookmarked } : prev
+    );
+    fetch("/api/jobs/bookmark", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seq, bookmarked }),
+    }).catch(() => {});
+  }, []);
+
   // 직군 카테고리 추출
   const allCategories = useMemo(() => {
     const catSet = new Set<string>();
@@ -342,6 +362,16 @@ export default function JobBoard() {
     () => jobs.filter((job) => hiddenSeqs.has(job.seq)),
     [jobs, hiddenSeqs]
   );
+
+  const bookmarkedJobs = useMemo(
+    () => jobs.filter((job) => jobBookmarked(job)),
+    [jobs]
+  );
+
+  // Keep the toggle button mounted while the filter is active even if the
+  // last bookmark was just removed, so bookmarkOnly always has a way back
+  // to "off" (see filteredJobs below, which would otherwise stay empty).
+  const showBookmarkToggle = bookmarkedJobs.length > 0 || bookmarkOnly;
 
   const filteredJobs = useMemo(() => {
     const filtered = jobs.filter((job) => {
@@ -357,7 +387,8 @@ export default function JobBoard() {
         job.title.toLowerCase().includes(q) ||
         job.positions.some((p) => p.toLowerCase().includes(q)) ||
         job.jdSummary.toLowerCase().includes(q);
-      return matchType && matchPosition && matchSearch;
+      const matchBookmark = !bookmarkOnly || jobBookmarked(job);
+      return matchType && matchPosition && matchSearch && matchBookmark;
     });
 
     if (sort === "추천순" && hasProfile) {
@@ -369,7 +400,7 @@ export default function JobBoard() {
       });
     }
     return [...filtered].sort((a, b) => b.date.localeCompare(a.date));
-  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile, hiddenSeqs]);
+  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile, hiddenSeqs, bookmarkOnly]);
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return "bg-emerald-500 text-white";
@@ -566,23 +597,50 @@ export default function JobBoard() {
               )}
             </span>
             <div className="flex items-center gap-2">
-              {hiddenSeqs.size > 0 && (
-                <button
-                  onClick={() => setViewMode((v) => v === "hidden" ? "list" : "hidden")}
-                  className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
-                    viewMode === "hidden"
-                      ? "bg-gray-700 text-white border-gray-700"
-                      : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                    <line x1="1" y1="1" x2="23" y2="23"/>
-                  </svg>
-                  숨긴 공고 {hiddenSeqs.size}건
-                </button>
+              {/* Group 1: 보기 필터 (숨긴 공고 / 찜한 공고) */}
+              {(hiddenSeqs.size > 0 || showBookmarkToggle) && (
+                <div className="flex items-center gap-1.5">
+                  {hiddenSeqs.size > 0 && (
+                    <button
+                      onClick={() => setViewMode((v) => v === "hidden" ? "list" : "hidden")}
+                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                        viewMode === "hidden"
+                          ? "bg-gray-700 text-white border-gray-700"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                        <line x1="1" y1="1" x2="23" y2="23"/>
+                      </svg>
+                      숨긴 공고 {hiddenSeqs.size}건
+                    </button>
+                  )}
+                  {showBookmarkToggle && (
+                    <button
+                      onClick={() => setBookmarkOnly((v) => !v)}
+                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                        bookmarkOnly
+                          ? "bg-gray-700 text-white border-gray-700"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      <svg className="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                      </svg>
+                      찜한 공고 {bookmarkedJobs.length}건
+                    </button>
+                  )}
+                </div>
               )}
+
+              {/* divider: Group 1 → Group 2 */}
+              {(hiddenSeqs.size > 0 || showBookmarkToggle) &&
+                viewMode === "list" &&
+                hasProfile && <div className="w-px h-5 bg-gray-200" />}
+
+              {/* Group 2: 정렬 */}
               {viewMode === "list" && hasProfile && (
                 <div className="flex bg-gray-100 rounded-lg p-0.5">
                   {(["추천순", "최신순"] as SortType[]).map((s) => (
@@ -600,43 +658,56 @@ export default function JobBoard() {
                   ))}
                 </div>
               )}
+
+              {/* divider: (Group 1 or Group 2) → Group 3 */}
+              {(hiddenSeqs.size > 0 || showBookmarkToggle || hasProfile) &&
+                viewMode === "list" && <div className="w-px h-5 bg-gray-200" />}
+
               {viewMode === "list" && (
                 <>
-                  <label
-                    className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 ${loading ? "opacity-50" : ""}`}
-                    title="수집할 페이지 수 (1페이지 = 10건)"
-                  >
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={MIN_PAGES}
-                      max={MAX_PAGES}
-                      value={pagesInput}
-                      disabled={loading}
-                      onChange={(e) => setPagesInput(e.target.value)}
-                      onBlur={commitPagesInput}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          commitPagesInput();
-                          (e.target as HTMLInputElement).blur();
-                        }
-                      }}
-                      className="w-10 text-right bg-transparent focus:outline-none"
-                    />
-                    페이지 ({pages * 10}건)
-                  </label>
-                  <button
-                    onClick={() => chooseMatchEnabled(!matchEnabled)}
-                    title="이력서 매칭 사용 여부"
-                    className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-                      matchEnabled
-                        ? "bg-blue-50 border-blue-200 text-blue-700"
-                        : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
-                    }`}
-                  >
-                    매칭 {matchEnabled ? "켜짐" : "꺼짐"}
-                  </button>
+                  {/* Group 3: 수집 설정 (페이지 수 / 매칭 사용 여부) */}
+                  <div className="flex items-center gap-1.5">
+                    <label
+                      className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 ${loading ? "opacity-50" : ""}`}
+                      title="수집할 페이지 수 (1페이지 = 10건)"
+                    >
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={MIN_PAGES}
+                        max={MAX_PAGES}
+                        value={pagesInput}
+                        disabled={loading}
+                        onChange={(e) => setPagesInput(e.target.value)}
+                        onBlur={commitPagesInput}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            commitPagesInput();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        className="w-10 text-right bg-transparent focus:outline-none"
+                      />
+                      페이지 ({pages * 10}건)
+                    </label>
+                    <button
+                      onClick={() => chooseMatchEnabled(!matchEnabled)}
+                      title="이력서 매칭 사용 여부"
+                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                        matchEnabled
+                          ? "bg-blue-50 border-blue-200 text-blue-700"
+                          : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
+                      }`}
+                    >
+                      매칭 {matchEnabled ? "켜짐" : "꺼짐"}
+                    </button>
+                  </div>
+
+                  {/* divider: Group 3 → Group 4 */}
+                  <div className="w-px h-5 bg-gray-200" />
+
+                  {/* Group 4: 새로고침 */}
                   <button
                     onClick={() => fetchJobs(matchEnabled, pages)}
                     disabled={loading}
@@ -690,6 +761,7 @@ export default function JobBoard() {
                     onSelect={setSelectedJob}
                     onHide={hideJob}
                     onStatusChange={updateApplicationStatus}
+                    onToggleBookmark={toggleBookmark}
                     getScoreColor={getScoreColor}
                     getBadgeColor={getBadgeColor}
                   />
@@ -984,6 +1056,7 @@ function JobCard({
   onSelect,
   onHide,
   onStatusChange,
+  onToggleBookmark,
   getScoreColor,
   getBadgeColor,
 }: {
@@ -992,10 +1065,12 @@ function JobCard({
   onSelect: (job: JobSummary) => void;
   onHide: (seq: string) => void;
   onStatusChange: (seq: string, status: ApplicationStatus) => void;
+  onToggleBookmark: (seq: string, bookmarked: boolean) => void;
   getScoreColor: (score: number) => string;
   getBadgeColor: (type: string) => string;
 }) {
   const status = jobApplicationStatus(job);
+  const bookmarked = jobBookmarked(job);
   return (
     <div
       onClick={() => onSelect(job)}
@@ -1008,6 +1083,26 @@ function JobCard({
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleBookmark(job.seq, !bookmarked);
+              }}
+              title={bookmarked ? "찜 해제" : "찜하기"}
+              className={`shrink-0 transition-colors ${
+                bookmarked ? "text-amber-400" : "text-gray-300 hover:text-amber-400"
+              }`}
+            >
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2"
+                fill={bookmarked ? "currentColor" : "none"}
+              >
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+              </svg>
+            </button>
             {typeof job.matchScore === "number" && (
               <span
                 className={`text-xs px-2 py-0.5 rounded-full font-bold ${getScoreColor(job.matchScore)}`}
