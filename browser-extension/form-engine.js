@@ -21,6 +21,7 @@
   const refs = elements.map((el, index) => ({ el, id: `field-${index}`, label: labelOf(el), context: contextOf(el) }));
   const pageUrl = location.href;
   globalThis.__findarForm = {
+    scanId: Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join(""),
     targets: refs.map(({ el, id, label, context }) => ({ id, label, context, type: el.tagName === "SELECT" ? "select" : el.type,
       ...(el.tagName === "SELECT" ? { options: [...el.options].filter((o) => o.value && !o.disabled).map((o) => o.text.trim()) } : {}) })),
     async apply(assignments) {

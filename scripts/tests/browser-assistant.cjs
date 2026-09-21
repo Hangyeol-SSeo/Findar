@@ -52,6 +52,8 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     let saved = { seq: job.seq, personalFields: [], essayAnswers: [{ question: '예전 공통 문항', answer: '보존할 답변' }], notesForUser: [], model: 'test', generatedAt: Date.now(), revision: 'initial' };
     let failSave = false;
     let generationRequests = 0;
+    const tasks = [];
+    let releaseWriting;
     let profilePayload = { name: '테스트 이름', address: '기존 기본주소', addressDetail: '101호', updatedAt: 1 };
     const downloadBytes = Buffer.from('test-document-bytes');
     await page.route('**/api/**', async (route) => {
@@ -69,12 +71,14 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
         const response = documentDownloadResponse(job.seq, url.searchParams.get('token'));
         return route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) });
       }
-      else if (url.pathname.endsWith('/fill/document')) data = { downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' };
+      else if (url.pathname.endsWith('/tasks')) data = { tasks };
+      else if (url.pathname.endsWith('/fill/document')) { const document = { total: 3, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' }; const task = { id: 'doc-' + tasks.length, kind: 'document', status: 'completed', done: 1, total: 1, result: { document } }; tasks.push(task); data = { task }; status = 202; }
       else if (url.pathname.endsWith('/draft/question')) {
         generationRequests++;
-        const body = req.postDataJSON(); assert.equal(body.question, '팀의 문제를 해결한 경험을 설명해주세요.');
+        const body = req.postDataJSON().questions[0]; assert.equal(body.question, '팀의 문제를 해결한 경험을 설명해주세요.');
         const answer = { ...body, source: 'user_question', intent: '문제 해결 과정의 판단과 행동', answer: '재현 절차를 기록하고 담당자와 확인 순서를 맞췄습니다.', evidence: [{ sourceId: 'memory.episode.test', quote: '재현 절차 기록', usedFor: '실제 행동' }], missingInfo: [], reviewNotes: [], status: 'draft', generatedAt: Date.now() };
-        saved = { ...saved, revision: 'generated', essayAnswers: [...saved.essayAnswers, answer] }; data = { draft: saved, answer };
+        const task = { id: 'writing', kind: 'writing', status: 'running', done: 0, total: 1 }; tasks.push(task); data = { task }; status = 202;
+        releaseWriting = () => { saved = { ...saved, revision: 'generated', essayAnswers: [...saved.essayAnswers, answer] }; task.status = 'completed'; task.done = 1; task.result = { draft: saved }; };
       } else if (url.pathname.endsWith('/draft')) {
         if (req.method() === 'PUT') {
           if (failSave) { data = { error: '테스트 저장 실패' }; status = 500; }
@@ -89,9 +93,20 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
     await page.getByText('실제 문항에 맞춰 자기소개서 작성', { exact: true }).waitFor();
     assert.equal(generationRequests, 0);
-    await page.getByPlaceholder('실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요.').fill('팀의 문제를 해결한 경험을 설명해주세요.');
+    await page.getByPlaceholder(/문항 1 — 실제 지원서/).fill('팀의 문제를 해결한 경험을 설명해주세요.');
     await page.getByRole('button', { name: '이 문항 답변 작성', exact: true }).click();
-    await page.getByText('문항별 답변을 작성하고 저장했습니다.', { exact: true }).waitFor();
+    await page.getByText(/백그라운드에서 문항을 작성합니다/).waitFor();
+    await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).isEnabled(), true);
+    await page.getByLabel('Word 지원서 양식').setInputFiles({ name: '동시작업.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('fixture') });
+    await page.getByRole('button', { name: '개인정보·답변 채운 Word 만들기', exact: true }).click();
+    await page.getByText(/Word 작성을 시작했습니다/).waitFor();
+    assert.ok(tasks.some(t => t.kind === 'writing' && t.status === 'running'));
+    assert.ok(tasks.some(t => t.kind === 'document'));
+    await page.getByRole('button', { name: '공고 상세', exact: true }).click();
+    releaseWriting();
+    await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
+    await page.getByText(/문항 1개를 작성하고 저장했습니다/).waitFor();
     assert.equal(generationRequests, 1);
     await page.getByLabel('팀의 문제를 해결한 경험을 설명해주세요. 답변').fill('사용자가 직접 고친 문장입니다.');
     failSave = true;
@@ -103,14 +118,15 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByText('수정한 답변을 저장했습니다.', { exact: true }).waitFor();
     assert.equal(saved.essayAnswers[0].answer, '보존할 답변');
     assert.equal(saved.essayAnswers[1].answer, '사용자가 직접 고친 문장입니다.');
+    fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/ui.png', fullPage: true });
-    console.log('PASS UI actual-question-only generation, legacy preservation, editing, failed-save recovery');
+    console.log('PASS UI background generation, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery');
     await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
     const picker = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).click();
     await (await picker).setFiles({ name: '지원서.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('fixture') });
     await page.getByText('지원서.docx', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '개인정보 채운 Word 만들기', exact: true }).click();
+    await page.getByRole('button', { name: '개인정보·답변 채운 Word 만들기', exact: true }).click();
     const downloadEvent = page.waitForEvent('download');
     const pageUrl = page.url();
     await page.getByRole('link', { name: '작성본 다운로드', exact: true }).click();
@@ -119,6 +135,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(await download.failure(), null);
     assert.deepEqual(fs.readFileSync(await download.path()), downloadBytes);
     assert.equal(page.url(), pageUrl);
+    fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/download-ui.png', fullPage: true });
     console.log('PASS visible file picker and attachment download with Korean filename, bytes, no page navigation');
     await page.goto((process.env.FINDAR_TEST_URL || 'http://localhost:3000') + '/settings');

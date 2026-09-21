@@ -35,7 +35,7 @@ try {
   test('reject excluded names', () => assert.throws(() => validateEssay({ ...good, answer: '테스트대학교에서 배웠습니다.' }, request, sources, ['테스트대학교'])));
   test('reject overflow instead of truncating', () => assert.throws(() => validateEssay({ ...good, answer: '가'.repeat(501) }, request, sources, [])));
   test('insufficient memory produces question, not fabricated draft', () => { const a = validateEssay({ ...good, status: 'needs_info', missingInfo: ['본인이 선택한 행동은 무엇인가요?'] }, request, sources, []); assert.equal(a.answer, ''); });
-  const { resolveFillPlan, buildFillSources, permittedTarget } = load('lib/application-fill.ts');
+  const { resolveFillPlan, buildFillSources, permittedTarget, buildEssayFillSources, deterministicFillAssignments } = load('lib/application-fill.ts');
   const { emptyApplicantProfile } = load('lib/applicant-profile.ts');
   const profile = { ...emptyApplicantProfile(), name: '홍길동', phone: '010-1234-5678', updatedAt: 1 };
   const values = buildFillSources(profile);
@@ -55,6 +55,19 @@ try {
     const restored = load('lib/applicant-profile.ts').readApplicantProfile();
     assert.equal(restored.nameHanja, ''); assert.equal(restored.religion, ''); assert.equal(restored.hobbies, ''); assert.equal(restored.specialties, '');
     assert.equal(restored.address, '기존 주소'); assert.equal(restored.addressDetail, '기존 상세주소');
+  });
+  test('structured repeated rows keep education entries and compound values distinct', () => {
+    const entries = [{ schoolName: '학교 A', schoolLevel: '대학교', startDate: '2010-03', endDate: '2014-02', gpa: '4.0', gpaMax: '4.5' }, { schoolName: '학교 B', schoolLevel: '대학원', startDate: '2014-03', endDate: '2016-02', gpa: '4.2', gpaMax: '4.5' }];
+    const sources = buildFillSources({ ...profile, education: entries });
+    const ts = [{ id: 'a', section: '학력', rowIndex: 0, label: '구 분' }, { id: 'b', section: '학력', rowIndex: 1, label: '평점 / 만점' }, { id: 'c', section: '학력', rowIndex: 1, label: '기 간' }];
+    assert.deepEqual(resolveFillPlan(deterministicFillAssignments(ts, sources), ts, sources).assignments.map(a => a.value), ['학교 A / 대학교', '4.2 / 4.5', '2014-03 ~ 2016-02']);
+  });
+  test('only completed current-job essays are eligible; personal data never fills essay boxes', () => {
+    const essays = buildEssayFillSources([{ question: '지원동기', answer: '저장한 답변', source: 'user_question', status: 'draft' }, { question: '보완', answer: '미완성', source: 'user_question', status: 'needs_info' }, { question: '이전 답변', answer: 'legacy' }]);
+    assert.equal(essays.length, 1);
+    const targets = [{ id: 'essay', label: '지원동기', type: 'textarea' }, { id: 'family', label: '성명', section: '가족사항' }];
+    assert.equal(resolveFillPlan([{ targetId: 'essay', sourceId: 'name' }, { targetId: 'family', sourceId: 'name' }], targets, values).assignments.length, 0);
+    assert.equal(resolveFillPlan(deterministicFillAssignments(targets, essays), targets, essays).assignments[0].value, '저장한 답변');
   });
   const { storeDocumentDownload, documentDownloadResponse } = load('lib/document-download.ts');
   test('Word attachment download retains Korean filename and is scoped to the job', () => {
