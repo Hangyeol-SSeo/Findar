@@ -68,13 +68,19 @@ async function collectContext(seq: string, request: EssayRequest) {
     profile.projects.forEach((p, i) => add(`resume.experience.${i}`, { role: p.role, summary: p.summary, skills: p.stack }));
   }
   add("memory.values", narrative.core);
-  narrative.episodes.forEach((e) => add(`memory.episode.${e.id}`, { situation: e.situation, reasoning: e.reasoning, lesson: e.lesson, tags: e.tags }));
+  // Full episodes and full past answers: no 300-character truncation of action/results.
+  // 다만 episode/과거 답변 개수 자체는 관련도순으로 상한을 둔다 — 안 그러면 오래 써온
+  // 계정일수록 sources가 계속 커져서(narrative.episodes는 원래 상한이 없었다) 호출마다
+  // 처리할 프롬프트가 무한정 늘어나고, 그만큼 매 호출이 느려지고 타임아웃에 가까워진다.
+  const keywords = `${request.question} ${job.positions.join(" ")}`.split(/\s+/).filter((w) => w.length > 1);
+  const relevance = (text: string) => keywords.reduce((n, k) => n + Number(text.includes(k)), 0);
+  [...narrative.episodes]
+    .sort((a, b) => relevance(`${b.situation} ${b.reasoning} ${b.tags.join(" ")}`) - relevance(`${a.situation} ${a.reasoning} ${a.tags.join(" ")}`) || b.createdAt - a.createdAt)
+    .slice(0, 6)
+    .forEach((e) => add(`memory.episode.${e.id}`, { situation: e.situation, reasoning: e.reasoning, lesson: e.lesson, tags: e.tags }));
   applicant.workExperiences.forEach((w, i) => add(`profile.work.${i}`, { role: w.position, duties: w.duties, period: [w.startDate, w.endDate] }));
   applicant.activities.forEach((a, i) => add(`profile.activity.${i}`, { role: a.role, detail: a.detail }));
   applicant.awards.forEach((a, i) => add(`profile.award.${i}`, { detail: a.detail, date: a.date }));
-  // Full episodes and full past answers: no 300-character truncation of action/results.
-  const keywords = `${request.question} ${job.positions.join(" ")}`.split(/\s+/).filter((w) => w.length > 1);
-  const relevance = (text: string) => keywords.reduce((n, k) => n + Number(text.includes(k)), 0);
   [...bank.entries].sort((a, b) => relevance(b.question + b.answer) - relevance(a.question + a.answer) || b.createdAt - a.createdAt)
     .slice(0, 8).forEach((e) => add(`past.${e.id}`, { question: e.question, answer: e.answer }));
   if (request.guidance) add("user.current", request.guidance);
@@ -87,14 +93,20 @@ async function collectContext(seq: string, request: EssayRequest) {
     otherAnswers: existing.filter((a) => a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) };
 }
 
-// 근거 인용 검증까지 요구하는 무거운 프롬프트라, 짧은 타임아웃에서 실제로 180초를 넘기는
-// 호출이 나왔다(타임아웃 만료 → abortController.abort() → SDK가 이걸 실제 원인과 무관하게
+// 근거 인용 검증까지 요구하는 무거운 프롬프트라, 짧은 타임아웃에서 실제로 그 시간을 넘기는
+// 호출이 나온다(타임아웃 만료 → abortController.abort() → SDK가 이걸 실제 원인과 무관하게
 // "Claude Code process aborted by user"로 표시해, 정상적으로 끝났을 호출이 실패로 잡힘).
-// generateCustomEssayAnswer가 이 함수를 최대 3번(초안 → 편집 검토 → 검증 실패 시 재작성)
-// 순차 호출하므로, 라우트의 maxDuration(600초) 안에서 통상 2회 호출까지는 여유가 있도록 잡는다.
-const MODEL_CALL_TIMEOUT_MS = 300_000;
+// 180초 → 300초로 한 번 올렸는데도 실사용 데이터(과거 자소서·경험 자료가 쌓인 계정)에서는
+// 여전히 발생해서 훨씬 더 크게 잡는다 — 이 앱은 로컬에서만 돌아가 Vercel류 서버리스 시간
+// 제한이 실제로 적용되지 않으므로, 실패해서 처음부터 다시 시도하며 토큰을 날리는 것보다
+// 오래 기다리더라도 한 번에 끝나는 쪽이 낫다.
+const MODEL_CALL_TIMEOUT_MS = 600_000;
+// 그래도 남는 진짜 일시적 실패(네트워크 끊김 등)에 대비해, 매 호출을 한 번 더 재시도한다 —
+// generateCustomEssayAnswer 안에서 이미 성공한 이전 호출 결과(first/edited)는 그대로
+// 남아있으니, 실패한 그 한 호출만 다시 하면 돼서 토큰 낭비도 최소화된다.
+const MODEL_CALL_MAX_ATTEMPTS = 2;
 
-async function askModel(prompt: string, signal?: AbortSignal): Promise<string> {
+async function askModelOnce(prompt: string, signal?: AbortSignal): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_CALL_TIMEOUT_MS);
   const abort = () => controller.abort();
@@ -113,6 +125,20 @@ async function askModel(prompt: string, signal?: AbortSignal): Promise<string> {
     }
     throw new Error("작성 결과를 받지 못했습니다.");
   } finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
+}
+
+async function askModel(prompt: string, signal?: AbortSignal): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MODEL_CALL_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await askModelOnce(prompt, signal);
+    } catch (e) {
+      lastError = e;
+      if (signal?.aborted) throw e; // 사용자가 직접 취소한 거면 재시도하지 않는다.
+      console.error(`[application-draft] 모델 호출 실패 (시도 ${attempt}/${MODEL_CALL_MAX_ATTEMPTS}):`, e);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 const OUTPUT = `순수 JSON 객체만 반환한다:

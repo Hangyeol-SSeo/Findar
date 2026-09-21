@@ -2,7 +2,11 @@ import { isSameOrigin } from "@/lib/request-origin";
 import { generateCustomEssayAnswer, getCachedApplicationDraft, persistEssay } from "@/lib/application-draft";
 import { parseEssayRequest } from "@/lib/essay-contract";
 
-export const maxDuration = 600;
+// lib/application-draft.ts의 askModel이 호출 하나당 최대 10분(재시도 포함 최악의 경우
+// 최대 3번 호출)까지 기다릴 수 있게 늘어난 것과 맞춰서 라우트 예산도 같이 늘린다 — 로컬
+// 실행(npm run dev)에서는 실제로 적용되지 않지만, 서버리스 배포 시 여기서 먼저 끊기면
+// 내부 타임아웃을 늘린 의미가 없어진다.
+export const maxDuration = 1800;
 const running = new Set<string>();
 
 export async function POST(request: Request, { params }: { params: Promise<{ seq: string }> }) {
