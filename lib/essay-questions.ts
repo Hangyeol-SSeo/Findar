@@ -18,3 +18,8 @@ export type CommonEssayQuestion = (typeof COMMON_ESSAY_QUESTIONS)[number];
 // 기술해주시기 바랍니다" 처럼 한 항목에 여러 주제를 섞어 긴 줄글로 쓰게 하는 폼도 흔해서,
 // 개별 문항과 별도로 이것도 항상 하나 만들어둔다.
 export const COMBINED_ESSAY_LABEL = "통합 자유기술형 (지원동기+장단점+포부 등 한 편의 글)";
+
+// 지원 도우미 탭에서 문항을 "자유 문항"으로 체크하면 실제 문항 텍스트에 그대로 채워 넣는
+// 문구 — 자소서 항목이 자유 기술형인 실제 지원폼에서 흔히 쓰이는 안내 문구 그대로.
+export const FREEFORM_ESSAY_QUESTION =
+  "지원동기, 성격(장단점), 특기사항, 희망업무, 입사 후 계획 등을 중심으로 자유롭게 기술해주시기 바랍니다.";

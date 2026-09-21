@@ -2,11 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
+import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
 const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40";
+
+interface QuestionRow { id: string; question: string; maxChars: string; countSpaces: boolean; guidance: string; freeform: boolean }
+function newRow(id: string): QuestionRow {
+  return { id, question: "", maxChars: "", countSpaces: true, guidance: "", freeform: false };
+}
 
 export default function ApplicationDraftPanel({ seq, companyName }: { seq: string; companyName: string }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
@@ -18,10 +24,9 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [question, setQuestion] = useState("");
-  const [maxChars, setMaxChars] = useState("");
-  const [countSpaces, setCountSpaces] = useState(true);
-  const [guidance, setGuidance] = useState("");
+  const nextRowId = useRef(1);
+  const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [extension, setExtension] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [documentResult, setDocumentResult] = useState<{ href: string; filename: string; filled: number; skipped: { label: string; reason: string }[]; note: string } | null>(null);
@@ -67,12 +72,47 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
     catch (e) { if (!controller.current?.signal.aborted) setError(e instanceof Error ? e.message : "처리 중 오류가 발생했습니다."); }
     finally { if (!controller.current?.signal.aborted) setBusy(""); }
   }
-  async function generate() {
+  function addRow() { setRows((prev) => [...prev, newRow(`q${nextRowId.current++}`)]); }
+  function removeRow(id: string) { setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev)); }
+  function updateRow(id: string, patch: Partial<QuestionRow>) {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  // 체크하면 실제 문항 텍스트에 자유기술형 안내 문구를 바로 채워 넣는다 — 이 문항을 그대로
+  // 보내면 서버는 다른 문항과 똑같이 취급하고, 프롬프트 안의 "자유롭게 기술" 표현을 보고
+  // 알아서 여러 주제를 엮은 하나의 글로 작성한다.
+  function toggleFreeform(id: string, checked: boolean) {
+    updateRow(id, { freeform: checked, question: checked ? FREEFORM_ESSAY_QUESTION : "" });
+  }
+
+  // 문항이 여러 개면 한 번에 순서대로 작성한다 — 병렬로 돌리지 않는 이유는, 뒤 문항이
+  // collectContext에서 앞 문항의 저장된 답변을 otherAnswers로 보고 같은 경험을 피해야
+  // 하기 때문이다(병렬로 돌리면 서로의 결과를 못 봐서 같은 에피소드가 겹칠 수 있다).
+  // 대신 문항마다 근거 검증·편집 검토를 그대로 거치므로 지원자를 관통하는 톤은 유지된다.
+  async function generateAll() {
+    const filled = rows.filter((r) => r.question.trim());
+    if (!filled.length) return;
     await run("writing", async () => {
       await save();
-      const data = await api("draft/question", { question, ...(maxChars ? { maxChars: Number(maxChars) } : {}), countSpaces, guidance });
-      setDraft(data.draft); setDirty(false);
-      setNotice(data.answer.status === "needs_info" ? "이 문항에 필요한 경험을 더 확인해야 합니다. 아래 보완 질문을 확인해주세요." : "문항별 답변을 작성하고 저장했습니다.");
+      let needsInfo = 0;
+      try {
+        for (let i = 0; i < filled.length; i++) {
+          setProgress({ done: i, total: filled.length });
+          const row = filled[i];
+          const data = await api("draft/question", {
+            question: row.question,
+            ...(row.maxChars ? { maxChars: Number(row.maxChars) } : {}),
+            countSpaces: row.countSpaces,
+            guidance: row.guidance,
+          });
+          setDraft(data.draft); setDirty(false);
+          if (data.answer.status === "needs_info") needsInfo++;
+        }
+      } finally { setProgress(null); }
+      setRows([newRow(`q${nextRowId.current++}`)]);
+      const summary = filled.length > 1
+        ? `문항 ${filled.length}개의 답변을 순서대로 작성하고 저장했습니다.`
+        : "문항별 답변을 작성하고 저장했습니다.";
+      setNotice(needsInfo > 0 ? `${summary} 이 중 ${needsInfo}개는 경험 보완이 필요합니다 — 아래에서 확인해주세요.` : summary);
     });
   }
   function editAnswer(index: number, answer: string) {
@@ -131,15 +171,27 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
     </section>}
 
     {workspace === "essay" && <><section className="space-y-3">
-      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">문항의 의도에 맞는 경험을 고르고, 판단과 행동이 드러나도록 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다.</p></div>
-      <label className="block text-xs font-medium text-gray-700">지원서 문항<textarea className={`${inputStyle} mt-1`} rows={4} value={question} maxLength={8000} disabled={!!busy} onChange={(e) => {
-        setQuestion(e.target.value);
-        if (/공백\s*제외/.test(e.target.value)) setCountSpaces(false);
-      }} placeholder="실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요." /></label>
-      <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label="최대 글자 수" className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={maxChars} onChange={(e) => setMaxChars(e.target.value)} disabled={!!busy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={countSpaces} onChange={(e) => setCountSpaces(e.target.checked)} disabled={!!busy} />공백 포함</label></div>
-      <label className="block text-xs text-gray-600">이번 문항의 추가 경험·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={guidance} onChange={(e) => setGuidance(e.target.value)} disabled={!!busy} placeholder="쓸 경험의 구체적인 사실, 강조할 판단, 빼고 싶은 내용 등을 적어주세요." /></label>
-      <button className={buttonStyle} disabled={!!busy || !question.trim()} onClick={generate}>{busy === "writing" ? "문항 분석 · 작성 · 편집 검토 중..." : "이 문항 답변 작성"}</button>
-      {busy === "writing" && <p className="text-xs text-gray-500" role="status">저장된 경험의 근거를 확인하고 별도 편집 검토를 진행합니다. 잠시 기다려주세요.</p>}
+      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">문항의 의도에 맞는 경험을 고르고, 판단과 행동이 드러나도록 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
+      {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={row.freeform} disabled={!!busy} onChange={(e) => toggleFreeform(row.id, e.target.checked)} />자유 문항</label>
+          {rows.length > 1 && <button type="button" disabled={!!busy} className="text-xs text-gray-400 hover:text-red-500" onClick={() => removeRow(row.id)}>삭제</button>}
+        </div>
+        <label className="block text-xs font-medium text-gray-700">지원서 문항<textarea className={`${inputStyle} mt-1`} rows={4} value={row.question} maxLength={8000} disabled={!!busy} onChange={(e) => {
+          updateRow(row.id, { question: e.target.value, countSpaces: /공백\s*제외/.test(e.target.value) ? false : row.countSpaces });
+        }} placeholder={`문항 ${i + 1} — 실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요.`} /></label>
+        <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label={`문항 ${i + 1} 최대 글자 수`} className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={row.maxChars} onChange={(e) => updateRow(row.id, { maxChars: e.target.value })} disabled={!!busy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={row.countSpaces} onChange={(e) => updateRow(row.id, { countSpaces: e.target.checked })} disabled={!!busy} />공백 포함</label></div>
+        <label className="block text-xs text-gray-600">이번 문항의 추가 경험·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={!!busy} placeholder="쓸 경험의 구체적인 사실, 강조할 판단, 빼고 싶은 내용 등을 적어주세요." /></label>
+      </div>)}
+      <div className="flex items-center gap-2">
+        <button type="button" disabled={!!busy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
+        <button className={buttonStyle} disabled={!!busy || !rows.some((r) => r.question.trim())} onClick={generateAll}>
+          {busy === "writing"
+            ? (progress ? `문항 ${progress.done + 1}/${progress.total} 작성 중...` : "문항 분석 · 작성 · 편집 검토 중...")
+            : rows.filter((r) => r.question.trim()).length > 1 ? "문항 전체 답변 작성" : "이 문항 답변 작성"}
+        </button>
+      </div>
+      {busy === "writing" && <p className="text-xs text-gray-500" role="status">저장된 경험의 근거를 확인하고 별도 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
     </section>
     {currentAnswers.map(({ a, index }) => {
       const answer = a as EssayAnswer;
@@ -153,7 +205,10 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
         </>}
         <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p></div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
         <div className="flex flex-wrap gap-3 text-xs">
-          <button disabled={!!busy} className="text-blue-600 disabled:opacity-40" onClick={() => { setQuestion(answer.question); setMaxChars(answer.maxChars?.toString() ?? ""); setCountSpaces(answer.countSpaces); setGuidance(answer.guidance); setNotice("위 문항 입력란에서 경험이나 수정 요청을 보완한 뒤 다시 작성해주세요."); }}>이 문항 보완해서 다시 작성</button>
+          <button disabled={!!busy} className="text-blue-600 disabled:opacity-40" onClick={() => {
+            setRows([{ id: `q${nextRowId.current++}`, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: false }]);
+            setNotice("위 문항 입력란에서 경험이나 수정 요청을 보완한 뒤 다시 작성해주세요.");
+          }}>이 문항 보완해서 다시 작성</button>
           {answer.answer && <><button disabled={!!busy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={!!busy} className="text-gray-500" onClick={() => run("bank", async () => {
             await save();
             const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company: companyName, question: answer.question, answer: answer.answer }), signal: controller.current?.signal });
