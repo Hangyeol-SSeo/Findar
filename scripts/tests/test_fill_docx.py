@@ -55,4 +55,54 @@ class FillDocxTests(unittest.TestCase):
         a = {'targetId': scan['targets'][0]['id'], 'value': 'x'}
         with self.assertRaises(ValueError): module.process({'document': fixture(), 'assignments': [a, a]})
 
+
+class StructuredTableTests(unittest.TestCase):
+    def document(self, content):
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as z:
+            z.writestr('word/document.xml', f'<w:document xmlns:w="{W}"><w:body>{content}</w:body></w:document>')
+        return base64.b64encode(out.getvalue()).decode()
+
+    def test_grid_span_and_vertical_header_repeated_rows(self):
+        doc = self.document('''<w:tbl><w:tr>
+<w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>학 력</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:gridSpan w:val="3"/></w:tcPr><w:p><w:r><w:t>학교명</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:r><w:t>전공</w:t></w:r></w:p></w:tc></w:tr>''' + '''<w:tr>
+<w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>
+<w:tc><w:tcPr><w:gridSpan w:val="3"/></w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>''' * 2 + '</w:tbl>')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual([(t['label'], t['rowIndex']) for t in targets], [('학교명', 0), ('전공', 0), ('학교명', 1), ('전공', 1)])
+        self.assertTrue(all(t['section'] == '학력' for t in targets))
+
+    def test_merged_input_start_and_inline_phone(self):
+        doc = self.document('''<w:tbl><w:tr>
+<w:tc><w:p><w:r><w:t>E-Mail</w:t></w:r></w:p></w:tc>
+<w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>(휴대폰)</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>''')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual([t['label'] for t in targets], ['E-Mail', '(휴대폰)'])
+        result = module.process({'document': doc, 'assignments': [{'targetId': targets[1]['id'], 'value': '010-0000-0000'}]})
+        xml = zipfile.ZipFile(io.BytesIO(base64.b64decode(result['document']))).read('word/document.xml')
+        self.assertIn('(휴대폰) 010-0000-0000', ''.join(ET.fromstring(xml).itertext()))
+
+    def test_shared_header_across_certification_and_language_sections(self):
+        def cell(text='', merge=None):
+            pr = '<w:tcPr><w:vMerge w:val="restart"/></w:tcPr>' if merge else ''
+            return f'<w:tc>{pr}<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>'
+        doc = self.document('<w:tbl><w:tr>' + cell('자격사항', True) + cell('구분') + cell('취득일') + '</w:tr><w:tr>' + cell('외국어능력', True) + cell() + cell() + '</w:tr></w:tbl>')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual([(t['section'], t['label'], t['rowIndex']) for t in targets], [('외국어능력', '구분', 0), ('외국어능력', '취득일', 0)])
+
+    def test_nested_table_offsets_and_essay_heading(self):
+        doc = self.document('''<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>성명</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>
+<w:p><w:r><w:t>자 기 소 개 서</w:t></w:r></w:p><w:p/><w:p/><w:p><w:r><w:t>개인정보 동의서</w:t></w:r></w:p><w:p/>''')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual(len(targets), 2)
+        result = module.process({'document': doc, 'assignments': [{'targetId': t['id'], 'value': '홍길동' if i == 0 else '지원 동기\n두 번째 문단'} for i, t in enumerate(targets)]})
+        xml = zipfile.ZipFile(io.BytesIO(base64.b64decode(result['document']))).read('word/document.xml')
+        root = ET.fromstring(xml)
+        self.assertEqual(len(root.findall('.//w:tbl', module.NS)), 2)
+        self.assertIn('두 번째 문단', ''.join(root.itertext()))
+        self.assertEqual(len(module.process({'document': result['document']})['targets']), 0)
+
 if __name__ == '__main__': unittest.main()
