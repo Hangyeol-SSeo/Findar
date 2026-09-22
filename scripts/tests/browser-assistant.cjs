@@ -52,6 +52,8 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     let saved = { seq: job.seq, personalFields: [], essayAnswers: [{ question: '예전 공통 문항', answer: '보존할 답변' }], notesForUser: [], model: 'test', generatedAt: Date.now(), revision: 'initial' };
     let failSave = false;
     let generationRequests = 0;
+    let taskRequests = 0;
+    let webRequests = 0;
     const tasks = [];
     let releaseWriting;
     let profilePayload = { name: '테스트 이름', address: '기존 기본주소', addressDetail: '101호', updatedAt: 1 };
@@ -71,7 +73,8 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
         const response = documentDownloadResponse(job.seq, url.searchParams.get('token'));
         return route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) });
       }
-      else if (url.pathname.endsWith('/tasks')) data = { tasks };
+      else if (url.pathname.endsWith('/tasks')) { taskRequests++; data = { tasks }; }
+      else if (url.pathname.endsWith('/fill/web')) { webRequests++; data = { token: 'a'.repeat(64) }; }
       else if (url.pathname.endsWith('/fill/document')) { const document = { total: 3, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' }; const task = { id: 'doc-' + tasks.length, kind: 'document', status: 'completed', done: 1, total: 1, result: { document } }; tasks.push(task); data = { task }; status = 202; }
       else if (url.pathname.endsWith('/draft/question')) {
         generationRequests++;
@@ -93,6 +96,28 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
     await page.getByText('실제 문항에 맞춰 자기소개서 작성', { exact: true }).waitFor();
     assert.equal(generationRequests, 0);
+    await page.waitForTimeout(300);
+    const idleRequests = taskRequests;
+    await page.waitForTimeout(4500);
+    assert.equal(taskRequests, idleRequests, 'no idle task polling');
+    await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
+    const connect = page.getByRole('button', { name: '웹 지원서 연결', exact: true });
+    assert.equal(await connect.isEnabled(), true, 'missing handshake must not permanently disable connect');
+    await connect.click();
+    await page.getByRole('alert').getByText(/현재 Findar 페이지에서 확장에 연결할 수 없습니다/).waitFor();
+    assert.equal(webRequests, 0, 'no capability API call before extension detection');
+    // Simulate a content script injected after the first ping has already been missed.
+    await page.evaluate(() => {
+      setTimeout(() => window.addEventListener('message', event => {
+        if (event.data?.type === 'FINDAR_PING') window.postMessage({ type: 'FINDAR_READY' }, location.origin);
+        if (event.data?.type === 'FINDAR_CONNECT') window.postMessage({ type: 'FINDAR_CONNECTED', seq: event.data.seq }, location.origin);
+      }), 650);
+    });
+    await connect.click();
+    await page.getByText(/지원 사이트를 열었습니다/).waitFor();
+    assert.equal(webRequests, 1);
+    await page.getByRole('button', { name: '문항별 자기소개서', exact: true }).click();
+    console.log('PASS no idle polling, missing extension guidance, delayed extension handshake and connection');
     await page.getByPlaceholder(/문항 1 — 실제 지원서/).fill('팀의 문제를 해결한 경험을 설명해주세요.');
     await page.getByRole('button', { name: '이 문항 답변 작성', exact: true }).click();
     await page.getByText(/백그라운드에서 문항을 작성합니다/).waitFor();
@@ -103,11 +128,19 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByText(/Word 작성을 시작했습니다/).waitFor();
     assert.ok(tasks.some(t => t.kind === 'writing' && t.status === 'running'));
     assert.ok(tasks.some(t => t.kind === 'document'));
+    await page.waitForTimeout(300);
+    const runningRequests = taskRequests;
+    await page.waitForTimeout(2300);
+    assert.ok(taskRequests > runningRequests, 'new task resumes polling');
     await page.getByRole('button', { name: '공고 상세', exact: true }).click();
     releaseWriting();
     await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
     await page.getByText(/문항 1개를 작성하고 저장했습니다/).waitFor();
     assert.equal(generationRequests, 1);
+    const completedRequests = taskRequests;
+    await page.waitForTimeout(4500);
+    assert.equal(taskRequests, completedRequests, 'no polling after completion');
+    console.log('PASS terminal tasks stop polling');
     await page.getByLabel('팀의 문제를 해결한 경험을 설명해주세요. 답변').fill('사용자가 직접 고친 문장입니다.');
     failSave = true;
     await page.getByRole('button', { name: '수정한 답변 저장' }).click();

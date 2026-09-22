@@ -829,7 +829,7 @@ export default function JobBoard() {
 
       {/* Side Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-[480px] bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed top-0 right-0 h-full w-full ${panelTab === "company" ? "sm:w-[min(720px,100vw)]" : "sm:w-[480px]"} bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
           selectedJob ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -867,8 +867,8 @@ export default function JobBoard() {
 
             {/* Panel body */}
             {panelTab === "company" ? (
-              <div className="flex-1 overflow-y-auto p-5">
-                <CompanyResearchPanel companyName={selectedJob.company} />
+              <div className="min-h-0 flex-1">
+                <CompanyResearchPanel key={selectedJob.company} companyName={selectedJob.company} />
               </div>
             ) : panelTab === "draft" ? (
               <div className="flex-1 overflow-y-auto p-5">

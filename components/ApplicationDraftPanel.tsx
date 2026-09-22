@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { detectBrowserExtension } from "@/lib/browser-extension-client";
 import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
 import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
 import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
@@ -27,6 +28,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
   const [dirty, setDirty] = useState(false);
   const nextRowId = useRef(1);
   const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
+  const [pollRevision, setPollRevision] = useState(0);
   const [tasks, setTasks] = useState<ApplicationTask[]>([]);
   const handledTasks = useRef(new Set<string>());
   const dirtyRef = useRef(false);
@@ -54,48 +56,70 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
       }
     };
     window.addEventListener("message", receive);
-    window.postMessage({ type: "FINDAR_PING" }, location.origin);
-    return () => { abort.abort(); window.removeEventListener("message", receive); };
+    const detect = () => { void detectBrowserExtension(abort.signal).then((ready) => {
+      if (!abort.signal.aborted) setExtension(ready);
+    }); };
+    detect();
+    window.addEventListener("focus", detect);
+    return () => { abort.abort(); window.removeEventListener("message", receive); window.removeEventListener("focus", detect); };
   }, [seq]);
 
   useEffect(() => {
     let stopped = false;
+    const abort = new AbortController();
+    let failures = 0;
+    let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
       try {
-        const response = await fetch(`/api/applications/${seq}/tasks`, { cache: "no-store" });
+        const response = await fetch(`/api/applications/${seq}/tasks`, { cache: "no-store", signal: abort.signal });
         if (!response.ok) throw new Error("작업 상태를 불러오지 못했습니다.");
         const data: { tasks: ApplicationTask[] } = await response.json();
         if (stopped) return;
+        failures = 0;
+        active = data.tasks.some(taskActive);
         setTasks(data.tasks);
+        let reloadDraft = false;
         for (const task of data.tasks) {
           if (taskActive(task) || handledTasks.current.has(task.id)) continue;
           handledTasks.current.add(task.id);
           if (task.status === "failed") setError(task.error ?? "작업에 실패했습니다.");
           if (task.kind === "writing") {
-            if (!dirtyRef.current) {
-              const draftResponse = await fetch(`/api/applications/${seq}/draft`, { cache: "no-store" });
-              const current = await draftResponse.json();
-              if (!stopped && !dirtyRef.current && draftResponse.ok) setDraft(current.draft);
-            }
+            // 실패한 묶음 작업도 앞 문항까지 저장됐을 수 있다. 조회는 전체에서 한 번만 한다.
+            reloadDraft = true;
             if (task.status === "completed") setNotice(`문항 ${task.done}개를 작성하고 저장했습니다.${task.result?.needsInfo ? ` ${task.result.needsInfo}개는 경험 보완이 필요합니다.` : ""} 자동 입력 탭에서 저장된 답변을 지원서에 넣을 수 있습니다.`);
           }
           const document = task.result?.document;
           if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
         }
-      } catch (e) { if (!stopped) setError(e instanceof Error ? e.message : "작업 상태 확인 실패"); }
-      finally { if (!stopped) timer = setTimeout(refresh, 2000); }
+        if (reloadDraft && !dirtyRef.current) {
+          const draftResponse = await fetch(`/api/applications/${seq}/draft`, { cache: "no-store", signal: abort.signal });
+          if (!draftResponse.ok) throw new Error("완성된 답변을 불러오지 못했습니다. 지원 도우미를 다시 열어주세요.");
+          const current = await draftResponse.json();
+          if (!stopped && !dirtyRef.current) setDraft(current.draft);
+        }
+      } catch (e) {
+        failures++;
+        if (!stopped) setError(e instanceof Error ? e.message : "작업 상태 확인 실패");
+      } finally {
+        // Empty or terminal task lists need no polling. Retry network errors only three times.
+        if (!stopped && active && failures < 3) timer = setTimeout(refresh, 2000 * 2 ** failures);
+      }
     }
     void refresh();
-    return () => { stopped = true; clearTimeout(timer); };
-  }, [seq]);
+    return () => { stopped = true; abort.abort(); clearTimeout(timer); };
+  }, [seq, pollRevision]);
 
   const writingTask = tasks.find((t) => t.kind === "writing" && taskActive(t));
   const writingBusy = busy === "writing" || !!writingTask;
   const essayBusy = writingBusy || ["save", "bank"].includes(busy);
   const documentBusy = busy === "document";
   const progress = writingTask ? { done: writingTask.done, total: writingTask.total } : null;
-  function acceptTask(task: ApplicationTask) { setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]); }
+  function acceptTask(task: ApplicationTask) {
+    setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]);
+    // Restart after explicit creation, including tasks already completed in the POST response.
+    setPollRevision((value) => value + 1);
+  }
 
   async function api(path: string, body: unknown, method = "POST") {
     const response = await fetch(`/api/applications/${seq}/${path}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -166,6 +190,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
     </nav>
     {tasks.length > 0 && <section aria-label="백그라운드 작업" className="rounded-lg border border-blue-100 p-3 text-xs space-y-2">
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
+      <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
         <span>{task.kind === "writing" ? "자기소개서" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "completed" ? "완료" : "실패"}</span>
         {task.error && <span className="text-red-600">{task.error}</span>}
@@ -194,14 +219,26 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
       </div>
       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
         <h4 className="text-sm font-medium">Brave · Chrome 웹 지원서 입력</h4>
+        <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
+          <p>Findar 화면과 지원 사이트를 모두 확장을 설치한 Brave·Chrome에서 열어주세요. cmux 등 앱 내장 브라우저에서는 Brave에 설치한 확장을 사용할 수 없습니다.</p>
+          <button type="button" className="mt-1 font-medium underline underline-offset-2" onClick={() => run("copy-address", async () => {
+            await navigator.clipboard.writeText(location.origin);
+            setNotice("Findar 주소를 복사했습니다. 확장을 설치한 Brave·Chrome 주소창에 붙여넣고, 공고의 지원 도우미를 열어주세요.");
+          })}>Brave·Chrome에서 열 Findar 주소 복사</button>
+        </div>
         <label className="block text-xs text-gray-500">지원 사이트 주소<input aria-label="지원 사이트 주소" type="url" className={`${inputStyle} mt-1`} value={url} onChange={(e) => setUrl(e.target.value)} disabled={busy === "web"} placeholder="https://..." /></label>
+        <p className="text-xs text-gray-500" role="status">{extension ? "확장 기능 연결 준비 완료" : "확장 기능이 아직 감지되지 않았습니다. 연결 버튼을 누르면 다시 확인합니다."}</p>
         {!extension && <details className="text-xs text-gray-600" open><summary className="cursor-pointer font-medium">처음 한 번 브라우저 연결하기</summary><ol className="list-decimal pl-4 space-y-1 mt-2"><li><a className="text-blue-600 underline" href="/api/application-fill/extension">Findar 확장 기능 다운로드</a> 후 압축을 풉니다.</li><li>Brave의 확장 프로그램 관리에서 개발자 모드를 켜고 ‘압축해제된 확장 프로그램을 로드합니다’로 해당 폴더를 선택합니다.</li><li>이 페이지를 새로고침합니다. Chrome도 같은 방식으로 설치합니다.</li></ol></details>}
-        <button className={buttonStyle} disabled={busy === "web" || !extension || !/^https?:\/\//.test(url)} onClick={() => run("web", async () => {
+        <button className={buttonStyle} disabled={busy === "web" || !/^https?:\/\//.test(url.trim())} onClick={() => run("web", async () => {
+          const ready = await detectBrowserExtension(controller.current?.signal);
+          if (controller.current?.signal.aborted) return;
+          setExtension(ready);
+          if (!ready) throw new Error("현재 Findar 페이지에서 확장에 연결할 수 없습니다. cmux 등 앱 내장 브라우저를 사용 중이면 아래 ‘Findar 주소 복사’로 주소를 복사해 Brave·Chrome에서 Findar 자체를 열어주세요. 이미 Brave·Chrome이라면 동일 프로필의 확장 활성화와 localhost 사이트 접근 권한을 확인해주세요.");
           await save();
           const data = await api("fill/web", {});
-          window.postMessage({ type: "FINDAR_CONNECT", token: data.token, seq, url }, location.origin);
+          window.postMessage({ type: "FINDAR_CONNECT", token: data.token, seq, url: url.trim() }, location.origin);
           setNotice("브라우저 연결 요청을 보냈습니다. 열린 지원서에서 확장 기능을 실행해주세요.");
-        })}>웹 지원서 연결</button>
+        })}>{busy === "web" ? "브라우저 연결 확인 중..." : "웹 지원서 연결"}</button>
         <p className="text-xs text-gray-500">실제 지원서 페이지에서 확장 기능의 ‘현재 양식 채우기’를 실행합니다. 입력된 값과 채우지 못한 항목을 확인할 수 있습니다.</p>
       </div>
     </section>}

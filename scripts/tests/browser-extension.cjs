@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const ts = require('typescript');
 (async () => {
   const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/applications/fixture/fill/web')) {
@@ -31,7 +32,11 @@ const assert = require('node:assert/strict');
     const id = new URL(worker.url()).host;
     const page = await context.newPage();
     await page.goto(`http://localhost:${port}/`);
-    await page.waitForTimeout(300);
+    const handshake = ts.transpileModule(fs.readFileSync('lib/browser-extension-client.ts', 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    await page.addScriptTag({ content: `(function () { const exports = {}; ${handshake}; window.detectFindar = exports.detectBrowserExtension; })();` });
+    assert.equal(await page.evaluate(() => window.detectFindar()), true, 'installed extension handshake');
     const opened = context.waitForEvent('page');
     await page.evaluate((port) => window.postMessage({ type: 'FINDAR_CONNECT', seq: 'fixture', token: 'a'.repeat(64), url: `http://127.0.0.1:${port}/apply` }, location.origin), port);
     const application = await opened;
