@@ -46,6 +46,8 @@ export async function POST(
         send({ type: "targets", sectionTypes: targets });
         for (const sectionType of targets) {
           if (closed) return;
+          // 앞 섹션을 기다리는 동안 다른 요청이 완료한 분석은 재사용한다.
+          if (force !== true && !listStaleSections(normalizedName, [sectionType]).length) continue;
           send({ type: "section-start", sectionType });
           try {
             const section = await researchSection(normalizedName, displayName, sectionType);
