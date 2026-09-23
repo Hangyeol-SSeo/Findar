@@ -829,7 +829,7 @@ export default function JobBoard() {
 
       {/* Side Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-full ${panelTab === "company" ? "sm:w-[min(720px,100vw)] lg:w-[min(960px,100vw)]" : "sm:w-[480px]"} bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed top-0 right-0 h-full w-full sm:w-[min(720px,100vw)] bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
           selectedJob ? "translate-x-0" : "translate-x-full"
         }`}
       >
