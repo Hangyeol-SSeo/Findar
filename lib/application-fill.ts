@@ -17,6 +17,7 @@ const labels: Record<string, string> = {
   foreignLanguageSkills: "외국어", awards: "수상", activities: "활동", research: "연구",
   schoolName: "학교명", schoolLevel: "학교 구분", major: "전공", gpa: "학점", gpaMax: "학점 만점", status: "졸업 상태",
   companyName: "회사명", position: "직위", department: "부서", duties: "담당 업무", startDate: "시작일", endDate: "종료일",
+  resignReason: "퇴사 사유", employmentType: "고용형태",
   militaryStatus: "병역", militaryBranch: "군별", militaryRank: "계급", militaryServiceStart: "입대일", militaryServiceEnd: "전역일",
   portfolioLinks: "포트폴리오 링크", skillsNote: "보유 기술", issuer: "발급 기관", issuedDate: "취득일", score: "점수", testName: "시험명",
 };
@@ -87,7 +88,13 @@ export function buildEssayFillSources(answers: SavedAnswer[]): FillSource[] {
   return answers.flatMap((a, i) => a.source === "user_question" && a.status === "draft" && a.answer.trim()
     ? [{ id: `essay.${i}`, label: a.question, value: a.answer, kind: "essay" as const }] : []);
 }
-const compact = (s: string) => s.toLowerCase().replace(/[\s\p{P}]/gu, "");
+// 실제 라벨엔 "(100자 이내)", "(10,000자 이내)", "*", "(필수)" 같은 부가 안내가 자주 붙는데
+// 공백/기호만 지우는 것만으로는 숫자·글자가 그대로 남아 정확 일치 조회를 방해한다
+// (예: "내용 (10,000자 이내)" → "내용10000자이내" ≠ "내용"). 사전 조회 전에 먼저 뗀다.
+const compact = (s: string) => s.toLowerCase()
+  .replace(/\(?[\d,]+\s*자\s*(?:이내|이하|내외|제한)\)?/g, "")
+  .replace(/[*※]|\(?필수\)?|\(?선택\)?/g, "")
+  .replace(/[\s\p{P}]/gu, "");
 function essayTarget(target: FillTarget, source: FillSource) {
   const text = compact(`${target.label} ${target.context ?? ""}`);
   const question = compact(source.label);
@@ -97,21 +104,33 @@ function essayTarget(target: FillTarget, source: FillSource) {
 // Use structural metadata for repeated rows. Values always come from saved sources.
 export function deterministicFillAssignments(targets: FillTarget[], sources: FillSource[]) {
   const personal: Record<string, string> = { 성명: "name", 이름: "name", 한글: "name", 한자: "nameHanja", 영문: "nameEn", 생년월일: "birthDate", 주소: "fullAddress", 이메일: "email", email: "email", 휴대폰: "phone", 휴대전화: "phone", 연락처: "phone", 취미: "hobbies", 특기: "specialties", 종교: "religion" };
-  const groups: Record<string, { prefix: string; fields: Record<string, string> }> = {
-    학력: { prefix: "education", fields: { 구분: "school", 학교명: "schoolName", 전공: "major", 기간: "period", 평점만점: "grade", 졸업구분: "status" } },
-    경력: { prefix: "workExperiences", fields: { 기간: "period", 회사명: "companyName", 부서직위: "departmentPosition", 해당업무: "duties", 담당업무: "duties" } },
-    수상내역: { prefix: "awards", fields: { 수상일: "date", 대회명: "name", 내용: "detail" } },
-    외국어능력: { prefix: "languageTests", fields: { 구분: "testName", 등급및수준: "score", 취득일: "date" } },
-    자격사항: { prefix: "certifications", fields: { 구분: "name", 자격증명: "name", 취득일: "issuedDate", 발급기관: "issuer" } },
+  // 실제 폼 제목은 "경력" 한 단어보다 "경력사항"/"근무경력"처럼 접미가 붙는 경우가 훨씬
+  // 흔해서, 그룹당 자주 쓰이는 표기 몇 가지를 모두 인정한다(정확히 일치할 때만 매칭 —
+  // "수상경력"이 "경력"을 부분 포함하듯 서로 다른 그룹끼리 겹치는 문자열이 있어서
+  // 접두/부분 매칭은 쓰지 않는다).
+  const groups: Record<string, { headings: string[]; prefix: string; fields: Record<string, string> }> = {
+    학력: { headings: ["학력", "학력사항", "학력정보"], prefix: "education", fields: { 구분: "school", 학교명: "schoolName", 전공: "major", 기간: "period", 평점만점: "grade", 졸업구분: "status" } },
+    // 부서/직위를 한 칸에 같이 받는 폼(부서직위)과 따로 받는 폼(근무부서 + 직급/직책)이 둘 다
+    // 흔해서 두 형태 모두 매핑해둔다.
+    경력: { headings: ["경력", "경력사항", "근무경력", "경력정보"], prefix: "workExperiences", fields: { 기간: "period", 회사명: "companyName", 부서직위: "departmentPosition", 근무부서: "department", 부서: "department", 직급: "position", 직책: "position", 직급직책: "position", 해당업무: "duties", 담당업무: "duties", 고용형태: "employmentType", 퇴사사유: "resignReason", 이직사유: "resignReason", 이직퇴사사유: "resignReason" } },
+    수상내역: { headings: ["수상내역", "수상경력", "수상사항"], prefix: "awards", fields: { 수상일: "date", 대회명: "name", 내용: "detail" } },
+    외국어능력: { headings: ["외국어능력", "어학능력", "외국어", "어학"], prefix: "languageTests", fields: { 구분: "testName", 등급및수준: "score", 취득일: "date" } },
+    자격사항: { headings: ["자격사항", "자격증", "자격증사항", "자격면허"], prefix: "certifications", fields: { 구분: "name", 자격증명: "name", 취득일: "issuedDate", 발급기관: "issuer" } },
   };
   return targets.flatMap((t) => {
     if (!permittedTarget(t)) return [];
     const label = compact(t.label), section = compact(t.section ?? "");
     let id: string | undefined;
-    const group = groups[section];
+    const group = Object.values(groups).find((g) => g.headings.includes(section));
     if (group && t.rowIndex !== undefined && group.fields[label]) id = `${group.prefix}.${t.rowIndex}.${group.fields[label]}`;
     else if (section === "병역") id = ({ 복무기간: "militaryPeriod", 군별: "militaryBranch", 계급: "militaryRank", 병과: "militarySpecialty" } as Record<string, string>)[label];
-    else if (!section) id = personal[label];
+    // 인식하지 못한(비반복) 제목 아래라면 개인정보 칸일 수 있으니 그대로 시도한다 — section이
+    // 원래 항상 비어 있던 시절의 동작을 유지하는 것: 이제 브라우저 확장이 실제 제목을
+    // 채워 보내므로, "섹션이 있으면 개인정보 매칭을 하지 않는다"로 두면 인적사항 같은
+    // 흔한 제목 아래의 이름/이메일 칸까지 전부 매칭이 끊긴다. 반복 그룹으로 인식됐는데
+    // 그 안에서 이 라벨이 그룹 필드로 안 잡힌 경우에만 개인정보 매칭을 건너뛴다(엉뚱하게
+    // 경력 행의 "이메일" 같은 칸이 지원자 개인 이메일로 새는 것을 막기 위해).
+    else if (!group) id = personal[label];
     const exactEssays = sources.filter((s) => s.kind === "essay" && compact(s.label) === label);
     if (exactEssays.length === 1) id = exactEssays[0].id;
     // A single free-form answer can fill a generic 자기소개서 box; never combine unrelated answers.
