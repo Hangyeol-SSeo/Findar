@@ -219,6 +219,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
       </div>
       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
         <h4 className="text-sm font-medium">Brave · Chrome 웹 지원서 입력</h4>
+        <p className="text-xs text-gray-500"><a className="text-blue-600 underline" href="/api/application-fill/extension">최신 확장 기능 다운로드</a> · 업데이트 후 압축 해제 폴더를 교체하고 브라우저 확장 프로그램 관리에서 새로고침해주세요.</p>
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
           <p>Findar 화면과 지원 사이트를 모두 확장을 설치한 Brave·Chrome에서 열어주세요. cmux 등 앱 내장 브라우저에서는 Brave에 설치한 확장을 사용할 수 없습니다.</p>
           <button type="button" className="mt-1 font-medium underline underline-offset-2" onClick={() => run("copy-address", async () => {
