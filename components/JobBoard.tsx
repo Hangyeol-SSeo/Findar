@@ -829,7 +829,7 @@ export default function JobBoard() {
 
       {/* Side Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-full ${panelTab === "company" ? "sm:w-[min(720px,100vw)]" : "sm:w-[480px]"} bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed top-0 right-0 h-full w-full ${panelTab === "company" ? "sm:w-[min(720px,100vw)] lg:w-[min(960px,100vw)]" : "sm:w-[480px]"} bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
           selectedJob ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -1019,7 +1019,7 @@ export default function JobBoard() {
             )}
 
             {/* Panel footer */}
-            <div className="p-5 border-t border-gray-100 space-y-2">
+            <div className={panelTab === "company" ? "shrink-0 grid grid-cols-2 gap-2 border-t border-gray-100 px-5 py-2" : "p-5 border-t border-gray-100 space-y-2"}>
               {selectedJob.siteUrl && (
                 <a
                   href={selectedJob.siteUrl}

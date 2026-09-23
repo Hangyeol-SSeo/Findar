@@ -148,46 +148,46 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-gray-100 bg-white px-4 py-4 sm:px-6">
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div><p className="text-sm font-semibold text-gray-900">회사 이해하기</p><p className="mt-1 text-xs text-gray-500">{5 - missingCount}/5개 항목 · 읽고 싶은 주제를 선택하세요</p></div>
+    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[176px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_auto]">
+      <div className="shrink-0 border-b border-gray-100 bg-white px-4 py-3 lg:row-span-2 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:bg-gray-50/70 lg:px-3 lg:py-5">
+        <div className="mb-3 flex items-center justify-between gap-3 lg:flex-col lg:items-stretch lg:gap-4 lg:mb-5">
+          <div><p className="text-sm font-semibold text-gray-900">회사 이해하기</p><p className="mt-1 text-xs text-gray-500">{5 - missingCount}/5개 항목 확인</p></div>
           <button onClick={() => runResearch()} disabled={anyResearching} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
             {anyResearching ? "조사 중..." : "리서치 업데이트"}
           </button>
         </div>
-        <div role="tablist" aria-label="회사 리서치 항목" className="flex gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">
+        <div role="tablist" aria-label="회사 리서치 항목" className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
           {COMPANY_SECTION_TYPES.map((type, index) => {
             const item = sections[type];
             const selected = activeSection === type;
             return <button key={type} id={`research-tab-${type}`} role="tab" aria-selected={selected} aria-controls={`research-panel-${type}`} tabIndex={selected ? 0 : -1}
               onClick={() => selectSection(type)} onKeyDown={(event) => {
                 let next = index;
-                if (event.key === "ArrowRight") next = (index + 1) % COMPANY_SECTION_TYPES.length;
-                else if (event.key === "ArrowLeft") next = (index + COMPANY_SECTION_TYPES.length - 1) % COMPANY_SECTION_TYPES.length;
+                if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % COMPANY_SECTION_TYPES.length;
+                else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index + COMPANY_SECTION_TYPES.length - 1) % COMPANY_SECTION_TYPES.length;
                 else if (event.key === "Home") next = 0;
                 else if (event.key === "End") next = COMPANY_SECTION_TYPES.length - 1;
                 else return;
                 event.preventDefault(); selectSection(COMPANY_SECTION_TYPES[next]);
                 document.getElementById(`research-tab-${COMPANY_SECTION_TYPES[next]}`)?.focus();
               }}
-              className={`min-w-[140px] shrink-0 rounded-xl border px-3 py-2.5 text-left sm:min-w-0 transition-colors ${selected ? "border-blue-300 bg-blue-50 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"}`}>
-              <span className="block text-xs font-semibold">{COMPANY_SECTION_LABELS[type]}</span>
-              <span className={`mt-1 block text-[11px] ${researching.has(type) ? "text-blue-600 animate-pulse" : "text-gray-500"}`}>
+              className={`shrink-0 rounded-lg border px-3 py-2 text-left lg:min-w-0 lg:py-3 transition-colors ${selected ? "border-blue-200 bg-blue-50 text-blue-800" : "border-transparent bg-transparent text-gray-600 hover:bg-gray-100"}`}>
+              <span className="block whitespace-nowrap text-xs font-semibold">{COMPANY_SECTION_LABELS[type]}</span>
+              <span className={`mt-1 hidden text-[11px] lg:block ${researching.has(type) ? "text-blue-600 animate-pulse" : "text-gray-500"}`}>
                 {researching.has(type) ? "조사 중" : !item ? "미조사" : item.status === "failed" ? "조사 실패" : item.status === "partial" ? "일부 확인" : `${timeAgo(item.generatedAt)} 업데이트`}
               </span>
             </button>;
           })}
         </div>
-        <p className="mt-3 hidden text-[11px] text-gray-400 sm:block">업데이트는 미조사·오래된 항목만 확인합니다. 항목 전환에는 추가 조사가 발생하지 않습니다.</p>
+        <p className="mt-5 hidden text-[11px] leading-5 text-gray-400 lg:block">업데이트는 미조사·오래된 항목만 확인합니다. 항목 전환에는 추가 조사가 발생하지 않습니다.</p>
         {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
         {info && <p role="status" className="mt-2 text-xs text-blue-600">{info}</p>}
       </div>
 
-      <div ref={readingRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+      <div ref={readingRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-8 lg:col-start-2 lg:row-start-1 lg:px-9 lg:py-6">
         <article id={`research-panel-${activeSection}`} role="tabpanel" aria-labelledby={`research-tab-${activeSection}`} tabIndex={0} className="mx-auto max-w-2xl outline-offset-4">
           <div className="mb-5 flex items-start justify-between gap-3 border-b border-gray-100 pb-4">
-            <div><p className="mb-1 text-xs font-medium text-blue-600">RESEARCH {String(activeIndex + 1).padStart(2, "0")}</p><h4 className="text-xl font-semibold tracking-tight text-gray-900">{COMPANY_SECTION_LABELS[activeSection]}</h4>
+            <div><h4 className="text-xl font-semibold tracking-tight text-gray-900">{COMPANY_SECTION_LABELS[activeSection]}</h4>
               {section && <p className="mt-2 text-xs text-gray-400">{timeAgo(section.generatedAt)} 업데이트 · 출처 {section.sources.length}개</p>}
             </div>
             <button onClick={() => runResearch([activeSection], true)} disabled={anyResearching} className="shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40">{section ? "다시 조사" : "이 항목 조사"}</button>
@@ -201,7 +201,7 @@ export default function CompanyResearchPanel({ companyName }: { companyName: str
           </details>}
         </article>
       </div>
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-gray-100 px-4 py-3 text-xs sm:px-6">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-gray-100 px-4 py-1 text-xs lg:col-start-2 lg:row-start-2 lg:px-7">
         <button disabled={activeIndex === 0} onClick={() => selectSection(COMPANY_SECTION_TYPES[activeIndex - 1])} className="rounded-lg px-2 py-2 text-gray-600 hover:bg-gray-50 disabled:opacity-30">← 이전 항목</button>
         <span className="text-gray-400">{activeIndex + 1} / {COMPANY_SECTION_TYPES.length}</span>
         <button disabled={activeIndex === COMPANY_SECTION_TYPES.length - 1} onClick={() => selectSection(COMPANY_SECTION_TYPES[activeIndex + 1])} className="rounded-lg px-2 py-2 text-blue-600 hover:bg-blue-50 disabled:opacity-30">다음 항목 →</button>
