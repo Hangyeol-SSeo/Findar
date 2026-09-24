@@ -92,7 +92,23 @@ export function resolveFillPlan(raw: unknown, targets: FillTarget[], sources: Fi
     const matches = entries.filter((a) => a && a.targetId === target.id);
     const source = matches.length === 1 ? sources.find((s) => s.id === matches[0].sourceId) : undefined;
     if (!permittedTarget(target)) plan.skipped.push({ label: reportLabel, reason: "직접 확인이 필요한 항목" });
-    else if (!source) plan.skipped.push({ label: reportLabel, reason: "저장된 정보와 확실하게 연결하지 못했습니다." });
+    else if (!source) {
+      const section = compact(`${target.section ?? ""} ${target.context ?? ""}`);
+      const label = compact(target.label);
+      const essayField = /자기소개서|경력기술서|역량기술서/.test(section);
+      const workRows = new Set(sources.flatMap((candidate) => {
+        const row = sourceRow(candidate.id);
+        return row?.group === "workExperiences" ? [row.index] : [];
+      }));
+      const reason = essayField && !sources.some((candidate) => candidate.kind === "essay")
+        ? "이 공고에 저장된 자기소개서 답변이 없습니다. 지원 도우미에서 해당 문항의 답변을 작성해 저장해주세요."
+        : /연봉|급여/.test(label)
+          ? "저장된 연봉 정보가 없습니다."
+          : targetRepeatedGroup(target) === "workExperiences" && target.rowIndex === undefined && workRows.size > 1
+            ? `저장된 경력 ${workRows.size}건 중 입력할 항목을 특정할 수 없습니다.`
+            : "저장된 정보와 확실하게 연결하지 못했습니다.";
+      plan.skipped.push({ label: reportLabel, reason });
+    }
     else if (!sourceMatchesRow(target, source, sources)) plan.skipped.push({ label: reportLabel, reason: "반복 항목 순번을 확인할 수 없습니다." });
     else if (usedSources.has(source.id)) plan.skipped.push({ label: reportLabel, reason: "저장된 정보가 다른 입력칸에 이미 연결되었습니다." });
     else if (!sourceMatchesTargetSemantics(target, source)) plan.skipped.push({ label: reportLabel, reason: "저장된 항목 유형과 일치하지 않습니다." });
@@ -131,8 +147,10 @@ const REPEATED_GROUP_HINTS: [string, string[]][] = [
   ["awards", ["수상내역", "수상경력", "수상사항", "포상내역", "awards", "수상"]],
   ["activities", ["학내외활동", "대외활동", "활동사항", "사회활동", "activities", "활동"]],
   ["certifications", ["자격증", "자격사항", "자격면허", "certifications"]],
-  ["languageTests", ["공인어학시험", "어학시험", "어학성적", "languageTests"]],
+  ["languageTests", ["공인어학시험", "어학시험", "어학성적", "languageTests", "어학"]],
   ["foreignLanguageSkills", ["외국어능력", "외국어활용능력", "어학능력", "foreignlanguageskills"]],
+  ["overseasExperiences", ["해외경험", "해외활동"]],
+  ["computerSkills", ["컴퓨터활용능력", "컴퓨터능력"]],
 ];
 function targetRepeatedGroup(target: FillTarget) {
   const label = compact(target.label);
@@ -165,6 +183,7 @@ function sourceMatchesRow(target: FillTarget, source: FillSource, sources: FillS
 }
 function sourceMatchesTargetSemantics(target: FillTarget, source: FillSource) {
   const targetText = compact(`${target.label} ${target.context ?? ""} ${target.section ?? ""}`);
+  if (source.id === "nationality" && !/국적/.test(compact(`${target.label} ${target.section ?? ""}`))) return false;
   if (/프로그램명/.test(targetText) && /^projects\.\d+\.name$/.test(source.id)) return false;
   if (/주최기관/.test(targetText) && /^awards\.\d+\.organizer$/.test(source.id)) return false;
   if (/수여기관/.test(targetText) && /^research\.\d+\.organizer$/.test(source.id)) return false;
@@ -174,8 +193,10 @@ function essayTarget(target: FillTarget, source: FillSource) {
   const text = compact(`${target.label} ${target.context ?? ""} ${target.section ?? ""}`);
   const question = compact(source.label);
   if (question.length >= 4 && text.includes(question)) return true;
-  const cues = ["자기소개", "지원동기", "성장과정", "입사후", "장단점", "직무역량", "경험", "포부", "essay", "coverletter"];
-  return cues.some((cue) => text.includes(cue) && question.includes(cue));
+  // Generic words such as "자기소개" and "경험" appear in unrelated questions.
+  const cues = ["지원동기", "성장과정", "입사후", "장단점", "직무역량", "경력기술서", "역량기술서", "포부"];
+  const questionCues = cues.filter((cue) => question.includes(cue));
+  return questionCues.length > 0 && questionCues.every((cue) => text.includes(cue));
 }
 // Use structural metadata for repeated rows. Values always come from saved sources.
 export function deterministicFillAssignments(targets: FillTarget[], sources: FillSource[]) {
@@ -185,7 +206,7 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
     ["성명", "name"], ["이름", "name"], ["생년월일", "birthDate"], ["우편번호", "postalCode"],
     ["상세주소", "addressDetail"], ["기본주소", "address"], ["주소", "fullAddress"], ["이메일", "email"], ["email", "email"],
     ["휴대전화", "phone"], ["휴대폰", "phone"], ["연락처", "phone"], ["전화번호", "phone"],
-    ["취미", "hobbies"], ["특기", "specialties"], ["종교", "religion"], ["국가검색", "nationality"], ["국적", "nationality"],
+    ["취미", "hobbies"], ["특기", "specialties"], ["종교", "religion"], ["국적", "nationality"],
   ];
   const groups: MappingGroup[] = [
     { headings: ["학력", "학력사항", "학력정보", "교육사항"], prefix: "education", fields: [
@@ -217,7 +238,7 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
       ["프로젝트명", "name"], ["과제명", "name"], ["발주기관", "client"], ["발주처", "client"], ["근무처", "workplace"],
       ["기여도", "contributionPercent"], ["시작일", "startDate"], ["종료일", "endDate"], ["수행기간", "period"], ["역할", "role"], ["명칭", "name"],
     ] },
-    { headings: ["공인어학시험", "어학시험", "어학성적", "외국어시험", "languageTests"], prefix: "languageTests", fields: [
+    { headings: ["공인어학시험", "어학시험", "어학성적", "외국어시험", "languageTests", "어학"], prefix: "languageTests", fields: [
       ["시험명", "testName"], ["어학시험", "testName"], ["시험종류", "testName"], ["점수급", "score"], ["성적", "score"], ["점수", "score"], ["취득일", "date"], ["응시일", "date"],
     ] },
     { headings: ["외국어능력", "어학능력", "외국어구사능력", "외국어활용능력", "foreignlanguageskills"], prefix: "foreignLanguageSkills", fields: [

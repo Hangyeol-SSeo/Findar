@@ -18,6 +18,11 @@
   const sectionInfo = (heading, group, kind) => ({
     text: stripCounter(textOf(heading)), group, kind, rowIndex: counterIndex(textOf(heading)),
   });
+  // Ninehire-style forms keep the real field title in a sibling of a deeply nested input.
+  // A bounded ancestor walk cannot reach that title from career and personal inputs.
+  const formBlock = (el) => el.closest('[class*="ApplicationFormInput__Layout"]');
+  const formBlockTitle = (el) => formBlock(el)?.querySelector('[class*="EditableLabel__Input"]');
+  const formBlockDescription = (el) => formBlock(el)?.querySelector('[class*="EditableDescription__Input"]');
   const isSectionHeading = (el) => {
     if (!el.getClientRects().length) return false;
     if (el.matches?.(HEADING)) return true;
@@ -31,6 +36,9 @@
   // AI 매칭 둘 다 몇 번째 행인지 맞춰서 처리할 수 있다 — 라벨(예: "회사명")만으로는 폼에
   // 경력이 여러 개일 때 그중 몇 번째 칸인지 구분할 방법이 없다.
   function findSection(el) {
+    const block = formBlock(el);
+    const title = formBlockTitle(el);
+    if (block && title && textOf(title)) return sectionInfo(title, block, "form-block");
     const fieldset = el.closest("fieldset");
     if (fieldset) {
       const legend = fieldset.querySelector(":scope > legend");
@@ -90,6 +98,9 @@
   }
 
   function nearbyLabelOf(el) {
+    const block = formBlock(el);
+    const title = formBlockTitle(el);
+    if (block && title && block.querySelectorAll(CONTROL).length === 1) return textOf(title);
     for (let branch = el, depth = 0; branch?.parentElement && depth < 4; depth++, branch = branch.parentElement) {
       const parent = branch.parentElement;
       const candidates = [...parent.querySelectorAll("label,dt,th,legend,[role=heading],[class*=label],[class*=Label],[class*=title],[class*=Title]")]
@@ -118,7 +129,8 @@
   // 있는가"를 최대한 건진다. 이미 너무 커진(다른 칸까지 섞였을) 블록은 위로 올라가도 더
   // 커지기만 하므로 그 지점에서 포기한다 — 틀린 문맥보다 문맥 없음이 낫다.
   const contextOf = (el) => {
-    const related = [nearbyLabelOf(el), el.closest("fieldset")?.querySelector(":scope > legend")].map(textOf).filter(Boolean);
+    const related = [formBlockTitle(el), formBlockDescription(el), nearbyLabelOf(el),
+      el.closest("fieldset")?.querySelector(":scope > legend")].map(textOf).filter(Boolean);
     const structural = [el.closest("tr")].map(textOf).filter(Boolean);
     if (structural.length) return [...new Set([...related, ...structural])].join(" ").slice(0, 4000);
     for (let node = el.parentElement, depth = 0; node && depth < 4; node = node.parentElement, depth++) {

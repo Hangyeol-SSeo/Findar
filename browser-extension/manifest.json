@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Findar 지원서 입력",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "현재 지원서의 빈 입력칸에 Findar에 저장한 정보를 채웁니다.",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
