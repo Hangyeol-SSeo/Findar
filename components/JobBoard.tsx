@@ -432,9 +432,6 @@ export default function JobBoard() {
     [trackedJobs]
   );
 
-  // 지원 현황 보기 안에서 마지막 공고의 상태를 되돌려도 빠져나올 버튼은 남겨둔다(찜 토글과 같은 이유).
-  const showAppliedToggle = appliedJobs.length > 0 || viewMode === "applied";
-
   const visibleAppliedJobs = useMemo(
     () =>
       appliedJobs.filter(
@@ -529,20 +526,76 @@ export default function JobBoard() {
         className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${selectedJob ? "mr-[480px]" : ""}`}
       >
         <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
-          {/* Header */}
-          <header className="mb-6 flex items-start justify-between">
+          {/* Header: 브랜드 + 공고 수집(페이지 수 · 매칭 · 새로고침) + 설정 */}
+          <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
               <p className="text-gray-500 mt-1">
                 금융투자협회 회원사 채용공고를 한눈에
               </p>
             </div>
-            <Link
-              href="/settings"
-              className="text-sm text-gray-400 hover:text-gray-600 transition-colors mt-1"
-            >
-              설정
-            </Link>
+            <div className="flex items-center gap-3">
+              <div
+                className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1"
+                role="group"
+                aria-label="공고 수집"
+              >
+                <label
+                  className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-gray-600 ${loading ? "opacity-50" : ""}`}
+                  title="수집할 페이지 수 (1페이지 = 10건)"
+                >
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={MIN_PAGES}
+                    max={MAX_PAGES}
+                    value={pagesInput}
+                    disabled={loading}
+                    onChange={(e) => setPagesInput(e.target.value)}
+                    onBlur={commitPagesInput}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitPagesInput();
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="w-10 text-right bg-gray-50 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  />
+                  페이지 <span className="text-gray-400">({pages * 10}건)</span>
+                </label>
+                <button
+                  onClick={() => chooseMatchEnabled(!matchEnabled)}
+                  title="이력서 매칭 사용 여부"
+                  className={`text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+                    matchEnabled
+                      ? "bg-blue-50 text-blue-700"
+                      : "text-gray-500 hover:bg-gray-50"
+                  }`}
+                >
+                  매칭 {matchEnabled ? "켜짐" : "꺼짐"}
+                </button>
+                <button
+                  onClick={() => fetchJobs(matchEnabled, pages)}
+                  disabled={loading}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                >
+                  {loading && (
+                    <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                  {loading ? "수집 중..." : "새로고침"}
+                </button>
+              </div>
+              <Link
+                href="/settings"
+                className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                설정
+              </Link>
+            </div>
           </header>
 
           {matchEnabled && !hasProfile && profileKnown && !loading && (
@@ -590,75 +643,121 @@ export default function JobBoard() {
             </div>
           )}
 
-          {/* Controls */}
-          <div className="flex flex-col gap-3 mb-6">
-            <input
-              type="text"
-              placeholder="회사명, 직무, 키워드 검색..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-
-            {/* 채용유형 필터 */}
-            <div className="flex gap-2 flex-wrap">
-              {(
-                ["전체", "신입", "경력", "인턴"] as FilterType[]
-              ).map((f) => (
+          {/* 보기 탭: 전체 공고 / 지원 현황 / 숨긴 공고 */}
+          <nav className="mb-4 flex items-center gap-6 border-b border-gray-200" role="tablist" aria-label="공고 보기">
+            {(
+              [
+                { mode: "list", label: "전체 공고", count: jobs.length - hiddenJobs.length },
+                { mode: "applied", label: "지원 현황", count: appliedJobs.length },
+                { mode: "hidden", label: "숨긴 공고", count: hiddenJobs.length },
+              ] as { mode: ViewMode; label: string; count: number }[]
+            ).map(({ mode, label, count }) => {
+              const active = viewMode === mode;
+              return (
                 <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                    filter === f
-                      ? "bg-blue-600 text-white"
-                      : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+                  key={mode}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    if (mode === "applied" && !active) loadTrackedJobs();
+                    setViewMode(mode);
+                  }}
+                  className={`-mb-px flex items-center gap-1.5 border-b-2 pb-2.5 text-sm font-medium transition-colors ${
+                    active
+                      ? "border-gray-900 text-gray-900"
+                      : "border-transparent text-gray-400 hover:text-gray-600"
                   }`}
                 >
-                  {f}
-                </button>
-              ))}
-            </div>
-
-            {/* 직군 필터 */}
-            {allCategories.length > 0 && (
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  onClick={() => setPositionFilter("전체")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    positionFilter === "전체"
-                      ? "bg-indigo-600 text-white"
-                      : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
-                  }`}
-                >
-                  직군 전체
-                </button>
-                {allCategories.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() =>
-                      setPositionFilter(positionFilter === cat ? "전체" : cat)
-                    }
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      positionFilter === cat
-                        ? "bg-indigo-600 text-white"
-                        : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
+                  {label}
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-xs ${
+                      active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {cat}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
 
-          {/* Status bar */}
-          <div className="flex items-center justify-between mb-4">
+          {/* 검색 · 필터 — 전체 공고와 지원 현황이 함께 쓴다(숨긴 공고 보기에는 적용되지 않음) */}
+          {viewMode !== "hidden" && (
+            <div className="mb-4 rounded-xl border border-gray-100 bg-white p-4 space-y-3">
+              <input
+                type="text"
+                placeholder="회사명, 직무, 키워드 검색..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+
+              {/* 채용유형 필터 */}
+              <div className="flex items-start gap-3">
+                <span className="w-14 shrink-0 pt-1.5 text-xs font-medium text-gray-400">채용유형</span>
+                <div className="flex gap-2 flex-wrap">
+                  {(
+                    ["전체", "신입", "경력", "인턴"] as FilterType[]
+                  ).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                        filter === f
+                          ? "bg-blue-600 text-white"
+                          : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 직군 필터 */}
+              {allCategories.length > 0 && (
+                <div className="flex items-start gap-3">
+                  <span className="w-14 shrink-0 pt-1.5 text-xs font-medium text-gray-400">직군</span>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => setPositionFilter("전체")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        positionFilter === "전체"
+                          ? "bg-indigo-600 text-white"
+                          : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      전체
+                    </button>
+                    {allCategories.map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() =>
+                          setPositionFilter(positionFilter === cat ? "전체" : cat)
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          positionFilter === cat
+                            ? "bg-indigo-600 text-white"
+                            : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 결과 바: 건수 + 목록 표시 옵션(찜한 공고만 / 정렬) */}
+          <div className="flex items-center justify-between mb-4 min-h-8">
             <span className="text-sm text-gray-500">
               {viewMode === "hidden" ? (
                 <span className="text-gray-400">숨긴 공고 {hiddenJobs.length}건</span>
               ) : viewMode === "applied" ? (
                 <>
-                  지원 현황 {visibleAppliedJobs.length}건
+                  {visibleAppliedJobs.length}건
                   <span className="text-gray-400"> · 마감 지난 공고 포함</span>
                 </>
               ) : loading ? (
@@ -672,153 +771,43 @@ export default function JobBoard() {
                 </>
               )}
             </span>
-            <div className="flex items-center gap-2">
-              {/* Group 1: 보기 필터 (지원 현황 / 숨긴 공고 / 찜한 공고) */}
-              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle) && (
-                <div className="flex items-center gap-1.5">
-                  {showAppliedToggle && (
-                    <button
-                      onClick={() => {
-                        if (viewMode !== "applied") loadTrackedJobs();
-                        setViewMode((v) => (v === "applied" ? "list" : "applied"));
-                      }}
-                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
-                        viewMode === "applied"
-                          ? "bg-gray-700 text-white border-gray-700"
-                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M9 11l3 3L22 4" />
-                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                      </svg>
-                      지원 현황 {appliedJobs.length}건
-                    </button>
-                  )}
-                  {hiddenSeqs.size > 0 && (
-                    <button
-                      onClick={() => setViewMode((v) => v === "hidden" ? "list" : "hidden")}
-                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
-                        viewMode === "hidden"
-                          ? "bg-gray-700 text-white border-gray-700"
-                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                        <line x1="1" y1="1" x2="23" y2="23"/>
-                      </svg>
-                      숨긴 공고 {hiddenSeqs.size}건
-                    </button>
-                  )}
-                  {showBookmarkToggle && (
-                    <button
-                      onClick={() => setBookmarkOnly((v) => !v)}
-                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
-                        bookmarkOnly
-                          ? "bg-gray-700 text-white border-gray-700"
-                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                      </svg>
-                      찜한 공고 {bookmarkedJobs.length}건
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* divider: Group 1 → Group 2 */}
-              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle) &&
-                viewMode === "list" &&
-                hasProfile && <div className="w-px h-5 bg-gray-200" />}
-
-              {/* Group 2: 정렬 */}
-              {viewMode === "list" && hasProfile && (
-                <div className="flex bg-gray-100 rounded-lg p-0.5">
-                  {(["추천순", "최신순"] as SortType[]).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setSort(s)}
-                      className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-                        sort === s
-                          ? "bg-white text-gray-900 shadow-sm"
-                          : "text-gray-500 hover:text-gray-700"
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* divider: (Group 1 or Group 2) → Group 3 */}
-              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle || hasProfile) &&
-                viewMode === "list" && <div className="w-px h-5 bg-gray-200" />}
-
-              {viewMode === "list" && (
-                <>
-                  {/* Group 3: 수집 설정 (페이지 수 / 매칭 사용 여부) */}
-                  <div className="flex items-center gap-1.5">
-                    <label
-                      className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 ${loading ? "opacity-50" : ""}`}
-                      title="수집할 페이지 수 (1페이지 = 10건)"
-                    >
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={MIN_PAGES}
-                        max={MAX_PAGES}
-                        value={pagesInput}
-                        disabled={loading}
-                        onChange={(e) => setPagesInput(e.target.value)}
-                        onBlur={commitPagesInput}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            commitPagesInput();
-                            (e.target as HTMLInputElement).blur();
-                          }
-                        }}
-                        className="w-10 text-right bg-transparent focus:outline-none"
-                      />
-                      페이지 ({pages * 10}건)
-                    </label>
-                    <button
-                      onClick={() => chooseMatchEnabled(!matchEnabled)}
-                      title="이력서 매칭 사용 여부"
-                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-                        matchEnabled
-                          ? "bg-blue-50 border-blue-200 text-blue-700"
-                          : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
-                      }`}
-                    >
-                      매칭 {matchEnabled ? "켜짐" : "꺼짐"}
-                    </button>
-                  </div>
-
-                  {/* divider: Group 3 → Group 4 */}
-                  <div className="w-px h-5 bg-gray-200" />
-
-                  {/* Group 4: 새로고침 */}
+            {viewMode === "list" && (
+              <div className="flex items-center gap-2">
+                {showBookmarkToggle && (
                   <button
-                    onClick={() => fetchJobs(matchEnabled, pages)}
-                    disabled={loading}
-                    className="text-sm px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                    onClick={() => setBookmarkOnly((v) => !v)}
+                    aria-pressed={bookmarkOnly}
+                    className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                      bookmarkOnly
+                        ? "bg-amber-50 text-amber-700 border-amber-200"
+                        : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                    }`}
                   >
-                    {loading && (
-                      <svg className="animate-spin h-3.5 w-3.5 text-gray-500" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                    )}
-                    {loading ? "로딩 중..." : "새로고침"}
+                    <svg className="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                    찜한 공고만 {bookmarkedJobs.length}
                   </button>
-                </>
-              )}
-            </div>
+                )}
+                {hasProfile && (
+                  <div className="flex bg-gray-100 rounded-lg p-0.5">
+                    {(["추천순", "최신순"] as SortType[]).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setSort(s)}
+                        className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                          sort === s
+                            ? "bg-white text-gray-900 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Error */}
