@@ -4,7 +4,7 @@ import { join } from "path";
 import type { JobSummary } from "./summarizer";
 import type { JobMatch } from "./matcher";
 import { categorizePositions } from "./position-categories";
-import type { ApplicationStatus } from "./application-status";
+import { TRACKED_APPLICATION_STATUSES, type ApplicationStatus } from "./application-status";
 import { normalizeCompanyName } from "./company-normalize";
 
 const DATA_DIR = join(process.cwd(), "data");
@@ -594,18 +594,52 @@ const selectActiveJobsStmt = db.prepare(`
     jobs.date DESC
 `);
 
+// 마감일(deadline) 또는 접수기간 끝날짜가 오늘 이후면 열린 공고. 둘 다 없으면 마감 미정으로 보고 열린 것으로 친다.
+function isJobOpen(row: Pick<JobRow, "deadline" | "applicationPeriod">, today: string): boolean {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(row.deadline)) return row.deadline >= today;
+  const periodEnd = applicationPeriodEnd(row.applicationPeriod);
+  if (periodEnd) return periodEnd >= today;
+  return true;
+}
+
 export function getActiveJobs(): JobWithMatch[] {
   const today = todayYmd();
   const rows = selectActiveJobsStmt.all() as JobRow[];
-  return rows
-    .filter((row) => {
-      const deadlineOk = /^\d{4}-\d{2}-\d{2}$/.test(row.deadline);
-      if (deadlineOk) return row.deadline >= today;
-      const periodEnd = applicationPeriodEnd(row.applicationPeriod);
-      if (periodEnd) return periodEnd >= today;
-      return true;
-    })
-    .map(rowToJobWithMatch);
+  return rows.filter((row) => isJobOpen(row, today)).map(rowToJobWithMatch);
+}
+
+export type TrackedApplicationJob = JobWithMatch & {
+  submittedAt: number | null;
+  applicationUpdatedAt: number;
+  expired: boolean;
+};
+
+// "지원 현황" 보기용: 제출완료 이후 단계의 공고는 마감이 지나도, 사용자가 숨겼어도 계속 돌려준다.
+// getActiveJobs()와 달리 마감/hidden 필터가 없다 — 지원 과정을 추적하는 공고가 기한 경과로 사라지면 안 되므로.
+const selectTrackedJobsStmt = db.prepare(`
+  SELECT jobs.*,
+    applications.status AS applicationStatus,
+    applications.notes AS applicationNotes,
+    applications.submittedAt AS submittedAt,
+    applications.updatedAt AS applicationUpdatedAt
+  FROM jobs
+  JOIN applications ON applications.seq = jobs.seq
+  WHERE applications.status IN (${TRACKED_APPLICATION_STATUSES.map(() => "?").join(", ")})
+  ORDER BY applications.updatedAt DESC
+`);
+
+export function getTrackedApplicationJobs(): TrackedApplicationJob[] {
+  const today = todayYmd();
+  const rows = selectTrackedJobsStmt.all(...TRACKED_APPLICATION_STATUSES) as (JobRow & {
+    submittedAt: number | null;
+    applicationUpdatedAt: number;
+  })[];
+  return rows.map((row) => ({
+    ...rowToJobWithMatch(row),
+    submittedAt: row.submittedAt,
+    applicationUpdatedAt: row.applicationUpdatedAt,
+    expired: !isJobOpen(row, today),
+  }));
 }
 
 const selectJobBySeqStmt = db.prepare(`${JOB_WITH_APPLICATION_SELECT} WHERE jobs.seq = ?`);

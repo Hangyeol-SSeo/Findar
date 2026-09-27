@@ -19,6 +19,20 @@ export const APPLICATION_STATUSES: ApplicationStatus[] = [
   "최종합격",
 ];
 
+// 실제로 지원서를 낸 뒤의 단계들. 이 상태의 공고는 마감이 지나도 "지원 현황" 보기에서
+// 계속 추적할 수 있어야 한다(getActiveJobs()의 마감 필터와 별개로 getTrackedApplicationJobs()가 조회).
+export const TRACKED_APPLICATION_STATUSES: ApplicationStatus[] = [
+  "제출완료",
+  "서류합격",
+  "면접",
+  "불합격",
+  "최종합격",
+];
+
+export function isTrackedApplicationStatus(status: ApplicationStatus | undefined): boolean {
+  return !!status && TRACKED_APPLICATION_STATUSES.includes(status);
+}
+
 export function isApplicationStatus(value: unknown): value is ApplicationStatus {
   return (
     typeof value === "string" &&

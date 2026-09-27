@@ -9,7 +9,9 @@ import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
   APPLICATION_STATUSES,
+  TRACKED_APPLICATION_STATUSES,
   getApplicationStatusColor,
+  isTrackedApplicationStatus,
   type ApplicationStatus,
 } from "@/lib/application-status";
 
@@ -35,11 +37,14 @@ interface JobSummary {
   matchReasoning?: string;
   applicationStatus?: ApplicationStatus;
   bookmarked?: boolean;
+  // 지원 현황(/api/applications/tracked)으로 받은 공고에만 있다.
+  submittedAt?: number | null;
+  expired?: boolean;
 }
 
 type FilterType = "전체" | "신입" | "경력" | "인턴";
 type SortType = "추천순" | "최신순";
-type ViewMode = "list" | "hidden";
+type ViewMode = "list" | "hidden" | "applied";
 
 const MATCH_ENABLED_KEY = "findar:matchEnabled";
 const CRAWL_PAGES_KEY = "findar:crawlPages";
@@ -104,6 +109,9 @@ export default function JobBoard() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
   const [bookmarkOnly, setBookmarkOnly] = useState(false);
+  // 제출완료 이후 단계의 공고. 일반 목록(jobs)은 마감이 지나면 서버에서 빠지므로 따로 받아온다.
+  const [trackedJobs, setTrackedJobs] = useState<JobSummary[]>([]);
+  const [appliedStatusFilter, setAppliedStatusFilter] = useState<ApplicationStatus | "전체">("전체");
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -301,6 +309,19 @@ export default function JobBoard() {
       .catch(() => {});
   }, []);
 
+  const loadTrackedJobs = useCallback(() => {
+    fetch("/api/applications/tracked", { cache: "no-store" })
+      .then((r) => r.json())
+      .then(({ jobs }: { jobs?: JobSummary[] }) => {
+        if (Array.isArray(jobs)) setTrackedJobs(jobs);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadTrackedJobs();
+  }, [loadTrackedJobs]);
+
   const hideJob = useCallback((seq: string) => {
     setHiddenSeqs((prev) => new Set([...prev, seq]));
     fetch("/api/jobs/hide", {
@@ -331,17 +352,26 @@ export default function JobBoard() {
       setSelectedJob((prev) =>
         prev && prev.seq === seq ? { ...prev, applicationStatus: status } : prev
       );
+      setTrackedJobs((prev) =>
+        prev.map((j) => (j.seq === seq ? { ...j, applicationStatus: status } : j))
+      );
+      // 제출완료로 처음 바뀐 공고를 지원 현황에 넣고 submittedAt을 받아오려면 서버 값이 필요하다.
       fetch("/api/applications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ seq, status }),
-      }).catch(() => {});
+      })
+        .then(() => loadTrackedJobs())
+        .catch(() => {});
     },
-    []
+    [loadTrackedJobs]
   );
 
   const toggleBookmark = useCallback((seq: string, bookmarked: boolean) => {
     setJobs((prev) =>
+      prev.map((j) => (j.seq === seq ? { ...j, bookmarked } : j))
+    );
+    setTrackedJobs((prev) =>
       prev.map((j) => (j.seq === seq ? { ...j, bookmarked } : j))
     );
     setSelectedJob((prev) =>
@@ -376,9 +406,10 @@ export default function JobBoard() {
   // to "off" (see filteredJobs below, which would otherwise stay empty).
   const showBookmarkToggle = bookmarkedJobs.length > 0 || bookmarkOnly;
 
-  const filteredJobs = useMemo(() => {
-    const filtered = jobs.filter((job) => {
-      if (hiddenSeqs.has(job.seq)) return false;
+
+  // 검색어/채용유형/직군 필터 — 일반 목록과 지원 현황 보기가 함께 쓴다.
+  const matchesControls = useCallback(
+    (job: JobSummary) => {
       const matchType =
         filter === "전체" || job.positionType.includes(filter);
       const matchPosition =
@@ -390,8 +421,35 @@ export default function JobBoard() {
         job.title.toLowerCase().includes(q) ||
         job.positions.some((p) => p.toLowerCase().includes(q)) ||
         job.jdSummary.toLowerCase().includes(q);
+      return matchType && matchPosition && matchSearch;
+    },
+    [filter, positionFilter, searchQuery]
+  );
+
+  // 상태를 방금 제출완료 이전으로 되돌린 공고는 서버 재조회 전까지 여기서 걸러낸다.
+  const appliedJobs = useMemo(
+    () => trackedJobs.filter((job) => isTrackedApplicationStatus(job.applicationStatus)),
+    [trackedJobs]
+  );
+
+  // 지원 현황 보기 안에서 마지막 공고의 상태를 되돌려도 빠져나올 버튼은 남겨둔다(찜 토글과 같은 이유).
+  const showAppliedToggle = appliedJobs.length > 0 || viewMode === "applied";
+
+  const visibleAppliedJobs = useMemo(
+    () =>
+      appliedJobs.filter(
+        (job) =>
+          (appliedStatusFilter === "전체" || job.applicationStatus === appliedStatusFilter) &&
+          matchesControls(job)
+      ),
+    [appliedJobs, appliedStatusFilter, matchesControls]
+  );
+
+  const filteredJobs = useMemo(() => {
+    const filtered = jobs.filter((job) => {
+      if (hiddenSeqs.has(job.seq)) return false;
       const matchBookmark = !bookmarkOnly || jobBookmarked(job);
-      return matchType && matchPosition && matchSearch && matchBookmark;
+      return matchesControls(job) && matchBookmark;
     });
 
     if (sort === "추천순" && hasProfile) {
@@ -403,7 +461,7 @@ export default function JobBoard() {
       });
     }
     return [...filtered].sort((a, b) => b.date.localeCompare(a.date));
-  }, [jobs, filter, positionFilter, searchQuery, sort, hasProfile, hiddenSeqs, bookmarkOnly]);
+  }, [jobs, matchesControls, sort, hasProfile, hiddenSeqs, bookmarkOnly]);
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return "bg-emerald-500 text-white";
@@ -598,6 +656,11 @@ export default function JobBoard() {
             <span className="text-sm text-gray-500">
               {viewMode === "hidden" ? (
                 <span className="text-gray-400">숨긴 공고 {hiddenJobs.length}건</span>
+              ) : viewMode === "applied" ? (
+                <>
+                  지원 현황 {visibleAppliedJobs.length}건
+                  <span className="text-gray-400"> · 마감 지난 공고 포함</span>
+                </>
               ) : loading ? (
                 jobs.length > 0 ? `${jobs.length}건 로드됨...` : "데이터 수집 중..."
               ) : (
@@ -610,9 +673,28 @@ export default function JobBoard() {
               )}
             </span>
             <div className="flex items-center gap-2">
-              {/* Group 1: 보기 필터 (숨긴 공고 / 찜한 공고) */}
-              {(hiddenSeqs.size > 0 || showBookmarkToggle) && (
+              {/* Group 1: 보기 필터 (지원 현황 / 숨긴 공고 / 찜한 공고) */}
+              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle) && (
                 <div className="flex items-center gap-1.5">
+                  {showAppliedToggle && (
+                    <button
+                      onClick={() => {
+                        if (viewMode !== "applied") loadTrackedJobs();
+                        setViewMode((v) => (v === "applied" ? "list" : "applied"));
+                      }}
+                      className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
+                        viewMode === "applied"
+                          ? "bg-gray-700 text-white border-gray-700"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9 11l3 3L22 4" />
+                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                      </svg>
+                      지원 현황 {appliedJobs.length}건
+                    </button>
+                  )}
                   {hiddenSeqs.size > 0 && (
                     <button
                       onClick={() => setViewMode((v) => v === "hidden" ? "list" : "hidden")}
@@ -649,7 +731,7 @@ export default function JobBoard() {
               )}
 
               {/* divider: Group 1 → Group 2 */}
-              {(hiddenSeqs.size > 0 || showBookmarkToggle) &&
+              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle) &&
                 viewMode === "list" &&
                 hasProfile && <div className="w-px h-5 bg-gray-200" />}
 
@@ -673,7 +755,7 @@ export default function JobBoard() {
               )}
 
               {/* divider: (Group 1 or Group 2) → Group 3 */}
-              {(hiddenSeqs.size > 0 || showBookmarkToggle || hasProfile) &&
+              {(showAppliedToggle || hiddenSeqs.size > 0 || showBookmarkToggle || hasProfile) &&
                 viewMode === "list" && <div className="w-px h-5 bg-gray-200" />}
 
               {viewMode === "list" && (
@@ -786,6 +868,59 @@ export default function JobBoard() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Applied (tracked) jobs view */}
+          {viewMode === "applied" && (
+            <div className="pb-8">
+              <div className="flex flex-wrap gap-1.5 mb-3" role="group" aria-label="지원 단계별 보기">
+                {(["전체", ...TRACKED_APPLICATION_STATUSES] as const).map((s) => {
+                  const count =
+                    s === "전체"
+                      ? appliedJobs.length
+                      : appliedJobs.filter((j) => j.applicationStatus === s).length;
+                  const active = appliedStatusFilter === s;
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => setAppliedStatusFilter(s)}
+                      aria-pressed={active}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        active
+                          ? s === "전체"
+                            ? "bg-gray-800 text-white"
+                            : getApplicationStatusColor(s)
+                          : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {s} {count}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="space-y-3">
+                {visibleAppliedJobs.map((job) => (
+                  <JobCard
+                    key={job.seq}
+                    job={job}
+                    isSelected={selectedJob?.seq === job.seq}
+                    onSelect={setSelectedJob}
+                    onStatusChange={updateApplicationStatus}
+                    onToggleBookmark={toggleBookmark}
+                    getScoreColor={getScoreColor}
+                    getBadgeColor={getBadgeColor}
+                    showTracking
+                  />
+                ))}
+              </div>
+              {visibleAppliedJobs.length === 0 && (
+                <div className="text-center py-12 text-gray-400">
+                  {appliedJobs.length === 0
+                    ? "제출완료 이후 단계로 표시한 공고가 없습니다"
+                    : "조건에 맞는 공고가 없습니다"}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Hidden jobs view */}
@@ -1076,11 +1211,14 @@ function JobCard({
   onToggleBookmark,
   getScoreColor,
   getBadgeColor,
+  showTracking = false,
 }: {
   job: JobSummary;
   isSelected: boolean;
   onSelect: (job: JobSummary) => void;
-  onHide: (seq: string) => void;
+  // 지원 현황 보기에서는 숨기기가 의미 없어(숨겨도 계속 보인다) 버튼을 빼기 위해 optional.
+  onHide?: (seq: string) => void;
+  showTracking?: boolean;
   onStatusChange: (seq: string, status: ApplicationStatus) => void;
   onToggleBookmark: (seq: string, bookmarked: boolean) => void;
   getScoreColor: (score: number) => string;
@@ -1176,18 +1314,30 @@ function JobCard({
           </select>
           <div className="text-xs text-gray-400">{job.date}</div>
           {job.deadline && (
-            <div className="text-xs text-red-500">~{job.deadline}</div>
+            <div className={`text-xs ${showTracking && job.expired ? "text-gray-400" : "text-red-500"}`}>
+              ~{job.deadline}
+            </div>
           )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onHide(job.seq);
-            }}
-            className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-all"
-            title="숨기기"
-          >
-            숨기기
-          </button>
+          {showTracking && job.expired && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">마감</span>
+          )}
+          {showTracking && job.submittedAt && (
+            <div className="text-xs text-gray-500">
+              {new Date(job.submittedAt).toLocaleDateString("ko-KR")} 제출
+            </div>
+          )}
+          {onHide && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onHide(job.seq);
+              }}
+              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-all"
+              title="숨기기"
+            >
+              숨기기
+            </button>
+          )}
         </div>
       </div>
     </div>
