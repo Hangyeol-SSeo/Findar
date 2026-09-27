@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import ApplicantProfileForm from "@/components/ApplicantProfileForm";
 import NarrativeProfileForm from "@/components/NarrativeProfileForm";
+import ResumeUploadForm from "@/components/ResumeUploadForm";
 import Toast, { useToast } from "@/components/Toast";
 
 export default function SettingsPage() {
   const [careerGoals, setCareerGoals] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"matching" | "applicant" | "narrative">("matching");
+  const [tab, setTab] = useState<"resume" | "matching" | "applicant" | "narrative">("resume");
   const { message: toastMessage, showToast } = useToast();
 
   useEffect(() => {
@@ -52,7 +53,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold tracking-tight mt-3 mb-6">설정</h1>
 
       <div className="flex gap-1 border-b border-gray-100 mb-6">
-        {(["matching", "applicant", "narrative"] as const).map((t) => (
+        {(["resume", "matching", "applicant", "narrative"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -62,12 +63,19 @@ export default function SettingsPage() {
                 : "border-transparent text-gray-400 hover:text-gray-600"
             }`}
           >
-            {t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : "가치관과 서사"}
+            {t === "resume" ? "이력서" : t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : "가치관과 서사"}
           </button>
         ))}
       </div>
 
-      {tab === "matching" ? (
+      {tab === "resume" ? (
+        <div>
+          <p className="text-gray-500 mb-4">
+            이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
+          </p>
+          <ResumeUploadForm showToast={showToast} />
+        </div>
+      ) : tab === "matching" ? (
         <div>
           <p className="text-gray-500 mb-6">
             이력서만으로는 알 수 없는 지원 의도를 직접 적어두면 AI 매칭이 참고합니다.

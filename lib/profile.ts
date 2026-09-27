@@ -1,16 +1,10 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
-import { join } from "path";
+import { basename, join } from "path";
+import { hashResumeSources, LEGACY_RESUME_DIR, listPdfsIn, listResumePdfs, RESUME_DIR } from "./resume-files";
+import { remapMatchProfileHash } from "./db";
 
-const RESUME_DIR = join(process.cwd(), "resume");
 const DATA_DIR = join(process.cwd(), "data");
 const PROFILE_PATH = join(DATA_DIR, "profile.json");
 const OVERRIDES_PATH = join(DATA_DIR, "profile-overrides.json");
@@ -42,23 +36,6 @@ export interface Profile {
   careerGoals?: string;
 }
 
-function listResumePdfs(): string[] {
-  if (!existsSync(RESUME_DIR)) return [];
-  return readdirSync(RESUME_DIR)
-    .filter((f) => f.toLowerCase().endsWith(".pdf"))
-    .map((f) => join(RESUME_DIR, f))
-    .sort();
-}
-
-function hashSources(paths: string[]): string {
-  const h = createHash("sha256");
-  for (const p of paths) {
-    const s = statSync(p);
-    h.update(`${p}:${s.size}:${s.mtimeMs}\n`);
-  }
-  return h.digest("hex");
-}
-
 function readCachedProfile(): Profile | null {
   if (!existsSync(PROFILE_PATH)) return null;
   try {
@@ -71,6 +48,53 @@ function readCachedProfile(): Profile | null {
 function writeProfile(profile: Profile): void {
   writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2));
 }
+
+// 예전 방식(repo 루트 resume/에 직접 넣은 PDF)의 해시 — 경로/크기/수정시각 기준이었다.
+function legacyHashSources(paths: string[]): string {
+  const h = createHash("sha256");
+  for (const p of paths) {
+    const s = statSync(p);
+    h.update(`${p}:${s.size}:${s.mtimeMs}\n`);
+  }
+  return h.digest("hex");
+}
+
+// resume/ → data/resume/ 1회 이전. 파일은 삭제하지 않고 옮기기만 하며(같은 이름이 이미
+// 업로드돼 있으면 그대로 둔다), 내용이 같으면 기존 프로필 캐시·매칭 결과를 새 해시로
+// 바꿔 달아서 재분석/전체 재매칭에 토큰을 쓰지 않는다.
+function migrateLegacyResumeDir(): void {
+  const legacy = listPdfsIn(LEGACY_RESUME_DIR);
+  if (legacy.length === 0) return;
+  try {
+    const legacyHash = legacyHashSources(legacy);
+    mkdirSync(RESUME_DIR, { recursive: true });
+    let skipped = 0;
+    for (const p of legacy) {
+      const dest = join(RESUME_DIR, basename(p));
+      if (existsSync(dest)) {
+        skipped++;
+        continue;
+      }
+      try {
+        renameSync(p, dest);
+      } catch {
+        copyFileSync(p, dest); // 다른 파일시스템 간 이동(EXDEV) 대비
+        unlinkSync(p);
+      }
+    }
+    const cached = readCachedProfile();
+    if (skipped === 0 && cached?.sourcesHash === legacyHash) {
+      const newHash = hashResumeSources(listResumePdfs());
+      writeProfile({ ...cached, sourcesHash: newHash });
+      remapMatchProfileHash(legacyHash, newHash);
+    }
+    console.log(`[profile] moved ${legacy.length - skipped} legacy resume file(s) to data/resume`);
+  } catch (e) {
+    console.error("[profile] legacy resume migration failed:", e);
+  }
+}
+
+migrateLegacyResumeDir();
 
 // careerGoals는 이력서 추출(sourcesHash)과 무관한 별도 저장소에 둔다 — 사용자가
 // /settings에서 언제든 바꿀 수 있어야 하고, 그때마다 이력서를 재분석할 필요는 없으므로.
@@ -168,6 +192,11 @@ function withCareerGoals(profile: Profile | null): Profile | null {
   return { ...profile, careerGoals: readCareerGoals() };
 }
 
+// 같은 이력서에 대한 추출이 동시에 두 번 돌지 않도록(공고 새로고침 + 설정 화면의 "지금 분석")
+// 진행 중인 추출을 해시별로 공유한다.
+const state = globalThis as typeof globalThis & { findarProfileInflight?: Map<string, Promise<ProfileResult>> };
+const inflight = (state.findarProfileInflight ??= new Map<string, Promise<ProfileResult>>());
+
 export async function ensureProfile(opts?: {
   onProgress?: (msg: string) => void;
 }): Promise<ProfileResult> {
@@ -176,12 +205,32 @@ export async function ensureProfile(opts?: {
     return { profile: null, status: "missing" };
   }
 
-  const currentHash = hashSources(pdfs);
+  const currentHash = hashResumeSources(pdfs);
   const cached = readCachedProfile();
   if (cached && cached.sourcesHash === currentHash) {
     return { profile: withCareerGoals(cached), status: "cached" };
   }
 
+  const running = inflight.get(currentHash);
+  if (running) {
+    opts?.onProgress?.("이력서 분석이 이미 진행 중입니다. 완료를 기다리는 중...");
+    return running;
+  }
+  const task = runExtraction(pdfs, currentHash, cached, opts);
+  inflight.set(currentHash, task);
+  try {
+    return await task;
+  } finally {
+    inflight.delete(currentHash);
+  }
+}
+
+async function runExtraction(
+  pdfs: string[],
+  currentHash: string,
+  cached: Profile | null,
+  opts?: { onProgress?: (msg: string) => void }
+): Promise<ProfileResult> {
   opts?.onProgress?.(
     cached
       ? "이력서가 변경되어 다시 분석 중..."
@@ -204,4 +253,22 @@ export async function ensureProfile(opts?: {
 
 export function getCachedProfile(): Profile | null {
   return withCareerGoals(readCachedProfile());
+}
+
+// 설정 화면용: AI 호출 없이 현재 업로드된 파일과 캐시된 분석 결과가 일치하는지만 확인한다.
+export function getProfileStatus(): {
+  status: "missing" | "not-analyzed" | "stale" | "ready";
+  analyzing: boolean;
+  profile: Pick<Profile, "name" | "experienceYears" | "skills" | "domains" | "generatedAt"> | null;
+} {
+  const pdfs = listResumePdfs();
+  const cached = readCachedProfile();
+  const summary = cached
+    ? { name: cached.name, experienceYears: cached.experienceYears, skills: cached.skills, domains: cached.domains, generatedAt: cached.generatedAt }
+    : null;
+  if (pdfs.length === 0) return { status: "missing", analyzing: false, profile: summary };
+  const currentHash = hashResumeSources(pdfs);
+  const analyzing = inflight.has(currentHash);
+  if (!cached) return { status: "not-analyzed", analyzing, profile: null };
+  return { status: cached.sourcesHash === currentHash ? "ready" : "stale", analyzing, profile: summary };
 }
