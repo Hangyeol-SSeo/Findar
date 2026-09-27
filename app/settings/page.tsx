@@ -68,61 +68,58 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      {tab === "resume" ? (
-        <div>
-          <p className="text-gray-500 mb-4">
-            이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
+      {/* 탭마다 조건부로 마운트하면 전환할 때마다 폼이 다시 불러오며 "불러오는 중..."으로
+          번쩍이고 저장 안 한 입력도 사라진다. 네 탭을 모두 마운트해두고 hidden으로만 전환한다. */}
+      <div hidden={tab !== "resume"}>
+        <p className="text-gray-500 mb-4">
+          이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
+        </p>
+        <ResumeUploadForm showToast={showToast} />
+      </div>
+      <div hidden={tab !== "matching"}>
+        <p className="text-gray-500 mb-6">
+          이력서만으로는 알 수 없는 지원 의도를 직접 적어두면 AI 매칭이 참고합니다.
+        </p>
+        <div className="bg-white rounded-xl border border-gray-100 p-5">
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            지원 의도 / 방향
+          </label>
+          <p className="text-xs text-gray-400 mb-3">
+            예: 컴퓨터공학 전공·개발 경험이 있지만, 금융/리스크관리에 관심이 많아 개발 외
+            직군에도 폭넓게 지원하고 싶습니다. 특정 직군에 한정하지 말고 평가해주세요.
           </p>
-          <ResumeUploadForm showToast={showToast} />
-        </div>
-      ) : tab === "matching" ? (
-        <div>
-          <p className="text-gray-500 mb-6">
-            이력서만으로는 알 수 없는 지원 의도를 직접 적어두면 AI 매칭이 참고합니다.
-          </p>
-          <div className="bg-white rounded-xl border border-gray-100 p-5">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              지원 의도 / 방향
-            </label>
-            <p className="text-xs text-gray-400 mb-3">
-              예: 컴퓨터공학 전공·개발 경험이 있지만, 금융/리스크관리에 관심이 많아 개발 외
-              직군에도 폭넓게 지원하고 싶습니다. 특정 직군에 한정하지 말고 평가해주세요.
-            </p>
-            <textarea
-              value={careerGoals}
-              onChange={(e) => setCareerGoals(e.target.value)}
-              disabled={loading}
-              rows={6}
-              placeholder="자유롭게 서술해주세요"
-              className="w-full text-sm border border-gray-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
-            />
-            <div className="flex items-center gap-3 mt-3">
-              <button
-                onClick={save}
-                disabled={loading || saving}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-              >
-                {saving ? "저장 중..." : "저장"}
-              </button>
-            </div>
+          <textarea
+            value={careerGoals}
+            onChange={(e) => setCareerGoals(e.target.value)}
+            disabled={loading}
+            rows={6}
+            placeholder="자유롭게 서술해주세요"
+            className="w-full text-sm border border-gray-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50"
+          />
+          <div className="flex items-center gap-3 mt-3">
+            <button
+              onClick={save}
+              disabled={loading || saving}
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {saving ? "저장 중..." : "저장"}
+            </button>
           </div>
         </div>
-      ) : tab === "applicant" ? (
-        <div>
-          <p className="text-gray-500 mb-4">
-            실제 지원폼(인적사항/학력/경력 등)에 반복적으로 들어가는 값을 미리 채워두세요.
-          </p>
-          <ApplicantProfileForm showToast={showToast} />
-        </div>
-      ) : (
-        <div>
-          <p className="text-gray-500 mb-4">
-            자소서·면접 답변이 이력과 거리가 있는 직무에서도 스킬을 억지로 갖다붙이지 않고, 진짜
-            동기로 자연스럽게 연결되도록 쓰이는 참고 자료입니다.
-          </p>
-          <NarrativeProfileForm showToast={showToast} />
-        </div>
-      )}
+      </div>
+      <div hidden={tab !== "applicant"}>
+        <p className="text-gray-500 mb-4">
+          실제 지원폼(인적사항/학력/경력 등)에 반복적으로 들어가는 값을 미리 채워두세요.
+        </p>
+        <ApplicantProfileForm showToast={showToast} />
+      </div>
+      <div hidden={tab !== "narrative"}>
+        <p className="text-gray-500 mb-4">
+          자소서·면접 답변이 이력과 거리가 있는 직무에서도 스킬을 억지로 갖다붙이지 않고, 진짜
+          동기로 자연스럽게 연결되도록 쓰이는 참고 자료입니다.
+        </p>
+        <NarrativeProfileForm showToast={showToast} />
+      </div>
     </div>
   );
 }
