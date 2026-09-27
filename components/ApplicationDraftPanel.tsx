@@ -75,6 +75,8 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
         const response = await fetch(`/api/applications/${seq}/tasks`, { cache: "no-store", signal: abort.signal });
         if (!response.ok) throw new Error("작업 상태를 불러오지 못했습니다.");
         const data: { tasks: ApplicationTask[] } = await response.json();
+        // 이력 평가(tailoring) 작업은 ResumeTailoringPanel이 따로 추적한다.
+        data.tasks = data.tasks.filter((t) => t.kind !== "tailoring");
         if (stopped) return;
         failures = 0;
         active = data.tasks.some(taskActive);

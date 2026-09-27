@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import CompanyResearchPanel from "./CompanyResearchPanel";
 import ApplicationDraftPanel from "./ApplicationDraftPanel";
+import ResumeTailoringPanel from "./ResumeTailoringPanel";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -90,9 +91,10 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
-  const [panelTab, setPanelTab] = useState<"detail" | "company" | "draft">("detail");
+  const [panelTab, setPanelTab] = useState<"detail" | "company" | "tailoring" | "draft">("detail");
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
+  const [profileKnown, setProfileKnown] = useState(false);
   const [sort, setSort] = useState<SortType>("추천순");
   const [matchEnabled, setMatchEnabled] = useState<boolean | null>(() =>
     readStoredMatchEnabled()
@@ -283,6 +285,7 @@ export default function JobBoard() {
       .then(({ jobs, hasProfile }: { jobs?: JobSummary[]; hasProfile?: boolean }) => {
         if (Array.isArray(jobs)) setJobs(jobs);
         setHasProfile(!!hasProfile);
+        setProfileKnown(true);
       })
       .catch(() => {});
   }, []);
@@ -483,6 +486,16 @@ export default function JobBoard() {
               설정
             </Link>
           </header>
+
+          {matchEnabled && !hasProfile && profileKnown && !loading && (
+            <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              이력서가 없어 매칭 점수를 계산하지 않았습니다.{" "}
+              <Link href="/settings" className="font-medium underline">
+                설정 → 이력서
+              </Link>
+              에서 이력서·포트폴리오 PDF를 올린 뒤 새로고침해주세요.
+            </div>
+          )}
 
           {/* Progress bar */}
           {loading && progress.phase !== "idle" && (
@@ -850,7 +863,7 @@ export default function JobBoard() {
 
             {/* Panel tabs */}
             <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
-              {(["detail", "company", "draft"] as const).map((tab) => (
+              {(["detail", "company", "tailoring", "draft"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setPanelTab(tab)}
@@ -860,7 +873,7 @@ export default function JobBoard() {
                       : "border-transparent text-gray-400 hover:text-gray-600"
                   }`}
                 >
-                  {tab === "detail" ? "공고 상세" : tab === "company" ? "회사 리서치" : "지원 도우미"}
+                  {tab === "detail" ? "공고 상세" : tab === "company" ? "회사 리서치" : tab === "tailoring" ? "이력 구성" : "지원 도우미"}
                 </button>
               ))}
             </div>
@@ -869,6 +882,10 @@ export default function JobBoard() {
             {panelTab === "company" ? (
               <div className="min-h-0 flex-1">
                 <CompanyResearchPanel key={selectedJob.company} companyName={selectedJob.company} />
+              </div>
+            ) : panelTab === "tailoring" ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <ResumeTailoringPanel key={selectedJob.seq} seq={selectedJob.seq} />
               </div>
             ) : panelTab === "draft" ? (
               <div className="flex-1 overflow-y-auto p-5">

@@ -49,9 +49,16 @@ KOFIA postings carry **no company ID**, only a free-text `company` string, and n
 
 ### Profile & matching: `lib/profile.ts` + `lib/matcher.ts`
 
-- Resume PDFs go in the gitignored `resume/` dir; `ensureProfile()` extracts a structured `Profile` agentically (`allowedTools: ["Read"]`, the SDK reads the PDFs itself) and caches it to `data/profile.json`, keyed by a hash of the PDF files' path/size/mtime. This call **always uses the raw Anthropic API**, never FreeRide, since resumes are PII.
+- Resume PDFs are **uploaded from the web** (`/settings` → 이력서 tab, `components/ResumeUploadForm.tsx`) via `GET`/`POST`(multipart `files`)/`DELETE ?name=` `/api/profile/resume`, and stored in `data/resume/` (`lib/resume-files.ts` — `%PDF-` magic check, sanitized basename, 20MB/10 files, same name = replace). `POST /api/profile/resume/analyze` runs `ensureProfile()` immediately instead of waiting for the next crawl. The old repo-root `resume/` dir is legacy: `lib/profile.ts` moves its PDFs into `data/resume/` once at module load and, if content is unchanged, rewrites the cached `sourcesHash` and every job's `matchProfileHash` (`remapMatchProfileHash`) so the move doesn't trigger a re-extraction or full rematch. `ensureProfile()` extracts a structured `Profile` agentically (`allowedTools: ["Read"]`, the SDK reads the PDFs itself) and caches it to `data/profile.json`, keyed by `hashResumeSources()` (file **name + content** hash — re-uploading an identical file costs nothing). Concurrent extractions of the same hash share one in-flight promise. This call **always uses the raw Anthropic API**, never FreeRide, since resumes are PII.
 - `Profile.transferableStrengths` (extracted from the resume) and `Profile.careerGoals` (user-authored, **not** inferable from a resume) both feed the matcher prompt so a CS/dev-heavy resume doesn't implicitly get scored as IT-only fit. `careerGoals` lives in a separate file, `data/profile-overrides.json` (`readCareerGoals`/`writeCareerGoals`), edited at `/settings` (`GET`/`PUT /api/profile/overrides`) — kept independent of the resume-hash cache so editing it never triggers (or requires) a resume re-extraction. `getCachedProfile()`/`ensureProfile()` both merge the override in fresh on every call via `withCareerGoals()`.
 - `lib/matcher.ts` has **no category gate** — it already scores every job regardless of category; `positionType`/category bias, if any, comes from the profile's own material, not a code-level restriction.
+
+### Resume tailoring (이력 구성): `lib/resume-tailoring.ts` + `lib/resume-inventory.ts` + `lib/resume-tailoring-contract.ts`
+
+Per-job evaluation of *what to put on the resume*: every resume/applicant-profile item gets a decision — `강조`/`유지`/`축소`/`제외`/`숨김 검토` (plus `판단 보류` for items the model skipped; `normalizeTailoring()` never drops an item). Shown in the job side panel's **이력 구성** tab (`components/ResumeTailoringPanel.tsx`).
+- `Profile` is a matching summary and drops small items (old activities, minor certs, hobbies) — exactly the items this feature judges — so `ensureResumeInventory()` separately extracts a **complete item-level list** from the PDFs (`data/resume-inventory.json`, same `hashResumeSources` key, lazy: only on first use, never in the crawl pipeline). `buildApplicantItems()` adds the user-authored `ApplicantProfile` entries (`a.*` ids) deterministically; required form fields (birthdate, gender, contact) are excluded, optional ones (religion, hobbies) included.
+- One tool-less Sonnet call per evaluation, direct Anthropic (full resume content = PII). The prompt's honesty rules are the point of the feature: it may recommend *omitting* or *refocusing* but never altering facts, and must warn (`omissionRisk`) instead of recommending omission when leaving an item out could count as 경력 누락/허위 기재.
+- `POST /api/applications/[seq]/tailoring` runs as an `ApplicationTask` of kind `"tailoring"` (same task store/polling as essay writing — `ApplicationDraftPanel` filters these out); `GET` is a pure cache read from the `resume_tailoring` table with a `stale` flag (hash of resume files + applicant `updatedAt` + `careerGoals`).
 
 ### Application drafting: `lib/application-draft.ts` + `lib/application-method.ts` + `lib/applicant-profile.ts`
 
@@ -65,9 +72,10 @@ KOFIA postings carry **no company ID**, only a free-text `company` string, and n
 
 ### Client: `components/JobBoard.tsx` + `app/page.tsx` + `app/settings/page.tsx`
 
-`app/page.tsx` dynamically imports `JobBoard` with `ssr: false`. The board manually parses SSE frames (`res.body.getReader()`), dedupes `summarize-progress` jobs by `seq`, and replaces the whole array on `done`. The job detail side panel has three tabs, each backed by its own component:
+`app/page.tsx` dynamically imports `JobBoard` with `ssr: false`. The board manually parses SSE frames (`res.body.getReader()`), dedupes `summarize-progress` jobs by `seq`, and replaces the whole array on `done`. The job detail side panel has four tabs, each backed by its own component:
 - **공고 상세** — inline in `JobBoard.tsx` (match score, application-status `<select>`, apply links: `siteUrl` — the company's real apply link, scraped but previously never rendered — shown as the primary CTA when present, KOFIA's own posting as a secondary link).
 - **회사 리서치** — `components/CompanyResearchPanel.tsx`.
+- **이력 구성** — `components/ResumeTailoringPanel.tsx`.
 - **지원 도우미** — `components/ApplicationDraftPanel.tsx`.
 
 `app/settings/page.tsx` is a small standalone client page (not part of `JobBoard`) for `careerGoals`.

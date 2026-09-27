@@ -60,6 +60,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ```sh
 node scripts/tests/application-assistant.cjs
+node scripts/tests/resume-tailoring.cjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 npx tsc --noEmit
 ```

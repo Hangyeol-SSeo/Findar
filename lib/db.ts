@@ -77,6 +77,14 @@ db.exec(`
     model TEXT NOT NULL DEFAULT '',
     generatedAt INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS resume_tailoring (
+    seq TEXT PRIMARY KEY,
+    resultJson TEXT NOT NULL,
+    inputsHash TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    generatedAt INTEGER NOT NULL
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -279,6 +287,12 @@ const selectJobsNeedingMatchStmt = db.prepare(`
 export function getJobsNeedingMatch(profileHash: string): JobWithMatch[] {
   const rows = selectJobsNeedingMatchStmt.all(profileHash) as JobRow[];
   return rows.map(rowToJobWithMatch);
+}
+
+// 이력서 원본이 옮겨지기만 하고 내용은 그대로일 때(lib/profile.ts의 legacy resume/ 이전),
+// 해시 계산 방식이 바뀌었다는 이유만으로 전체 재매칭(=토큰 소모)이 일어나지 않도록 기존 매칭의 해시만 바꿔준다.
+export function remapMatchProfileHash(from: string, to: string): number {
+  return db.prepare(`UPDATE jobs SET matchProfileHash = ? WHERE matchProfileHash = ?`).run(to, from).changes;
 }
 
 const skipLowScoreMatchesStmt = db.prepare(`
@@ -510,6 +524,34 @@ const upsertDraftStmt = db.prepare(`
 
 export function saveApplicationDraft(seq: string, draftJson: string, model: string): void {
   upsertDraftStmt.run({ seq, draftJson, model, generatedAt: Date.now() });
+}
+
+export interface ResumeTailoringRow {
+  seq: string;
+  resultJson: string;
+  inputsHash: string;
+  model: string;
+  generatedAt: number;
+}
+
+const selectTailoringStmt = db.prepare(`SELECT * FROM resume_tailoring WHERE seq = ?`);
+
+export function getResumeTailoringRow(seq: string): ResumeTailoringRow | undefined {
+  return selectTailoringStmt.get(seq) as ResumeTailoringRow | undefined;
+}
+
+const upsertTailoringStmt = db.prepare(`
+  INSERT INTO resume_tailoring (seq, resultJson, inputsHash, model, generatedAt)
+  VALUES (@seq, @resultJson, @inputsHash, @model, @generatedAt)
+  ON CONFLICT(seq) DO UPDATE SET
+    resultJson = excluded.resultJson,
+    inputsHash = excluded.inputsHash,
+    model = excluded.model,
+    generatedAt = excluded.generatedAt
+`);
+
+export function saveResumeTailoring(seq: string, resultJson: string, inputsHash: string, model: string): void {
+  upsertTailoringStmt.run({ seq, resultJson, inputsHash, model, generatedAt: Date.now() });
 }
 
 export function clearAllMatches(): void {

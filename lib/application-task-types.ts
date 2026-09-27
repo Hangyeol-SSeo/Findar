@@ -5,7 +5,7 @@ export interface DocumentFillResult {
   skipped: { label: string; reason: string }[]; note: string;
 }
 export interface ApplicationTask {
-  id: string; seq: string; kind: "writing" | "document" | "web";
+  id: string; seq: string; kind: "writing" | "document" | "web" | "tailoring";
   status: "queued" | "running" | "completed" | "failed";
   createdAt: number; updatedAt: number; done: number; total: number;
   error?: string;
