@@ -50,6 +50,11 @@ const MATCH_ENABLED_KEY = "findar:matchEnabled";
 const CRAWL_PAGES_KEY = "findar:crawlPages";
 const MIN_PAGES = 1;
 const MAX_PAGES = 50; // 서버(app/api/jobs/route.ts)의 상한과 동일
+const PANEL_WIDTH_KEY = "findar:panelWidth";
+const PANEL_MIN_WIDTH = 420;
+const PANEL_MAX_WIDTH = 1100;
+const PANEL_DEFAULT_WIDTH = 720;
+const PANEL_KEY_STEP = 32;
 
 // 서버가 DB에 저장한 categories를 우선 쓰고, 백필 전 데이터 등 비어있는 경우에만
 // 클라이언트에서 positions로부터 재계산한다.
@@ -80,6 +85,18 @@ function readStoredPages(): number | null {
   return Number.isInteger(raw) && raw > 0 ? raw : null;
 }
 
+// 창이 좁으면 PANEL_MAX_WIDTH보다 먼저 화면 폭에서 막힌다.
+function clampPanelWidth(width: number): number {
+  const max = Math.min(PANEL_MAX_WIDTH, window.innerWidth);
+  return Math.round(Math.min(Math.max(width, PANEL_MIN_WIDTH), max));
+}
+
+function readStoredPanelWidth(): number {
+  if (typeof window === "undefined") return PANEL_DEFAULT_WIDTH;
+  const raw = Number(window.localStorage.getItem(PANEL_WIDTH_KEY));
+  return raw > 0 ? clampPanelWidth(raw) : PANEL_DEFAULT_WIDTH;
+}
+
 interface Progress {
   phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "rematch" | "done";
   message: string;
@@ -97,6 +114,8 @@ export default function JobBoard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
   const [panelTab, setPanelTab] = useState<"detail" | "company" | "tailoring" | "draft">("detail");
+  const [panelWidth, setPanelWidth] = useState<number>(() => readStoredPanelWidth());
+  const [resizingPanel, setResizingPanel] = useState(false);
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [profileKnown, setProfileKnown] = useState(false);
@@ -130,6 +149,47 @@ export default function JobBoard() {
     window.localStorage.setItem(CRAWL_PAGES_KEY, String(n));
     setPages(n);
   }, []);
+
+  const choosePanelWidth = useCallback((width: number) => {
+    const clamped = clampPanelWidth(width);
+    window.localStorage.setItem(PANEL_WIDTH_KEY, String(clamped));
+    setPanelWidth(clamped);
+  }, []);
+
+  // 사이드 패널 왼쪽 가장자리를 드래그해 PANEL_MIN_WIDTH~PANEL_MAX_WIDTH 사이에서 폭을 바꾼다.
+  // 드래그 중에는 state만 바꾸고, 놓을 때 한 번만 localStorage에 저장한다.
+  const handlePanelResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setResizingPanel(true);
+  }, []);
+
+  const handlePanelResizeMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!resizingPanel) return;
+      setPanelWidth(clampPanelWidth(window.innerWidth - e.clientX));
+    },
+    [resizingPanel]
+  );
+
+  const handlePanelResizeEnd = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!resizingPanel) return;
+      setResizingPanel(false);
+      choosePanelWidth(window.innerWidth - e.clientX);
+    },
+    [resizingPanel, choosePanelWidth]
+  );
+
+  const handlePanelResizeKey = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "ArrowLeft") choosePanelWidth(panelWidth + PANEL_KEY_STEP);
+      else if (e.key === "ArrowRight") choosePanelWidth(panelWidth - PANEL_KEY_STEP);
+      else return;
+      e.preventDefault();
+    },
+    [panelWidth, choosePanelWidth]
+  );
 
   const commitPagesInput = useCallback(() => {
     const parsed = Math.round(Number(pagesInput));
@@ -520,10 +580,13 @@ export default function JobBoard() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Main content */}
+    <div
+      className={`flex h-screen overflow-hidden ${resizingPanel ? "select-none cursor-col-resize" : ""}`}
+      style={{ "--panel-w": `${panelWidth}px` } as React.CSSProperties}
+    >
+      {/* Main content — 패널 폭만큼 비켜주되 본문은 최소 480px를 남기고, 그 이상은 패널이 위에 겹친다 */}
       <div
-        className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${selectedJob ? "mr-[480px]" : ""}`}
+        className={`flex-1 flex flex-col overflow-hidden ${resizingPanel ? "" : "transition-all duration-300"} ${selectedJob ? "sm:mr-[max(0px,min(var(--panel-w),calc(100vw_-_480px)))]" : ""}`}
       >
         <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
           {/* Header: 브랜드 + 공고 수집(페이지 수 · 매칭 · 새로고침) + 설정 */}
@@ -966,10 +1029,36 @@ export default function JobBoard() {
 
       {/* Side Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-full sm:w-[min(720px,100vw)] bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed top-0 right-0 h-full w-full sm:w-[min(var(--panel-w),100vw)] bg-white border-l border-gray-200 shadow-xl transform transition-transform duration-300 ease-in-out z-40 ${
           selectedJob ? "translate-x-0" : "translate-x-full"
         }`}
       >
+        {/* 폭 조절 핸들 (드래그 · ←/→ 키 · 더블클릭하면 기본 폭) */}
+        {selectedJob && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="패널 폭 조절"
+            aria-valuemin={PANEL_MIN_WIDTH}
+            aria-valuemax={PANEL_MAX_WIDTH}
+            aria-valuenow={panelWidth}
+            tabIndex={0}
+            title="드래그해서 폭 조절 · 더블클릭하면 기본 폭"
+            onPointerDown={handlePanelResizeStart}
+            onPointerMove={handlePanelResizeMove}
+            onPointerUp={handlePanelResizeEnd}
+            onPointerCancel={handlePanelResizeEnd}
+            onKeyDown={handlePanelResizeKey}
+            onDoubleClick={() => choosePanelWidth(PANEL_DEFAULT_WIDTH)}
+            className="group absolute left-0 top-0 z-10 hidden h-full w-3 -translate-x-1/2 cursor-col-resize touch-none focus:outline-none sm:block"
+          >
+            <div
+              className={`mx-auto h-full w-0.5 transition-colors ${
+                resizingPanel ? "bg-blue-500" : "bg-transparent group-hover:bg-blue-300 group-focus-visible:bg-blue-400"
+              }`}
+            />
+          </div>
+        )}
         {selectedJob && (
           <div className="h-full flex flex-col">
             {/* Panel header */}
