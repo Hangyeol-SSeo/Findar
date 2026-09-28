@@ -247,7 +247,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
     </section>}
 
     {workspace === "essay" && <><section className="space-y-3">
-      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">문항의 의도에 맞는 경험을 고르고, 판단과 행동이 드러나도록 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
+      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">공고와 문항의 평가 의도를 분석하고 글을 구상한 뒤, 구상에 맞는 경험을 선택하여 존댓말로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
       {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
         <div className="flex items-center justify-between">
           <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={row.freeform} disabled={essayBusy} onChange={(e) => toggleFreeform(row.id, e.target.checked)} />자유 문항</label>
@@ -263,11 +263,11 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
         <button type="button" disabled={essayBusy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
         <button className={buttonStyle} disabled={essayBusy || !rows.some((r) => r.question.trim())} onClick={generateAll}>
           {writingBusy
-            ? (progress ? `문항 ${progress.done + 1}/${progress.total} 작성 중...` : "문항 분석 · 작성 · 편집 검토 중...")
+            ? (progress ? `문항 ${progress.done + 1}/${progress.total} 작성 중...` : "문항 분석 · 구상 · 작성 · 편집 검토 중...")
             : rows.filter((r) => r.question.trim()).length > 1 ? "문항 전체 답변 작성" : "이 문항 답변 작성"}
         </button>
       </div>
-      {writingBusy && <p className="text-xs text-gray-500" role="status">저장된 경험의 근거를 확인하고 별도 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
+      {writingBusy && <p className="text-xs text-gray-500" role="status">전체 문항의 구상과 경험 배치를 정한 뒤 리서치 근거를 연결해 작성하고 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
     </section>
     {currentAnswers.map(({ a, index }) => {
       const answer = a as EssayAnswer;
@@ -279,6 +279,27 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
           <textarea aria-label={`${answer.question} 답변`} className={inputStyle} rows={12} value={answer.answer} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} />
           <p className={`text-xs ${answer.maxChars && count > answer.maxChars ? "text-red-600" : "text-gray-400"}`}>{count.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""} · 공백 {answer.countSpaces ? "포함" : "제외"}{dirty ? " · 수정 내용 저장 필요" : ""}</p>
         </>}
+        {answer.plan && <details className="text-xs text-gray-600">
+          <summary className="cursor-pointer">작성 구상과 회사 리서치 활용</summary>
+          <div className="mt-2 space-y-3">
+            <p className="font-medium">핵심 주장: {answer.plan.message}</p>
+            <ol className="list-decimal pl-4 space-y-1">{answer.plan.outline.map((step, i) => <li key={i}>{step}</li>)}</ol>
+            <p>리서치 활용: {answer.plan.researchMode === "direct" ? "본문의 논거로 사용" : answer.plan.researchMode === "perspective" ? "소재 선정 관점으로 사용" : "직접 활용하지 않음"}</p>
+            {answer.plan.research.map((r, i) => {
+              const source = answer.researchSources?.find((s) => s.id === r.sourceId);
+              return <div key={i} className="space-y-1">
+                <p>{r.paragraph}번 문단 · {r.purpose}</p>
+                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">{r.quote}</blockquote>
+                {source?.generatedAt && <p>조사 시각: {new Date(source.generatedAt).toLocaleString("ko-KR")}{source.status === "partial" ? " · 일부 확인되지 않은 조사" : ""}</p>}
+                {!!source?.links?.length && <p>해당 조사 항목의 출처</p>}
+                {source?.links?.filter((link) => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}
+              </div>;
+            })}
+            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}</p>)}
+            {answer.plan.notes.map((note, i) => <p key={i}>{note}</p>)}
+            <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
+          </div>
+        </details>}
         <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p></div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
         <div className="flex flex-wrap gap-3 text-xs">
           <button disabled={essayBusy} className="text-blue-600 disabled:opacity-40" onClick={() => {

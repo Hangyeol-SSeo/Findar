@@ -1,3 +1,5 @@
+import type { EssayPlan } from "./essay-plan";
+
 export interface EssayRequest {
   question: string;
   maxChars?: number;
@@ -15,8 +17,10 @@ export interface EssayAnswer extends EssayRequest {
   status: "draft" | "needs_info";
   source: "user_question";
   generatedAt: number;
+  plan?: EssayPlan;
+  researchSources?: EssaySource[];
 }
-export interface EssaySource { id: string; text: string }
+export interface EssaySource { id: string; text: string; links?: { title: string; url: string }[]; generatedAt?: number; status?: string; contentJson?: unknown }
 
 export function characterCount(text: string, countSpaces = true): number {
   return Array.from(countSpaces ? text : text.replace(/\s/g, "")).length;
@@ -75,6 +79,10 @@ export function validateEssay(
     return { ...request, answer: "", intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "needs_info", source: "user_question", generatedAt: Date.now() };
   }
   if (!answer || !evidence.length) throw new Error("근거 없는 답변은 저장하지 않습니다.");
+  // Check sentence endings, leaving quoted speech alone.
+  const narration = answer.replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, "");
+  if (/(?:한다|했다|된다|됐다|이다|였다|있다|없다|겠다|느꼈다|배웠다|깨달았다|이해했다|바꿨다|늘었다|복구했다)(?=[.!?。！？](?:\s|$)|\s*$)/m.test(narration))
+    throw new Error("답변에 반말 종결이 포함되어 있습니다. 모든 서술 문장을 존댓말로 다시 작성해주세요.");
   if (request.maxChars && characterCount(answer, request.countSpaces) > request.maxChars)
     throw new Error("답변이 글자 수 제한을 초과했습니다.");
   if (forbiddenNames.some((name) => name && answer.toLowerCase().includes(name.toLowerCase())) || /\[비공개[^\]]*\]/.test(answer))

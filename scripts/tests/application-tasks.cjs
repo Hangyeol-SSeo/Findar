@@ -13,6 +13,7 @@ const stubs = {
   '@/lib/db': { getJobBySeq: seq => ({ seq }) },
   '@/lib/application-draft': {
     getCachedApplicationDraft: seq => drafts.get(seq) ?? null,
+    prepareEssayBatch: async (_seq, inputs) => ({ plans: inputs }),
     generateCustomEssayAnswer: async (_seq, input, signal) => {
       assert.equal(signal, undefined, 'work must not depend on client AbortSignal');
       await gate;
@@ -54,10 +55,11 @@ function load(relative) {
   assert.equal(tasks.getApplicationTask('a', first.id).status, 'completed');
   assert.deepEqual(drafts.get('a').essayAnswers.map(a => a.question), ['first', 'second']);
   assert.equal(tasks.getApplicationTask('a', doc.id).result.document.filename, 'result.docx');
-  assert.equal((await post('a', ['retained', 'fail'])).status, 202);
+  assert.equal((await post('a', ['retained', 'fail', 'after-failure'])).status, 202);
   await scheduled.shift()();
   const failed = tasks.listApplicationTasks('a').find(t => t.status === 'failed');
-  assert.equal(failed.done, 1); assert.equal(failed.error, 'fixture failure');
-  assert.equal(drafts.get('a').essayAnswers.at(-1).question, 'retained');
+  assert.equal(failed.done, 2); assert.match(failed.error, /3개 중 2개/); assert.match(failed.error, /문항 2: fixture failure/);
+  assert.equal(drafts.get('a').essayAnswers.at(-1).question, 'after-failure');
+  assert.equal((await post('a', ['same', 'same'])).status, 400);
   console.log('PASS client disconnect, sequential batch, same-job duplicate rejection, concurrent companies/document, scoped polling, partial failure retention');
 })().catch(error => { console.error(error); process.exitCode = 1; });
