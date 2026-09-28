@@ -42,7 +42,7 @@ export default function SettingsPage() {
   }, [careerGoals, showToast]);
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-8">
+    <div className="w-full min-w-0 max-w-4xl mx-auto px-6 py-8">
       <Toast message={toastMessage} />
       <Link
         href="/"
