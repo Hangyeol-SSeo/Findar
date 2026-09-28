@@ -1,4 +1,5 @@
 import { query, type HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import {
   getCompany,
   getCompanySections,
@@ -21,7 +22,6 @@ export { COMPANY_SECTION_TYPES, COMPANY_SECTION_LABELS } from "./company-section
 export type { CompanySectionType } from "./company-section-types";
 
 // 웹 검색 호환성을 유지하며 분석 모델의 추론량과 조사 범위를 제한한다.
-const RESEARCH_MODEL = process.env.COMPANY_RESEARCH_MODEL || "claude-sonnet-4-6";
 const RESEARCH_EFFORT = process.env.COMPANY_RESEARCH_EFFORT === "high" ? "high" : "medium";
 const SEARCH_LIMIT = 3;
 const FETCH_LIMIT = 5;
@@ -54,7 +54,11 @@ export function listStaleSections(
   const candidates = [...new Set(requested ?? COMPANY_SECTION_TYPES)];
   if (force) return candidates;
   const existing = new Map(getCompanySections(normalizedName).map((s) => [s.sectionType, s]));
-  return candidates.filter((t) => isStale(existing.get(t as CompanySectionType), t as CompanySectionType));
+  const model = getAIModelId("companyResearch");
+  return candidates.filter((t) => {
+    const section = existing.get(t as CompanySectionType);
+    return isStale(section, t as CompanySectionType) || Boolean(section?.model && section.model !== model);
+  });
 }
 
 function extractSources(text: string): { title: string; url: string }[] {
@@ -101,14 +105,14 @@ function researchToolBudget(): HookCallback {
   };
 }
 
-async function runWebSearchSection(prompt: string): Promise<SectionResult> {
+async function runWebSearchSection(prompt: string, model: string): Promise<SectionResult> {
   let resultText = "";
   try {
     for await (const message of query({
       prompt: `조사 기준일: ${new Date().toISOString().slice(0, 10)}\n${prompt}`,
       options: {
-        model: RESEARCH_MODEL,
-        effort: RESEARCH_EFFORT,
+        model,
+        ...(model.startsWith("claude-haiku-") ? {} : { effort: RESEARCH_EFFORT }),
         maxTurns: MAX_TURNS,
         tools: ["WebSearch", "WebFetch"],
         allowedTools: ["WebSearch", "WebFetch"],
@@ -121,7 +125,7 @@ async function runWebSearchSection(prompt: string): Promise<SectionResult> {
       if (message.type !== "result") continue;
       // 본문/회사명 없이 계측값만 기록. SDK 비용은 구독 잔여량과 동일하지 않다.
       console.info("[company-research] usage", JSON.stringify({
-        model: RESEARCH_MODEL, effort: RESEARCH_EFFORT, status: message.subtype,
+        model, effort: RESEARCH_EFFORT, status: message.subtype,
         turns: message.num_turns, costUsd: message.total_cost_usd, models: message.modelUsage,
       }));
       if (message.subtype === "success" && !message.is_error) resultText = message.result;
@@ -137,7 +141,7 @@ async function runWebSearchSection(prompt: string): Promise<SectionResult> {
 
 const runGroundedResearchSection = runWebSearchSection;
 
-async function researchOverview(displayName: string): Promise<SectionResult> {
+async function researchOverview(displayName: string, model: string): Promise<SectionResult> {
   const prompt = `당신은 "${displayName}"(한국 금융투자협회 소속 회원사 — 증권/자산운용/금융투자 등)에 지원하는 사람을 도와, 기업 실사(due diligence)하듯 깊이 있게 조사하는 애널리스트입니다. 이 회사를 잘 모른다는 인상을 절대 주면 안 되는 상황이라 생각하고 아래를 전부 다뤄:
 
 - 연혁: 설립연도, 주요 연혁(사명 변경, 인수합병, 대주주 변경 등), 소속 그룹/계열이 있다면 그룹 내 위치와 역할
@@ -147,10 +151,10 @@ async function researchOverview(displayName: string): Promise<SectionResult> {
 - 왜 사람을 뽑는가: 이 회사가 최근 어떤 방향으로 사업을 확장/전환하고 있고, 그것이 채용과 어떻게 연결될 수 있는지 추정
 
 ${WEB_RESEARCH_INSTRUCTION}`;
-  return runWebSearchSection(prompt);
+  return runWebSearchSection(prompt, model);
 }
 
-async function researchCulture(displayName: string): Promise<SectionResult> {
+async function researchCulture(displayName: string, model: string): Promise<SectionResult> {
   const prompt = `당신은 "${displayName}"에 지원하는 사람을 돕는 애널리스트입니다. 이 회사의 인재상과 조직문화를 기업 실사하듯 깊이 있게 조사해:
 
 - 공식 인재상: 회사가 공식적으로 내세우는 핵심가치/인재상 키워드와 그 구체적 의미
@@ -160,10 +164,10 @@ async function researchCulture(displayName: string): Promise<SectionResult> {
 - 최근 채용 방향: 최근 어떤 직무/분야를 확대 채용하고 있는지, 그게 회사의 사업 방향과 어떻게 연결되는지
 
 ${WEB_RESEARCH_INSTRUCTION}`;
-  return runWebSearchSection(prompt);
+  return runWebSearchSection(prompt, model);
 }
 
-async function researchNews(displayName: string): Promise<SectionResult> {
+async function researchNews(displayName: string, model: string): Promise<SectionResult> {
   const prompt = `당신은 "${displayName}"에 지원하는 사람을 돕는 애널리스트입니다. 최근 1년 이내를 중심으로(중요한 건 더 이전 것도 포함) 이 회사의 행보를 기업 실사하듯 깊이 있게 조사해:
 
 - 사업 행보: 신사업 진출, 조직개편, 주요 상품/서비스 출시, 파트너십, M&A 등
@@ -175,7 +179,7 @@ async function researchNews(displayName: string): Promise<SectionResult> {
 지원자 입장에서 면접·자소서에서 언급하면 좋을 구체적 사실 위주로, 날짜와 함께 정리해.
 
 ${WEB_RESEARCH_INSTRUCTION}`;
-  return runWebSearchSection(prompt);
+  return runWebSearchSection(prompt, model);
 }
 
 // companies.dartCorpCode에 이미 매칭된 값이 있으면 재사용하고, 없으면 새로 찾아서 저장한다.
@@ -196,7 +200,8 @@ async function ensureDartMatch(
 
 async function researchFinancials(
   normalizedName: string,
-  displayName: string
+  displayName: string,
+  model: string
 ): Promise<SectionResult> {
   if (!isDartConfigured()) {
     return { content: "DART 연동이 설정되지 않았습니다 (DART_API_KEY 없음).", sources: [], status: "failed" };
@@ -220,7 +225,7 @@ ${financials.figures.map((f) => `- ${f.label}: ${f.thisYearAmount} (전년: ${f.
 - 재무구조에서 주목할 만한 특징이나 리스크 요인(부채비율, 특이 항목 등)
 
 ${WEB_RESEARCH_INSTRUCTION}`;
-  const result = await runGroundedResearchSection(prompt);
+  const result = await runGroundedResearchSection(prompt, model);
   const sourceUrl = financials.sourceRceptNo
     ? `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${financials.sourceRceptNo}`
     : "https://dart.fss.or.kr";
@@ -235,7 +240,8 @@ ${WEB_RESEARCH_INSTRUCTION}`;
 
 async function researchGovernanceStructure(
   normalizedName: string,
-  displayName: string
+  displayName: string,
+  model: string
 ): Promise<SectionResult> {
   if (!isDartConfigured()) {
     return { content: "DART 연동이 설정되지 않았습니다 (DART_API_KEY 없음).", sources: [], status: "failed" };
@@ -263,7 +269,7 @@ ${executives.map((e) => `- ${e.name} (${e.position}, 재임: ${e.tenurePeriod})`
 - 이 조직구조가 지원자에게 시사하는 점(의사결정 구조, 조직 안정성 등)
 
 ${WEB_RESEARCH_INSTRUCTION}`;
-  const result = await runGroundedResearchSection(prompt);
+  const result = await runGroundedResearchSection(prompt, model);
   return {
     ...result,
     content: result.content || "경영진 정보를 분석하지 못했습니다.",
@@ -281,22 +287,23 @@ async function generateResearchSection(
   displayName: string,
   sectionType: CompanySectionType
 ): Promise<CompanySection> {
+  const model = getAIModelId("companyResearch");
   let result: SectionResult;
   switch (sectionType) {
     case "overview":
-      result = await researchOverview(displayName);
+      result = await researchOverview(displayName, model);
       break;
     case "culture":
-      result = await researchCulture(displayName);
+      result = await researchCulture(displayName, model);
       break;
     case "news":
-      result = await researchNews(displayName);
+      result = await researchNews(displayName, model);
       break;
     case "financials":
-      result = await researchFinancials(normalizedName, displayName);
+      result = await researchFinancials(normalizedName, displayName, model);
       break;
     case "governance_structure":
-      result = await researchGovernanceStructure(normalizedName, displayName);
+      result = await researchGovernanceStructure(normalizedName, displayName, model);
       break;
   }
   // 실패한 새로고침으로 기존의 유효한 분석을 덮어쓰지 않는다.
@@ -304,13 +311,13 @@ async function generateResearchSection(
   if (result.status !== "ok" && previous?.status === "ok") {
     throw new Error("리서치를 완료하지 못해 기존 분석을 유지했습니다.");
   }
-  saveCompanySection(normalizedName, sectionType, { ...result, model: RESEARCH_MODEL });
+  saveCompanySection(normalizedName, sectionType, { ...result, model });
   return {
     sectionType,
     content: result.content,
     contentJson: result.contentJson ?? null,
     sources: result.sources,
-    model: RESEARCH_MODEL,
+    model,
     status: result.status,
     generatedAt: Date.now(),
   };

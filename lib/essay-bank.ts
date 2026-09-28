@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import {
   existsSync,
   mkdirSync,
@@ -80,9 +81,8 @@ function writeBank(bank: EssayBank): void {
   writeFileSync(ESSAY_BANK_PATH, JSON.stringify(bank, null, 2));
 }
 
-const EXTRACT_MODEL = "claude-sonnet-4-6";
 
-async function extractPastEssays(pdfPaths: string[]): Promise<{
+async function extractPastEssays(pdfPaths: string[], model: string): Promise<{
   entries: Omit<EssayEntry, "id" | "source" | "createdAt">[];
   styleNotes: string;
   recurringThemes: string[];
@@ -107,7 +107,7 @@ ${fileList}
   let resultText = "";
   for await (const message of query({
     prompt,
-    options: { model: EXTRACT_MODEL, maxTurns: 10, allowedTools: ["Read"] },
+    options: { model, maxTurns: 10, allowedTools: ["Read"] },
   })) {
     if ("result" in message) resultText = message.result;
   }
@@ -134,17 +134,18 @@ ${fileList}
 export async function ensureEssayBank(opts?: {
   onProgress?: (msg: string) => void;
 }): Promise<EssayBank> {
+  const model = getAIModelId("essayBank");
   const files = listCoverLetterFiles();
   const cached = readBank();
   if (files.length === 0) return cached;
 
   const currentHash = hashSources(files);
-  if (cached.sourcesHash === currentHash) return cached;
+  if (cached.sourcesHash === currentHash && cached.model === model) return cached;
 
   opts?.onProgress?.(`과거 자기소개서 ${files.length}개 분석 중...`);
 
   try {
-    const extracted = await extractPastEssays(files);
+    const extracted = await extractPastEssays(files, model);
     const importedEntries: EssayEntry[] = extracted.entries
       .filter((e) => e.answer)
       .map((e) => ({
@@ -157,7 +158,7 @@ export async function ensureEssayBank(opts?: {
     const bank: EssayBank = {
       sourcesHash: currentHash,
       generatedAt: Date.now(),
-      model: EXTRACT_MODEL,
+      model,
       entries: [...importedEntries, ...savedEntries],
       styleNotes: extracted.styleNotes || cached.styleNotes,
       recurringThemes: extracted.recurringThemes.length

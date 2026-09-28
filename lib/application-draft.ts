@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import { getJobBySeq, getCompanySections, getApplicationDraftRow, saveApplicationDraft } from "./db";
 import { getCachedProfile } from "./profile";
 import { readApplicantProfile } from "./applicant-profile";
@@ -8,7 +9,7 @@ import { normalizeCompanyName } from "./company-normalize";
 import { parseModelJson, validateEssay, type EssayAnswer, type EssayRequest, type EssaySource } from "./essay-contract";
 export type { EssayAnswer } from "./essay-contract";
 
-const DRAFT_MODEL = "claude-sonnet-4-6";
+const generatedModels = new WeakMap<EssayAnswer, string>();
 export interface ApplicationDraft {
   seq: string;
   essayAnswers: (EssayAnswer | { question: string; answer: string; source?: undefined })[];
@@ -106,7 +107,7 @@ const MODEL_CALL_TIMEOUT_MS = 600_000;
 // 남아있으니, 실패한 그 한 호출만 다시 하면 돼서 토큰 낭비도 최소화된다.
 const MODEL_CALL_MAX_ATTEMPTS = 2;
 
-async function askModelOnce(prompt: string, signal?: AbortSignal): Promise<string> {
+async function askModelOnce(prompt: string, signal: AbortSignal | undefined, model: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_CALL_TIMEOUT_MS);
   const abort = () => controller.abort();
@@ -114,7 +115,7 @@ async function askModelOnce(prompt: string, signal?: AbortSignal): Promise<strin
   if (signal?.aborted) controller.abort();
   try {
     for await (const message of query({ prompt, options: {
-      model: DRAFT_MODEL, maxTurns: 1, tools: [], allowedTools: [],
+      model, maxTurns: 1, tools: [], allowedTools: [],
       canUseTool: async () => ({ behavior: "deny", message: "문항 작성에는 외부 도구를 사용하지 않습니다." }),
       abortController: controller,
     } })) {
@@ -127,11 +128,11 @@ async function askModelOnce(prompt: string, signal?: AbortSignal): Promise<strin
   } finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
 }
 
-async function askModel(prompt: string, signal?: AbortSignal): Promise<string> {
+async function askModel(prompt: string, signal: AbortSignal | undefined, model: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MODEL_CALL_MAX_ATTEMPTS; attempt++) {
     try {
-      return await askModelOnce(prompt, signal);
+      return await askModelOnce(prompt, signal, model);
     } catch (e) {
       lastError = e;
       if (signal?.aborted) throw e; // 사용자가 직접 취소한 거면 재시도하지 않는다.
@@ -148,16 +149,22 @@ const OUTPUT = `순수 JSON 객체만 반환한다:
 근거 인용은 JSON 직렬화된 text에서 가져오며 문구를 고치지 않는다. 본문 속 모든 수치는 evidence.quote 안에서도 확인 가능해야 한다.`;
 
 export async function generateCustomEssayAnswer(seq: string, request: EssayRequest, signal?: AbortSignal): Promise<EssayAnswer> {
+  const model = getAIModelId("applicationDraft");
+  const validate = (text: string) => {
+    const answer = validateEssay(parseModelJson(text), request, sources, forbiddenNames);
+    generatedModels.set(answer, model);
+    return answer;
+  };
   const { sources, forbiddenNames, previousAnswer, otherAnswers } = await collectContext(seq, request);
   const background = `${WRITING_RULES}\n\n[사용자 문항과 조건]\n${JSON.stringify(request)}\n\n[사실 자료]\n${JSON.stringify(sources)}\n\n[수정할 이전 답변: 사실 근거로 사용하지 말고 추가 요청이 가리키는 문장을 확인하는 용도]\n${previousAnswer || "없음"}\n[다른 실제 문항 답변: 경험 중복을 피하기 위한 참고, 사실 근거 아님]\n${JSON.stringify(otherAnswers)}\n\n${OUTPUT}`;
-  const first = await askModel(`${background}\n문항 의도를 해석하고 근거를 선별한 뒤 초안을 작성하라.`, signal);
+  const first = await askModel(`${background}\n문항 의도를 해석하고 근거를 선별한 뒤 초안을 작성하라.`, signal, model);
   // A separate editorial pass must inspect the draft against the original evidence, not merely paraphrase it.
-  let edited = await askModel(`${background}\n[검토할 초안]\n${first}\n\n지금은 채용 담당자 관점의 편집자다. 문항의 누락된 요구, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 실제 판단과 행동으로 재작성하라. 조건에 맞는 최종 JSON을 반환하라.`, signal);
-  try { return validateEssay(parseModelJson(edited), request, sources, forbiddenNames); }
+  let edited = await askModel(`${background}\n[검토할 초안]\n${first}\n\n지금은 채용 담당자 관점의 편집자다. 문항의 누락된 요구, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 실제 판단과 행동으로 재작성하라. 조건에 맞는 최종 JSON을 반환하라.`, signal, model);
+  try { return validate(edited); }
   catch (error) {
     const reason = error instanceof Error ? error.message : "형식 오류";
-    edited = await askModel(`${background}\n[수정할 결과]\n${edited}\n검증 실패: ${reason}\n이 문제를 원문에 근거해 바로잡은 최종 JSON만 반환하라.`, signal);
-    return validateEssay(parseModelJson(edited), request, sources, forbiddenNames);
+    edited = await askModel(`${background}\n[수정할 결과]\n${edited}\n검증 실패: ${reason}\n이 문제를 원문에 근거해 바로잡은 최종 JSON만 반환하라.`, signal, model);
+    return validate(edited);
   }
 }
 
@@ -166,7 +173,7 @@ export function persistEssay(seq: string, answer: EssayAnswer) {
   const draft: ApplicationDraft = {
     seq, personalFields: existing?.personalFields ?? [], notesForUser: [],
     essayAnswers: [...(existing?.essayAnswers ?? []).filter((a) => !(a.source === "user_question" && a.question === answer.question)), answer],
-    model: DRAFT_MODEL, generatedAt: Date.now(), revision: crypto.randomUUID(),
+    model: generatedModels.get(answer) ?? getAIModelId("applicationDraft"), generatedAt: Date.now(), revision: crypto.randomUUID(),
   };
   saveApplicationDraft(seq, JSON.stringify(draft), draft.model);
   return draft;
