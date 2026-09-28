@@ -1,6 +1,5 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { JobDetail } from "./crawler";
-import { getAIModelOptions } from "./ai-model-settings";
+import { queryJobAI } from "./job-ai";
 
 export interface JobSummary {
   seq: string;
@@ -41,20 +40,7 @@ JSON 형식:
   "deadline": "마감일 (YYYY-MM-DD 형식, 모르면 빈 문자열)"
 }`;
 
-  let resultText = "";
-
-  for await (const message of query({
-    prompt,
-    options: {
-      ...getAIModelOptions("summarization"),
-      maxTurns: 1,
-      allowedTools: [],
-    },
-  })) {
-    if ("result" in message) {
-      resultText = message.result;
-    }
-  }
+  const resultText = await queryJobAI("summarization", prompt);
 
   try {
     // JSON 블록 추출 (```json ... ``` 또는 순수 JSON)
@@ -113,8 +99,8 @@ function parsedToSummary(job: JobDetail, parsed: Record<string, unknown>): JobSu
 }
 
 /**
- * 여러 공고를 한 번의 query() 호출로 요약한다.
- * 배치 파싱에 실패한 공고는 호출측에서 summarizeJob으로 개별 재시도해야 한다(이 함수는 실패분을 결과 Map에서 누락시킬 뿐 예외를 던지지 않음).
+ * 여러 공고를 한 번의 AI 호출로 요약한다.
+ * 배치 파싱 실패분은 결과 Map에서 누락되어 호출측이 개별 재시도한다. 연결 오류는 호출측에 전달한다.
  */
 export async function summarizeJobBatch(
   jobs: JobDetail[]
@@ -147,19 +133,7 @@ JSON 배열 형식 (공고 수만큼, seq 순서 유지):
   }
 ]`;
 
-  let resultText = "";
-  for await (const message of query({
-    prompt,
-    options: {
-      ...getAIModelOptions("summarization"),
-      maxTurns: 1,
-      allowedTools: [],
-    },
-  })) {
-    if ("result" in message) {
-      resultText = message.result;
-    }
-  }
+  const resultText = await queryJobAI("summarization", prompt);
 
   const result = new Map<string, JobSummary>();
   try {

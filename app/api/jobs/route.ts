@@ -15,6 +15,7 @@ import {
 } from "@/lib/db";
 import { ensureProfile, getCachedProfile, type Profile } from "@/lib/profile";
 import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
+import { FreeRideRequestError } from "@/lib/job-ai";
 import {
   CRAWL_PAGES,
   REMATCH_SKIP_THRESHOLD,
@@ -254,7 +255,7 @@ export async function GET(request: Request) {
         });
       } catch (error) {
         console.error("SSE error:", error);
-        send({ type: "error", message: "처리 중 오류가 발생했습니다." });
+        send({ type: "error", message: error instanceof FreeRideRequestError ? error.message : "처리 중 오류가 발생했습니다." });
       } finally {
         if (!closed) {
           closed = true;
