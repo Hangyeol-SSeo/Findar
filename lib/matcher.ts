@@ -1,7 +1,6 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { JobSummary } from "./summarizer";
 import type { Profile } from "./profile";
-import { getAIModelOptions } from "./ai-model-settings";
+import { queryJobAI } from "./job-ai";
 
 export interface JobMatch {
   matchScore: number; // 0-100
@@ -91,19 +90,7 @@ JSON 배열 형식 (공고 수만큼, seq 순서 유지):
   }
 ]`;
 
-  let resultText = "";
-  for await (const message of query({
-    prompt,
-    options: {
-      ...getAIModelOptions("matching"),
-      maxTurns: 1,
-      allowedTools: [],
-    },
-  })) {
-    if ("result" in message) {
-      resultText = message.result;
-    }
-  }
+  const resultText = await queryJobAI("matching", prompt);
 
   const resultMap = new Map<string, JobMatch>();
   try {
@@ -184,19 +171,7 @@ JSON 형식:
   "matchReasoning": "한두 문장 종합 평가"
 }`;
 
-  let resultText = "";
-  for await (const message of query({
-    prompt,
-    options: {
-      ...getAIModelOptions("matching"),
-      maxTurns: 1,
-      allowedTools: [],
-    },
-  })) {
-    if ("result" in message) {
-      resultText = message.result;
-    }
-  }
+  const resultText = await queryJobAI("matching", prompt);
 
   try {
     const jsonMatch =

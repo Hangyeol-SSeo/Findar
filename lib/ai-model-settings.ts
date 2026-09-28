@@ -70,10 +70,10 @@ export function getAIModelId(feature: AIFeature): string {
   return readAIModelSettings().settings[feature];
 }
 
-export function getAIModelOptions(feature: AIFeature): { model: string; env?: Record<string, string | undefined> } {
+export function getJobAIConfiguration(feature: "summarization" | "matching") {
   const model = getAIModelId(feature);
-  if (isJobFeature(feature) && model === freeRideModel()) {
-    return { model, env: { ...process.env, ANTHROPIC_BASE_URL: process.env.FREERIDE_BASE_URL || "http://localhost:11343" } };
+  if (model === freeRideModel()) {
+    return { provider: "freeride" as const, model, baseURL: process.env.FREERIDE_BASE_URL || "http://localhost:11343" };
   }
-  return { model };
+  return { provider: "claude" as const, model };
 }

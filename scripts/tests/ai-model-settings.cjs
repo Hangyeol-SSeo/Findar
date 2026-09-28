@@ -10,6 +10,12 @@ const envKeys = ['USE_FREERIDE', 'FREERIDE_MODEL', 'FREERIDE_BASE_URL', 'COMPANY
 const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
 const modules = new Map();
 const calls = [];
+const gatewayCalls = [];
+const originalFetch = global.fetch;
+global.fetch = async (url, options) => {
+  gatewayCalls.push({ url, options, body: JSON.parse(options.body) });
+  return Response.json({ content: [{ type: 'text', text: '{}' }], stop_reason: 'end_turn' });
+};
 
 function load(relative) {
   const filename = path.resolve(root, relative);
@@ -36,7 +42,7 @@ function load(relative) {
   process.chdir(scratch);
   envKeys.forEach(key => delete process.env[key]);
   const { AI_FEATURES } = load('lib/ai-model-types.ts');
-  const { readAIModelSettings, writeAIModelSettings, getAIModelId, getAIModelOptions } = load('lib/ai-model-settings.ts');
+  const { readAIModelSettings, writeAIModelSettings, getAIModelId, getJobAIConfiguration } = load('lib/ai-model-settings.ts');
   const file = path.join(scratch, 'data/ai-model-settings.json');
   const initial = readAIModelSettings();
   assert.equal(initial.settings.summarization, 'claude-haiku-4-5-20251001');
@@ -50,12 +56,12 @@ function load(relative) {
   for (const { id } of AI_FEATURES) {
     assert.equal(current.options[id].some(option => option.id.startsWith('freeride/')), ['summarization', 'matching'].includes(id));
   }
-  assert.equal(getAIModelOptions('matching').env.ANTHROPIC_BASE_URL, process.env.FREERIDE_BASE_URL);
+  assert.deepEqual(getJobAIConfiguration('matching'), { provider: 'freeride', model: 'freeride/coding', baseURL: process.env.FREERIDE_BASE_URL });
 
   const selected = { ...current.settings, summarization: 'claude-sonnet-5', applicationDraft: 'claude-opus-5-5' };
   writeAIModelSettings(selected);
   assert.equal(getAIModelId('applicationDraft'), 'claude-opus-5-5');
-  assert.equal(getAIModelOptions('summarization').env, undefined, 'Claude selection must bypass the FreeRide gateway');
+  assert.equal(getJobAIConfiguration('summarization').provider, 'claude', 'Claude selection must bypass the FreeRide gateway');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), selected);
   const saved = fs.readFileSync(file, 'utf8');
   for (const invalid of [null, [], {}, { ...selected, extra: 'x' }, { ...selected, profile: 'freeride/coding' }, { ...selected, companyResearch: 'freeride/coding' }, { ...selected, matching: 'unsupported' }]) {
@@ -84,14 +90,16 @@ function load(relative) {
   assert.equal(calls.at(-1).model, 'claude-sonnet-5');
   assert.equal(calls.at(-1).env, undefined);
   await matchJob(profile, job);
-  assert.equal(calls.at(-1).model, 'freeride/coding');
-  assert.equal(calls.at(-1).env.ANTHROPIC_BASE_URL, process.env.FREERIDE_BASE_URL);
+  assert.equal(calls.length, 1, 'FreeRide must bypass the Claude Agent SDK');
+  assert.equal(gatewayCalls.at(-1).body.model, 'freeride/coding');
+  assert.equal(gatewayCalls.at(-1).url, process.env.FREERIDE_BASE_URL + '/v1/messages');
 
   fs.writeFileSync(file, '{broken');
   assert.equal(readAIModelSettings().settings.matching, 'freeride/coding');
   console.log('PASS environment defaults, persisted live selection, provider routing, feature restrictions, invalid-write preservation, API validation, and summary/matching callers');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   process.chdir(oldCwd);
+  global.fetch = originalFetch;
   for (const key of envKeys) {
     if (originalEnv[key] === undefined) delete process.env[key];
     else process.env[key] = originalEnv[key];
