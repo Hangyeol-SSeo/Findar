@@ -30,6 +30,13 @@ try {
   test('explicit limit overrides pasted limit', () => assert.equal(parseEssayRequest({ question: '500자 이내', maxChars: 300 }).maxChars, 300));
   test('reject invalid constraints', () => assert.throws(() => parseEssayRequest({ question: '경험', maxChars: -1 })));
   test('valid grounded answer', () => assert.equal(validateEssay(good, request, sources, []).source, 'user_question'));
+  test('reject informal opening and mixed speech levels', () => {
+    for (const answer of ['손실을 보고 나서야 이해했다. 이후 공부했습니다.', '확인 절차를 바꿨다.', '원인을 기록했다.\n결과를 확인했습니다.'])
+      assert.throws(() => validateEssay({ ...good, answer }, request, sources, []), /존댓말/);
+  });
+  test('quoted informal speech does not reject polite narration', () => {
+    assert.equal(validateEssay({ ...good, answer: '“문제가 있다.”라는 의견을 듣고 확인했습니다.' }, request, sources, []).status, 'draft');
+  });
   test('reject hallucinated evidence quote', () => assert.throws(() => validateEssay({ ...good, evidence: [{ ...good.evidence[0], quote: '없는 원문' }] }, request, sources, [])));
   test('reject unsupported metrics', () => assert.throws(() => validateEssay({ ...good, answer: '90% 개선했습니다.' }, request, sources, [])));
   test('reject excluded names', () => assert.throws(() => validateEssay({ ...good, answer: '테스트대학교에서 배웠습니다.' }, request, sources, ['테스트대학교'])));

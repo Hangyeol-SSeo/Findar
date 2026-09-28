@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { isSameOrigin } from "@/lib/request-origin";
 import { getJobBySeq } from "@/lib/db";
-import { generateCustomEssayAnswer, getCachedApplicationDraft, persistEssay } from "@/lib/application-draft";
+import { generateCustomEssayAnswer, prepareEssayBatch, getCachedApplicationDraft, persistEssay } from "@/lib/application-draft";
 import { parseEssayRequest } from "@/lib/essay-contract";
 import { createApplicationTask, executeApplicationTask } from "@/lib/application-tasks";
 export const runtime = "nodejs";
@@ -15,20 +15,35 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
     const values = body.questions ?? [body];
     if (!Array.isArray(values) || !values.length || values.length > 20) throw new Error("한 번에 1~20개 문항을 작성할 수 있습니다.");
     const inputs = values.map(parseEssayRequest);
+    if (new Set(inputs.map((input) => input.question)).size !== inputs.length)
+      throw new Error("같은 문항이 중복되어 있습니다. 문항을 구분해서 입력해주세요.");
     const task = createApplicationTask(seq, "writing", inputs.length);
     after(() => executeApplicationTask(task.id, async (progress) => {
+      const beforePlanning = JSON.stringify(getCachedApplicationDraft(seq));
+      const prepared = await prepareEssayBatch(seq, inputs);
+      if (JSON.stringify(getCachedApplicationDraft(seq)) !== beforePlanning)
+        throw new Error("구상 중 답변이 다른 창에서 변경되어 작업을 중단했습니다.");
       let needsInfo = 0;
+      let completed = 0;
+      const failures: string[] = [];
       let draft = getCachedApplicationDraft(seq);
       for (let i = 0; i < inputs.length; i++) {
         const initial = JSON.stringify(getCachedApplicationDraft(seq));
         // Work is owned by the server, never by the request/selected tab's AbortSignal.
-        const answer = await generateCustomEssayAnswer(seq, inputs[i]);
+        let answer;
+        try { answer = await generateCustomEssayAnswer(seq, inputs[i], undefined, prepared); }
+        catch (error) {
+          failures.push(`문항 ${i + 1}: ${error instanceof Error ? error.message : "작성에 실패했습니다."}`);
+          continue;
+        }
         if (JSON.stringify(getCachedApplicationDraft(seq)) !== initial)
           throw new Error("작성 중 답변이 다른 창에서 변경되어 덮어쓰지 않았습니다. 완료된 문항은 저장되어 있습니다.");
         draft = persistEssay(seq, answer);
         if (answer.status === "needs_info") needsInfo++;
-        progress(i + 1);
+        progress(++completed);
       }
+      if (failures.length) throw new Error(`요청한 ${inputs.length}개 중 ${completed}개를 저장했습니다. ${failures.join(" / ")}`);
+      if (completed !== inputs.length) throw new Error("요청한 문항 수와 저장한 답변 수가 일치하지 않습니다.");
       return { draft: draft!, needsInfo };
     }));
     return Response.json({ task }, { status: 202 });
