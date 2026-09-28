@@ -18,7 +18,7 @@ interface ResumeState {
 const STATUS_TEXT: Record<ResumeState["status"], { label: string; style: string }> = {
   missing: { label: "이력서 없음", style: "bg-gray-100 text-gray-600" },
   "not-analyzed": { label: "분석 전", style: "bg-amber-100 text-amber-800" },
-  stale: { label: "파일 변경됨 · 재분석 필요", style: "bg-amber-100 text-amber-800" },
+  stale: { label: "파일 또는 모델 변경됨 · 재분석 필요", style: "bg-amber-100 text-amber-800" },
   ready: { label: "분석 완료", style: "bg-emerald-100 text-emerald-800" },
 };
 
@@ -154,7 +154,7 @@ export default function ResumeUploadForm({ showToast }: { showToast: (msg: strin
               onClick={analyze}
               disabled={!!busy || state.analyzing || state.status === "ready"}
               className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-              title={state.status === "ready" ? "파일이 바뀌지 않아 다시 분석할 필요가 없습니다" : undefined}
+              title={state.status === "ready" ? "파일과 분석 모델이 바뀌지 않아 다시 분석할 필요가 없습니다" : undefined}
             >
               {analyzing ? "분석 중... (1~2분)" : "지금 분석"}
             </button>
@@ -186,7 +186,7 @@ export default function ResumeUploadForm({ showToast }: { showToast: (msg: strin
         )}
 
         <p className="text-xs leading-5 text-gray-400">
-          분석은 파일이 바뀌었을 때만 한 번 실행됩니다. 지금 분석하지 않아도 다음 공고 새로고침 때 자동으로 분석되고, 매칭 점수도
+          분석은 파일이나 분석 모델이 바뀌면 다시 실행됩니다. 지금 분석하지 않아도 다음 공고 새로고침 때 자동으로 분석되고, 매칭 점수도
           새 이력서 기준으로 다시 계산됩니다.
         </p>
 
@@ -205,7 +205,7 @@ export default function ResumeUploadForm({ showToast }: { showToast: (msg: strin
             )}
             <p className="mt-2 text-xs text-gray-400">
               {new Date(state.profile.generatedAt).toLocaleString("ko-KR")} 분석
-              {state.status === "stale" && " · 현재 파일과 다른 이전 분석 결과입니다"}
+              {state.status === "stale" && " · 현재 파일 또는 모델 설정과 다른 이전 분석 결과입니다"}
             </p>
           </div>
         )}

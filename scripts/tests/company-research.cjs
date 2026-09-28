@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
+let selectedModel = 'claude-sonnet-5';
 let calls = 0, saved = [], existing = [], options, errorResult = false;
 const modules = {};
 function load(name) {
@@ -22,6 +23,7 @@ function load(name) {
         getCompanySections: () => existing,
         saveCompanySection: (...args) => saved.push(args),
       };
+      if (id === './ai-model-settings') return { getAIModelId: () => selectedModel };
       if (id === './dart') return { isDartConfigured: () => false };
       return load(id.slice(2));
     },
@@ -55,5 +57,21 @@ function load(name) {
   assert.equal((await researchSection('fixture', 'Fixture', 'overview')).status, 'ok');
   existing = [{ sectionType: 'overview', status: 'partial', generatedAt: Date.now() }];
   assert.equal(listStaleSections('fixture', ['overview']).length, 1);
-  console.log('PASS deduplication, tool budgets, compact fetch, TTL, failed refresh preservation, retry after failure');
+  existing = [];
+  selectedModel = 'claude-haiku-4-5-20251001';
+  const pending = researchSection('model-fixture', 'Fixture', 'overview');
+  selectedModel = 'claude-sonnet-5';
+  const result = await pending;
+  assert.equal(result.model, 'claude-haiku-4-5-20251001', 'an operation must retain its selected model');
+  assert.equal(options.effort, undefined, 'Haiku does not support effort');
+  assert.equal(saved.at(-1)[2].model, result.model);
+  existing = [{ ...result, generatedAt: Date.now() }];
+  assert.equal(listStaleSections('model-fixture', ['overview']).length, 1, 'a new model must permit refreshing fresh cached research');
+  selectedModel = result.model;
+  assert.equal(listStaleSections('model-fixture', ['overview']).length, 0);
+  selectedModel = 'claude-sonnet-4-6';
+  const updated = await researchSection('other-fixture', 'Fixture', 'overview');
+  assert.equal(updated.model, selectedModel);
+  assert.equal(options.effort, 'medium');
+  console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility');
 })().catch(error => { console.error(error); process.exitCode = 1; });

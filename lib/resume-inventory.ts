@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { hashResumeSources, listResumePdfs } from "./resume-files";
@@ -12,7 +13,6 @@ import { extractJsonObject, type ResumeItem } from "./resume-tailoring-contract"
 // 원본 PDF를 읽으므로 FreeRide를 거치지 않고 항상 Anthropic API를 직접 쓴다.
 const DATA_DIR = join(process.cwd(), "data");
 const INVENTORY_PATH = join(DATA_DIR, "resume-inventory.json");
-const INVENTORY_MODEL = "claude-sonnet-4-6";
 
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -32,7 +32,7 @@ function readCached(): ResumeInventory | null {
   }
 }
 
-async function extractInventory(pdfPaths: string[], sourcesHash: string): Promise<ResumeInventory> {
+async function extractInventory(pdfPaths: string[], sourcesHash: string, model: string): Promise<ResumeInventory> {
   const prompt = `다음 PDF 파일들을 모두 Read 도구로 읽고, 이력서/포트폴리오에 적힌 이력 항목을 빠짐없이 목록으로 옮겨라.
 
 파일 목록:
@@ -61,7 +61,7 @@ ${pdfPaths.map((p) => `- ${p}`).join("\n")}
   let resultText = "";
   for await (const message of query({
     prompt,
-    options: { model: INVENTORY_MODEL, maxTurns: 12, allowedTools: ["Read"] },
+    options: { model, maxTurns: 12, allowedTools: ["Read"] },
   })) {
     if (message.type === "result") {
       if (message.subtype !== "success" || message.is_error) throw new Error("이력서 항목 추출에 실패했습니다.");
@@ -81,7 +81,7 @@ ${pdfPaths.map((p) => `- ${p}`).join("\n")}
     .filter((x) => x.title)
     .map((x, i) => ({ id: `r${i + 1}`, source: "resume" as const, ...x }));
   if (items.length === 0) throw new Error("이력서에서 항목을 찾지 못했습니다.");
-  return { sourcesHash, generatedAt: Date.now(), model: INVENTORY_MODEL, items };
+  return { sourcesHash, generatedAt: Date.now(), model, items };
 }
 
 const state = globalThis as typeof globalThis & { findarInventoryInflight?: Map<string, Promise<ResumeInventory>> };
@@ -92,19 +92,21 @@ export async function ensureResumeInventory(): Promise<ResumeInventory | null> {
   const pdfs = listResumePdfs();
   if (pdfs.length === 0) return null;
   const hash = hashResumeSources(pdfs);
+  const model = getAIModelId("resumeInventory");
+  const key = JSON.stringify([hash, model]);
   const cached = readCached();
-  if (cached?.sourcesHash === hash) return cached;
-  const running = inflight.get(hash);
+  if (cached?.sourcesHash === hash && cached.model === model) return cached;
+  const running = inflight.get(key);
   if (running) return running;
-  const task = extractInventory(pdfs, hash).then((inv) => {
+  const task = extractInventory(pdfs, hash, model).then((inv) => {
     writeFileSync(INVENTORY_PATH, JSON.stringify(inv, null, 2));
     return inv;
   });
-  inflight.set(hash, task);
+  inflight.set(key, task);
   try {
     return await task;
   } finally {
-    inflight.delete(hash);
+    inflight.delete(key);
   }
 }
 

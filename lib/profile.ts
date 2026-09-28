@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 import { basename, join } from "path";
@@ -114,9 +115,9 @@ export function writeCareerGoals(careerGoals: string): void {
 
 async function extractProfile(
   pdfPaths: string[],
-  sourcesHash: string
+  sourcesHash: string,
+  model: string
 ): Promise<Profile> {
-  const model = "claude-sonnet-4-6";
   const fileList = pdfPaths.map((p) => `- ${p}`).join("\n");
 
   const prompt = `다음 PDF 파일들을 모두 Read 도구로 읽고 지원자의 프로필을 추출해.
@@ -206,22 +207,24 @@ export async function ensureProfile(opts?: {
   }
 
   const currentHash = hashResumeSources(pdfs);
+  const model = getAIModelId("profile");
+  const key = JSON.stringify([currentHash, model]);
   const cached = readCachedProfile();
-  if (cached && cached.sourcesHash === currentHash) {
+  if (cached && cached.sourcesHash === currentHash && cached.model === model) {
     return { profile: withCareerGoals(cached), status: "cached" };
   }
 
-  const running = inflight.get(currentHash);
+  const running = inflight.get(key);
   if (running) {
     opts?.onProgress?.("이력서 분석이 이미 진행 중입니다. 완료를 기다리는 중...");
     return running;
   }
-  const task = runExtraction(pdfs, currentHash, cached, opts);
-  inflight.set(currentHash, task);
+  const task = runExtraction(pdfs, currentHash, cached, model, opts);
+  inflight.set(key, task);
   try {
     return await task;
   } finally {
-    inflight.delete(currentHash);
+    inflight.delete(key);
   }
 }
 
@@ -229,16 +232,17 @@ async function runExtraction(
   pdfs: string[],
   currentHash: string,
   cached: Profile | null,
+  model: string,
   opts?: { onProgress?: (msg: string) => void }
 ): Promise<ProfileResult> {
   opts?.onProgress?.(
     cached
-      ? "이력서가 변경되어 다시 분석 중..."
+      ? "이력서 또는 모델 설정이 변경되어 다시 분석 중..."
       : `이력서/포트폴리오 ${pdfs.length}개 분석 중...`
   );
 
   try {
-    const profile = await extractProfile(pdfs, currentHash);
+    const profile = await extractProfile(pdfs, currentHash, model);
     writeProfile(profile);
     return { profile: withCareerGoals(profile), status: "extracted" };
   } catch (e) {
@@ -268,7 +272,9 @@ export function getProfileStatus(): {
     : null;
   if (pdfs.length === 0) return { status: "missing", analyzing: false, profile: summary };
   const currentHash = hashResumeSources(pdfs);
-  const analyzing = inflight.has(currentHash);
+  const model = getAIModelId("profile");
+  const key = JSON.stringify([currentHash, model]);
+  const analyzing = inflight.has(key);
   if (!cached) return { status: "not-analyzed", analyzing, profile: null };
-  return { status: cached.sourcesHash === currentHash ? "ready" : "stale", analyzing, profile: summary };
+  return { status: cached.sourcesHash === currentHash && cached.model === model ? "ready" : "stale", analyzing, profile: summary };
 }

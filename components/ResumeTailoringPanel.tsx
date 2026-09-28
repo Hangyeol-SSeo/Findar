@@ -181,7 +181,7 @@ export default function ResumeTailoringPanel({ seq }: { seq: string }) {
       {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {data?.stale && result && !running && (
         <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-          평가 이후 이력서·지원 정보·지원 방향이 바뀌었습니다. 다시 평가하면 반영됩니다.
+          평가 이후 이력서·지원 정보·지원 방향 또는 모델 설정이 바뀌었습니다. 다시 평가하면 반영됩니다.
         </p>
       )}
 

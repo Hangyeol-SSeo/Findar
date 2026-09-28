@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import { readApplicantProfile } from "./applicant-profile";
 import type { ApplicantProfile } from "./applicant-profile";
 
@@ -345,7 +346,7 @@ export async function planApplicationFill(targets: FillTarget[], signal?: AbortS
 주소가 한 칸이면 fullAddress를 연결하고, 기본 주소/상세 주소가 나뉘어 있으면 각각 address/addressDetail을 연결한다. 우편번호는 우편번호 칸에만 넣는다. 한자 성명은 nameHanja를 사용하며 한글 이름을 한자로 추론하지 않는다. 종교·취미·특기는 저장된 값이 없으면 비워둔다. 일대일로 정확하게 들어맞는 입력칸만 채운다.
 순수 JSON {"assignments":[{"targetId":"...","sourceId":"..."}]}만 반환한다.
 [입력칸]\n${JSON.stringify(eligible)}\n[저장 정보]\n${JSON.stringify(sources)}`,
-      options: { model: "claude-sonnet-4-6", tools: [], allowedTools: [], maxTurns: 1, abortController: controller },
+      options: { model: getAIModelId("applicationFill"), tools: [], allowedTools: [], maxTurns: 1, abortController: controller },
     })) {
       if (message.type === "result") {
         if (message.subtype !== "success" || message.is_error) throw new Error("입력칸 분석에 실패했습니다.");

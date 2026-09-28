@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getAIModelId } from "./ai-model-settings";
 import { createHash } from "crypto";
 import { getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";
 import { readApplicantProfile } from "./applicant-profile";
@@ -15,7 +16,6 @@ import {
 // 공고별 "이력 취사선택" 평가: 이력서/지원 정보의 각 항목을 이 공고 기준으로
 // 강조/유지/축소/제외/숨김 검토 중 하나로 판정한다. 이력서 전체 항목(PII)을 다루므로
 // FreeRide를 거치지 않고 Anthropic API를 직접 쓰며, 사용자가 버튼을 눌렀을 때만 실행된다.
-const TAILORING_MODEL = "claude-sonnet-4-6";
 const MODEL_CALL_TIMEOUT_MS = 300_000;
 
 // 평가 입력(이력서 파일, 지원 정보, 지원 방향)이 바뀌었는지 판정하는 해시. AI 호출 없이 계산된다.
@@ -30,7 +30,7 @@ export function getCachedTailoring(seq: string): { result: ResumeTailoringResult
   const row = getResumeTailoringRow(seq);
   if (!row) return { result: null, stale: false };
   try {
-    return { result: JSON.parse(row.resultJson) as ResumeTailoringResult, stale: row.inputsHash !== computeInputsHash() };
+    return { result: JSON.parse(row.resultJson) as ResumeTailoringResult, stale: row.inputsHash !== computeInputsHash() || row.model !== getAIModelId("resumeTailoring") };
   } catch {
     return { result: null, stale: false };
   }
@@ -80,14 +80,14 @@ const OUTPUT = `순수 JSON 객체만 반환한다(마크다운·설명 없이):
 }
 모든 항목 id가 evaluations 어딘가에 정확히 한 번씩 들어가야 한다.`;
 
-async function askModel(prompt: string): Promise<string> {
+async function askModel(prompt: string, model: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_CALL_TIMEOUT_MS);
   try {
     for await (const message of query({
       prompt,
       options: {
-        model: TAILORING_MODEL,
+        model,
         maxTurns: 1,
         tools: [],
         allowedTools: [],
@@ -121,6 +121,7 @@ export async function evaluateResumeTailoring(
   seq: string,
   progress?: (done: number) => void
 ): Promise<ResumeTailoringResult> {
+  const model = getAIModelId("resumeTailoring");
   const job = getJobBySeq(seq);
   if (!job) throw new Error("공고를 찾을 수 없습니다.");
   const inputsHash = computeInputsHash();
@@ -155,7 +156,7 @@ ${JSON.stringify(compactItems(items))}
 
 ${OUTPUT}`;
 
-  const text = await askModel(prompt);
+  const text = await askModel(prompt, model);
   let raw: Record<string, unknown>;
   try {
     raw = extractJsonObject(text);
@@ -166,10 +167,10 @@ ${OUTPUT}`;
     seq,
     ...normalizeTailoring(raw, items),
     items,
-    model: TAILORING_MODEL,
+    model,
     generatedAt: Date.now(),
   };
-  saveResumeTailoring(seq, JSON.stringify(result), inputsHash, TAILORING_MODEL);
+  saveResumeTailoring(seq, JSON.stringify(result), inputsHash, model);
   progress?.(2);
   return result;
 }

@@ -5,13 +5,14 @@ import Link from "next/link";
 import ApplicantProfileForm from "@/components/ApplicantProfileForm";
 import NarrativeProfileForm from "@/components/NarrativeProfileForm";
 import ResumeUploadForm from "@/components/ResumeUploadForm";
+import AIModelSettingsForm from "@/components/AIModelSettingsForm";
 import Toast, { useToast } from "@/components/Toast";
 
 export default function SettingsPage() {
   const [careerGoals, setCareerGoals] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"resume" | "matching" | "applicant" | "narrative">("resume");
+  const [tab, setTab] = useState<"resume" | "matching" | "applicant" | "narrative" | "models">("resume");
   const { message: toastMessage, showToast } = useToast();
 
   useEffect(() => {
@@ -52,24 +53,24 @@ export default function SettingsPage() {
 
       <h1 className="text-2xl font-bold tracking-tight mt-3 mb-6">설정</h1>
 
-      <div className="flex gap-1 border-b border-gray-100 mb-6">
-        {(["resume", "matching", "applicant", "narrative"] as const).map((t) => (
+      <div className="flex gap-1 overflow-x-auto border-b border-gray-100 mb-6">
+        {(["resume", "matching", "applicant", "narrative", "models"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`text-sm px-3 py-2 -mb-px border-b-2 transition-colors ${
+            className={`shrink-0 text-sm px-3 py-2 -mb-px border-b-2 transition-colors ${
               tab === t
                 ? "border-blue-600 text-blue-600 font-medium"
                 : "border-transparent text-gray-400 hover:text-gray-600"
             }`}
           >
-            {t === "resume" ? "이력서" : t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : "가치관과 서사"}
+            {t === "resume" ? "이력서" : t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : t === "narrative" ? "가치관과 서사" : "AI 모델"}
           </button>
         ))}
       </div>
 
       {/* 탭마다 조건부로 마운트하면 전환할 때마다 폼이 다시 불러오며 "불러오는 중..."으로
-          번쩍이고 저장 안 한 입력도 사라진다. 네 탭을 모두 마운트해두고 hidden으로만 전환한다. */}
+          번쩍이고 저장 안 한 입력도 사라진다. 모든 탭을 마운트해두고 hidden으로만 전환한다. */}
       <div hidden={tab !== "resume"}>
         <p className="text-gray-500 mb-4">
           이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
@@ -119,6 +120,9 @@ export default function SettingsPage() {
           동기로 자연스럽게 연결되도록 쓰이는 참고 자료입니다.
         </p>
         <NarrativeProfileForm showToast={showToast} />
+      </div>
+      <div hidden={tab !== "models"}>
+        <AIModelSettingsForm showToast={showToast} />
       </div>
     </div>
   );
