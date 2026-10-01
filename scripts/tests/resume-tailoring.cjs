@@ -53,7 +53,7 @@ const PDF = (text) => Buffer.from(`%PDF-1.4\n${text}`);
   const legacyPath = path.join(cwd, 'resume', 'cv.pdf');
   const st = fs.statSync(legacyPath);
   const legacyHash = crypto.createHash('sha256').update(`${legacyPath}:${st.size}:${st.mtimeMs}\n`).digest('hex');
-  fs.writeFileSync(path.join(cwd, 'data', 'profile.json'), JSON.stringify({ sourcesHash: legacyHash, name: '테스트', skills: [], domains: [], projects: [], narrative: '', experienceYears: '신입', generatedAt: 1, model: 'claude-sonnet-5' }));
+  fs.writeFileSync(path.join(cwd, 'data', 'profile.json'), JSON.stringify({ sourcesHash: legacyHash, name: '테스트', skills: [], domains: [], projects: [], narrative: '', experienceYears: '신입', generatedAt: 1, model: load('lib/ai-model-types.ts').AI_MODEL_IDS.SONNET }));
   const raw = new Database(path.join(cwd, 'data', 'findar.db'));
   raw.prepare(`INSERT INTO jobs (seq, company, title, date, createdAt, matchProfileHash) VALUES ('1', 'c', 't', '2026-01-01', 1, ?)`).run(legacyHash);
 

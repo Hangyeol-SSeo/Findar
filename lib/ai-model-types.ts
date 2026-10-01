@@ -18,9 +18,22 @@ export interface AIModelSettingsResponse {
   options: Record<AIFeature, AIModelOption[]>;
 }
 
+// Model IDs live here so defaults, settings, and callers share one source of truth.
+export const AI_MODEL_IDS = {
+  SONNET: "claude-sonnet-5-5",
+  OPUS: "claude-opus-5-5",
+  SONNET_4_6: "claude-sonnet-4-6",
+  HAIKU: "claude-haiku-4-5-20251001",
+  FREERIDE_CODING: "freeride/coding",
+  LEGACY_SONNET_5: "claude-sonnet-5",
+} as const;
+
+export const DEFAULT_AI_MODEL = AI_MODEL_IDS.SONNET;
+export const DEFAULT_JOB_AI_MODEL = AI_MODEL_IDS.HAIKU;
+
 export const CLAUDE_MODELS: AIModelOption[] = [
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+  { id: AI_MODEL_IDS.SONNET, label: "Claude Sonnet 5.5" },
+  { id: AI_MODEL_IDS.OPUS, label: "Claude Opus 5.5" },
+  { id: AI_MODEL_IDS.SONNET_4_6, label: "Claude Sonnet 4.6" },
+  { id: AI_MODEL_IDS.HAIKU, label: "Claude Haiku 4.5" },
 ];

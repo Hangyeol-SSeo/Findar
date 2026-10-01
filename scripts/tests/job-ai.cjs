@@ -16,7 +16,7 @@ const nativeCalls = [];
 const savedJobs = [];
 const matches = [];
 const job = { seq: 'fixture-1', company: '예시회사', title: '리스크 분석 신입', date: '2026-09-28', applicationPeriod: '2026-09-28~2026-10-31', views: '0', siteUrl: '', attachments: [], content: '리스크 분석 신입. Python 우대. 2026-10-31 마감.' };
-const profile = { sourcesHash: 'fixture', generatedAt: 0, model: 'claude-sonnet-5', name: '예시지원자', experienceYears: '신입', skills: ['Python'], domains: ['금융'], projects: [], narrative: '' };
+const profile = { sourcesHash: 'fixture', generatedAt: 0, model: 'fixture', name: '예시지원자', experienceYears: '신입', skills: ['Python'], domains: ['금융'], projects: [], narrative: '' };
 const summaryResult = { seq: job.seq, positionType: '신입', experienceYears: '신입', positions: ['리스크 분석'], jdSummary: '리스크 분석 업무', qualifications: ['Python 우대'], deadline: '2026-10-31' };
 const matchResult = { seq: job.seq, matchScore: 85, matchStrengths: ['Python'], matchGaps: [], matchReasoning: '분석 기술 적합' };
 
@@ -78,6 +78,7 @@ function successfulGateway() {
   envKeys.forEach(key => delete process.env[key]);
   process.env.USE_FREERIDE = 'true';
   process.env.FREERIDE_BASE_URL = 'http://127.0.0.1:11343///';
+  const { AI_MODEL_IDS } = load('lib/ai-model-types.ts');
   const { readAIModelSettings, writeAIModelSettings } = load('lib/ai-model-settings.ts');
   const { queryJobAI, FreeRideRequestError } = load('lib/job-ai.ts');
   const { summarizeJob, summarizeJobBatch } = load('lib/summarizer.ts');
@@ -131,9 +132,9 @@ function successfulGateway() {
   AbortSignal.timeout = originalTimeout;
 
   // Changing a web selection must take effect immediately and keep Claude on the native SDK.
-  writeAIModelSettings({ ...readAIModelSettings().settings, summarization: 'claude-sonnet-5' });
+  writeAIModelSettings({ ...readAIModelSettings().settings, summarization: AI_MODEL_IDS.SONNET });
   assert.equal(await queryJobAI('summarization', 'fixture'), '{"native":true}');
-  assert.equal(nativeCalls.at(-1).options.model, 'claude-sonnet-5');
+  assert.equal(nativeCalls.at(-1).options.model, AI_MODEL_IDS.SONNET);
   assert.equal(nativeCalls.at(-1).options.env, undefined);
   successfulGateway();
   await queryJobAI('matching', 'fixture');

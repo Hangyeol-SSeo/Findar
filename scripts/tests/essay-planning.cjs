@@ -6,7 +6,7 @@ let queued = [];
 const plan = { question: '성장과정', researchMode: 'perspective', research: [{ sourceId: 'company.overview', quote: '검증 절차를 중시합니다.', purpose: '판단 기준을 검토합니다.', paragraph: 1 }], notes: [], intent: '선택과 변화', message: '판단 기준의 변화', outline: ['선택', '행동', '변화'], materialCriteria: ['판단의 근거'] };
 const answer = { status: 'draft', intent: plan.intent, answer: '판단의 이유를 기록했습니다.', evidence: [{ sourceId: 'user.current.0', quote: '판단의 이유를 기록했습니다.', usedFor: '행동' }], missingInfo: [], reviewNotes: [] };
 const stubs = {
-  './ai-model-settings': { getAIModelId: () => 'claude-sonnet-5' },
+  './ai-model-settings': { getAIModelId: () => 'fixture-model' },
   '@anthropic-ai/claude-agent-sdk': { async *query({ prompt }) { prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.' }], missingInfo: [] }] } : answer) }; } },
   './db': { getJobBySeq: () => ({ company: '예시 회사', title: '분석', positions: ['분석'], qualifications: ['판단력'] }), getCompanySections: () => [{ sectionType: 'overview', content: '검증 절차를 중시합니다.', sources: [{ title: '공식 자료', url: 'https://example.com/research' }], generatedAt: 1234, status: 'ok' }], getApplicationDraftRow: () => null },
   './profile': { getCachedProfile: () => null },

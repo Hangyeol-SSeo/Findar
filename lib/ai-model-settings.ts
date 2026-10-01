@@ -1,17 +1,18 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { AI_FEATURES, CLAUDE_MODELS, type AIFeature, type AIModelSettings, type AIModelSettingsResponse } from "./ai-model-types";
+import { AI_FEATURES, AI_MODEL_IDS, CLAUDE_MODELS, DEFAULT_AI_MODEL, DEFAULT_JOB_AI_MODEL, type AIFeature, type AIModelSettings, type AIModelSettingsResponse } from "./ai-model-types";
 
 function settingsPath() { return join(process.cwd(), "data", "ai-model-settings.json"); }
 function isJobFeature(feature: AIFeature) { return feature === "summarization" || feature === "matching"; }
-function freeRideModel() { return process.env.FREERIDE_MODEL || "freeride/coding"; }
+function freeRideModel() { return process.env.FREERIDE_MODEL || AI_MODEL_IDS.FREERIDE_CODING; }
+function currentModel(model: string) { return model === AI_MODEL_IDS.LEGACY_SONNET_5 ? AI_MODEL_IDS.SONNET : model; }
 
 function defaults(): AIModelSettings {
   return Object.fromEntries(AI_FEATURES.map(({ id }) => [id,
     isJobFeature(id)
-      ? process.env.USE_FREERIDE === "true" ? freeRideModel() : "claude-haiku-4-5-20251001"
-      : id === "companyResearch" ? process.env.COMPANY_RESEARCH_MODEL || "claude-sonnet-5" : "claude-sonnet-5",
+      ? process.env.USE_FREERIDE === "true" ? freeRideModel() : DEFAULT_JOB_AI_MODEL
+      : id === "companyResearch" ? currentModel(process.env.COMPANY_RESEARCH_MODEL || DEFAULT_AI_MODEL) : DEFAULT_AI_MODEL,
   ])) as AIModelSettings;
 }
 
@@ -34,7 +35,8 @@ export function readAIModelSettings(): AIModelSettingsResponse {
       const saved: unknown = JSON.parse(readFileSync(path, "utf8"));
       if (saved && typeof saved === "object" && !Array.isArray(saved)) {
         for (const { id } of AI_FEATURES) {
-          const model = (saved as Record<string, unknown>)[id];
+          const savedModel = (saved as Record<string, unknown>)[id];
+          const model = typeof savedModel === "string" ? currentModel(savedModel) : savedModel;
           if (options[id].some((option) => option.id === model)) settings[id] = model as string;
         }
       }

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
-let selectedModel = 'claude-sonnet-5';
+let selectedModel;
 let calls = 0, saved = [], existing = [], options, errorResult = false;
 const modules = {};
 function load(name) {
@@ -31,6 +31,8 @@ function load(name) {
   return modules[name] = exports;
 }
 (async () => {
+  const { AI_MODEL_IDS } = load('ai-model-types');
+  selectedModel = AI_MODEL_IDS.SONNET;
   const { researchSection, listStaleSections } = load('company-research');
   await Promise.all([researchSection('fixture', 'Fixture', 'overview'), researchSection('fixture', 'Fixture', 'overview')]);
   assert.equal(calls, 1); assert.equal(saved.length, 1);
@@ -58,18 +60,18 @@ function load(name) {
   existing = [{ sectionType: 'overview', status: 'partial', generatedAt: Date.now() }];
   assert.equal(listStaleSections('fixture', ['overview']).length, 1);
   existing = [];
-  selectedModel = 'claude-haiku-4-5-20251001';
+  selectedModel = AI_MODEL_IDS.HAIKU;
   const pending = researchSection('model-fixture', 'Fixture', 'overview');
-  selectedModel = 'claude-sonnet-5';
+  selectedModel = AI_MODEL_IDS.SONNET;
   const result = await pending;
-  assert.equal(result.model, 'claude-haiku-4-5-20251001', 'an operation must retain its selected model');
+  assert.equal(result.model, AI_MODEL_IDS.HAIKU, 'an operation must retain its selected model');
   assert.equal(options.effort, undefined, 'Haiku does not support effort');
   assert.equal(saved.at(-1)[2].model, result.model);
   existing = [{ ...result, generatedAt: Date.now() }];
   assert.equal(listStaleSections('model-fixture', ['overview']).length, 1, 'a new model must permit refreshing fresh cached research');
   selectedModel = result.model;
   assert.equal(listStaleSections('model-fixture', ['overview']).length, 0);
-  selectedModel = 'claude-sonnet-4-6';
+  selectedModel = AI_MODEL_IDS.SONNET_4_6;
   const updated = await researchSection('other-fixture', 'Fixture', 'overview');
   assert.equal(updated.model, selectedModel);
   assert.equal(options.effort, 'medium');
