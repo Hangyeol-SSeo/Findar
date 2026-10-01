@@ -321,6 +321,22 @@ export function getHiddenSeqs(): string[] {
   return rows.map((r) => r.seq);
 }
 
+const selectHiddenJobsStmt = db.prepare(`
+  ${JOB_WITH_APPLICATION_SELECT}
+  WHERE jobs.summarizedAt IS NOT NULL AND jobs.hidden = 1
+  ORDER BY
+    CASE WHEN jobs.matchScore IS NULL THEN 1 ELSE 0 END,
+    jobs.matchScore DESC,
+    jobs.date DESC
+`);
+
+// 숨김 탭에도 일반 목록과 동일한 마감 기준을 적용한다.
+export function getHiddenJobs(): JobWithMatch[] {
+  const today = todayYmd();
+  const rows = selectHiddenJobsStmt.all() as JobRow[];
+  return rows.filter((row) => isJobOpen(row, today)).map(rowToJobWithMatch);
+}
+
 // hidden과 달리 bookmarked는 getActiveJobs()가 걸러내지 않고 매 job 객체에 그대로 실어
 // 보낸다(applicationStatus와 동일한 패턴) — "찜한 공고만 보기"는 서버에서 아예 빼는 게
 // 아니라 클라이언트가 이미 가진 목록을 필터링하는 것이므로, hidden처럼 목록에서 영구히

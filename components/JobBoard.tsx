@@ -127,6 +127,7 @@ export default function JobBoard() {
   const [pagesInput, setPagesInput] = useState<string>(String(pages));
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
+  const [storedHiddenJobs, setStoredHiddenJobs] = useState<JobSummary[]>([]);
   const [bookmarkOnly, setBookmarkOnly] = useState(false);
   // 제출완료 이후 단계의 공고. 일반 목록(jobs)은 마감이 지나면 서버에서 빠지므로 따로 받아온다.
   const [trackedJobs, setTrackedJobs] = useState<JobSummary[]>([]);
@@ -139,6 +140,16 @@ export default function JobBoard() {
     remainingSeconds: 0,
   });
   const abortRef = useRef<AbortController | null>(null);
+
+  const loadHiddenJobs = useCallback(() => {
+    fetch("/api/jobs/hide", { cache: "no-store" })
+      .then((r) => r.json())
+      .then(({ seqs, jobs }: { seqs?: string[]; jobs?: JobSummary[] }) => {
+        if (Array.isArray(seqs)) setHiddenSeqs(new Set(seqs));
+        if (Array.isArray(jobs)) setStoredHiddenJobs(jobs);
+      })
+      .catch(() => {});
+  }, []);
 
   const chooseMatchEnabled = useCallback((enabled: boolean) => {
     window.localStorage.setItem(MATCH_ENABLED_KEY, String(enabled));
@@ -363,11 +374,8 @@ export default function JobBoard() {
   }, [selectedJob?.seq]);
 
   useEffect(() => {
-    fetch("/api/jobs/hide")
-      .then((r) => r.json())
-      .then(({ seqs }: { seqs: string[] }) => setHiddenSeqs(new Set(seqs)))
-      .catch(() => {});
-  }, []);
+    loadHiddenJobs();
+  }, [loadHiddenJobs]);
 
   const loadTrackedJobs = useCallback(() => {
     fetch("/api/applications/tracked", { cache: "no-store" })
@@ -388,21 +396,23 @@ export default function JobBoard() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ seq, hidden: true }),
-    }).catch(() => {});
-  }, []);
+    }).then(() => loadHiddenJobs()).catch(() => {});
+  }, [loadHiddenJobs]);
 
-  const unhideJob = useCallback((seq: string) => {
+  const unhideJob = useCallback((job: JobSummary) => {
+    setJobs((prev) => prev.some((item) => item.seq === job.seq) ? prev : [...prev, job]);
+    setStoredHiddenJobs((prev) => prev.filter((item) => item.seq !== job.seq));
     setHiddenSeqs((prev) => {
       const next = new Set(prev);
-      next.delete(seq);
+      next.delete(job.seq);
       return next;
     });
     fetch("/api/jobs/hide", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seq, hidden: false }),
-    }).catch(() => {});
-  }, []);
+      body: JSON.stringify({ seq: job.seq, hidden: false }),
+    }).then(() => loadHiddenJobs()).catch(() => {});
+  }, [loadHiddenJobs]);
 
   const updateApplicationStatus = useCallback(
     (seq: string, status: ApplicationStatus) => {
@@ -451,8 +461,13 @@ export default function JobBoard() {
     return Array.from(catSet).sort();
   }, [jobs]);
 
-  const hiddenJobs = useMemo(
-    () => jobs.filter((job) => hiddenSeqs.has(job.seq)),
+  const hiddenJobs = useMemo(() => {
+    const current = jobs.filter((job) => hiddenSeqs.has(job.seq));
+    const currentSeqs = new Set(current.map((job) => job.seq));
+    return [...current, ...storedHiddenJobs.filter((job) => hiddenSeqs.has(job.seq) && !currentSeqs.has(job.seq))];
+  }, [jobs, hiddenSeqs, storedHiddenJobs]);
+  const visibleJobCount = useMemo(
+    () => jobs.filter((job) => !hiddenSeqs.has(job.seq)).length,
     [jobs, hiddenSeqs]
   );
 
@@ -710,7 +725,7 @@ export default function JobBoard() {
           <nav className="mb-4 flex items-center gap-6 border-b border-gray-200" role="tablist" aria-label="공고 보기">
             {(
               [
-                { mode: "list", label: "전체 공고", count: jobs.length - hiddenJobs.length },
+                { mode: "list", label: "전체 공고", count: visibleJobCount },
                 { mode: "applied", label: "지원 현황", count: appliedJobs.length },
                 { mode: "hidden", label: "숨긴 공고", count: hiddenJobs.length },
               ] as { mode: ViewMode; label: string; count: number }[]
@@ -723,6 +738,7 @@ export default function JobBoard() {
                   aria-selected={active}
                   onClick={() => {
                     if (mode === "applied" && !active) loadTrackedJobs();
+                    if (mode === "hidden" && !active) loadHiddenJobs();
                     setViewMode(mode);
                   }}
                   className={`-mb-px flex items-center gap-1.5 border-b-2 pb-2.5 text-sm font-medium transition-colors ${
@@ -1012,7 +1028,7 @@ export default function JobBoard() {
                       <div className="flex flex-col items-end gap-2 shrink-0">
                         <div className="text-xs text-gray-400">{job.date}</div>
                         <button
-                          onClick={() => unhideJob(job.seq)}
+                          onClick={() => unhideJob(job)}
                           className="text-xs px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors whitespace-nowrap"
                         >
                           숨김 해제

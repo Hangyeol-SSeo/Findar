@@ -1,7 +1,7 @@
-import { getHiddenSeqs, setJobHidden } from "@/lib/db";
+import { getHiddenJobs, getHiddenSeqs, setJobHidden } from "@/lib/db";
 
 export async function GET() {
-  return Response.json({ seqs: getHiddenSeqs() });
+  return Response.json({ seqs: getHiddenSeqs(), jobs: getHiddenJobs() }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {
