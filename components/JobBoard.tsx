@@ -43,7 +43,7 @@ interface JobSummary {
 }
 
 type FilterType = "전체" | "신입" | "경력" | "인턴";
-type SortType = "추천순" | "최신순";
+type SortType = "추천순" | "최신순" | "마감순";
 type ViewMode = "list" | "hidden" | "applied";
 
 const MATCH_ENABLED_KEY = "findar:matchEnabled";
@@ -119,7 +119,7 @@ export default function JobBoard() {
   const [newCount, setNewCount] = useState<number | null>(null);
   const [hasProfile, setHasProfile] = useState(false);
   const [profileKnown, setProfileKnown] = useState(false);
-  const [sort, setSort] = useState<SortType>("추천순");
+  const [sort, setSort] = useState<SortType>("최신순");
   const [matchEnabled, setMatchEnabled] = useState<boolean | null>(() =>
     readStoredMatchEnabled()
   );
@@ -129,7 +129,7 @@ export default function JobBoard() {
   const [hiddenSeqs, setHiddenSeqs] = useState<Set<string>>(new Set());
   const [storedHiddenJobs, setStoredHiddenJobs] = useState<JobSummary[]>([]);
   const [bookmarkOnly, setBookmarkOnly] = useState(false);
-  // 제출완료 이후 단계의 공고. 일반 목록(jobs)은 마감이 지나면 서버에서 빠지므로 따로 받아온다.
+  // 검토중부터 추적하는 공고. 일반 목록(jobs)은 마감이 지나면 서버에서 빠지므로 따로 받아온다.
   const [trackedJobs, setTrackedJobs] = useState<JobSummary[]>([]);
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<ApplicationStatus | "전체">("전체");
   const [progress, setProgress] = useState<Progress>({
@@ -425,7 +425,7 @@ export default function JobBoard() {
       setTrackedJobs((prev) =>
         prev.map((j) => (j.seq === seq ? { ...j, applicationStatus: status } : j))
       );
-      // 제출완료로 처음 바뀐 공고를 지원 현황에 넣고 submittedAt을 받아오려면 서버 값이 필요하다.
+      // 새로 추적하는 공고와 submittedAt을 지원 현황에 반영하려면 서버 값이 필요하다.
       fetch("/api/applications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -501,7 +501,7 @@ export default function JobBoard() {
     [filter, positionFilter, searchQuery]
   );
 
-  // 상태를 방금 제출완료 이전으로 되돌린 공고는 서버 재조회 전까지 여기서 걸러낸다.
+  // 상태를 방금 미지원으로 되돌린 공고는 서버 재조회 전까지 여기서 걸러낸다.
   const appliedJobs = useMemo(
     () => trackedJobs.filter((job) => isTrackedApplicationStatus(job.applicationStatus)),
     [trackedJobs]
@@ -524,6 +524,14 @@ export default function JobBoard() {
       return matchesControls(job) && matchBookmark;
     });
 
+    if (sort === "마감순") {
+      return [...filtered].sort((a, b) => {
+        // 마감 미정/채용시까지는 뒤로 보내고, 같은 마감일은 최신 공고부터 표시한다.
+        const da = /^\d{4}-\d{2}-\d{2}$/.test(a.deadline) ? a.deadline : "9999-12-31";
+        const db = /^\d{4}-\d{2}-\d{2}$/.test(b.deadline) ? b.deadline : "9999-12-31";
+        return da.localeCompare(db) || b.date.localeCompare(a.date);
+      });
+    }
     if (sort === "추천순" && hasProfile) {
       return [...filtered].sort((a, b) => {
         const sa = a.matchScore ?? -1;
@@ -868,23 +876,22 @@ export default function JobBoard() {
                     찜한 공고만 {bookmarkedJobs.length}
                   </button>
                 )}
-                {hasProfile && (
-                  <div className="flex bg-gray-100 rounded-lg p-0.5">
-                    {(["추천순", "최신순"] as SortType[]).map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => setSort(s)}
-                        className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-                          sort === s
-                            ? "bg-white text-gray-900 shadow-sm"
-                            : "text-gray-500 hover:text-gray-700"
-                        }`}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div className="flex bg-gray-100 rounded-lg p-0.5">
+                  {(["최신순", "마감순", ...(hasProfile ? ["추천순"] : [])] as SortType[]).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setSort(s)}
+                      aria-pressed={sort === s}
+                      className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                        sort === s
+                          ? "bg-white text-gray-900 shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -984,7 +991,7 @@ export default function JobBoard() {
               {visibleAppliedJobs.length === 0 && (
                 <div className="text-center py-12 text-gray-400">
                   {appliedJobs.length === 0
-                    ? "제출완료 이후 단계로 표시한 공고가 없습니다"
+                    ? "검토중·작성중 등 지원 상태를 표시한 공고가 없습니다"
                     : "조건에 맞는 공고가 없습니다"}
                 </div>
               )}
