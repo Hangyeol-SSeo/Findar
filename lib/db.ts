@@ -630,7 +630,7 @@ export type TrackedApplicationJob = JobWithMatch & {
   expired: boolean;
 };
 
-// "지원 현황" 보기용: 제출완료 이후 단계의 공고는 마감이 지나도, 사용자가 숨겼어도 계속 돌려준다.
+// "지원 현황" 보기용: 검토중부터 추적하는 공고는 마감이 지나도, 사용자가 숨겼어도 계속 돌려준다.
 // getActiveJobs()와 달리 마감/hidden 필터가 없다 — 지원 과정을 추적하는 공고가 기한 경과로 사라지면 안 되므로.
 const selectTrackedJobsStmt = db.prepare(`
   SELECT jobs.*,
