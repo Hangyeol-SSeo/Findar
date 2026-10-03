@@ -10,3 +10,7 @@ researchMode는 직접 회사 사실을 서술하면 direct, 소재 선정의 �
 sourceId와 quote는 제공된 회사 자료에서만 가져오세요. 자료가 partial이면 한계를, 조사 시각과 사실의 기준일이 다르면 차이를 notes에 남기세요. 기준일이나 근거를 추측하지 마세요. 구상은 지원자의 실제 경험을 주장하지 않습니다.
 
 작성 방법 참고: https://github.com/CalebLiu/job-hunt-skill 및 https://github.com/Joulessss/cv-coverletter-opt-claude . 공고 분석과 회사 근거 연결의 아이디어를 참고하여 작성한 Findar 전용 지침이며 원문을 복제하지 않았습니다.
+
+문항을 experience(실제 경험), motivation(동기·포부), opinion(견해·분석), freeform(자유 구성)의 복수 요구로 해석하여 questionTypes에 기록하세요. 복합 문항의 하위 요구를 빠뜨리지 마세요.
+실제 경험이나 개인 선택 이유가 답변의 핵심 증거로 필요하면 personalEvidence=required, 견해·논증만으로 답할 수 있으면 optional입니다. 단순 유형명이 아닌 질문의 요구로 판단하세요.
+견해형은 핵심 주장 → 변화의 작동 원리와 논거 → 반론·한계 → 함의로 설계하고 경험을 필수로 요구하지 마세요. 자유형은 지원 직무와 자료에 맞는 메시지를 설계하고 지원동기·장단점·포부를 모두 나열하도록 강제하지 마세요.

@@ -17,6 +17,8 @@ export interface EssayAnswer extends EssayRequest {
   status: "draft" | "needs_info";
   source: "user_question";
   generatedAt: number;
+  targetRole?: string;
+  roleRevision?: string;
   plan?: EssayPlan;
   researchSources?: EssaySource[];
 }
@@ -53,7 +55,7 @@ export function parseModelJson(text: string): Record<string, unknown> {
 }
 
 export function validateEssay(
-  value: Record<string, unknown>, request: EssayRequest, sources: EssaySource[], forbiddenNames: string[]
+  value: Record<string, unknown>, request: EssayRequest, sources: EssaySource[], forbiddenNames: string[], allowReasoningOnly = false
 ): EssayAnswer {
   for (const key of ["answer", "intent"])
     if (typeof value[key] !== "string") throw new Error("작성 결과에 본문 또는 문항 해석이 없습니다.");
@@ -78,7 +80,7 @@ export function validateEssay(
     if (!missingInfo.length) throw new Error("보완할 경험을 확인하지 못했습니다.");
     return { ...request, answer: "", intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "needs_info", source: "user_question", generatedAt: Date.now() };
   }
-  if (!answer || !evidence.length) throw new Error("근거 없는 답변은 저장하지 않습니다.");
+  if (!answer || (!evidence.length && !allowReasoningOnly)) throw new Error("근거 없는 답변은 저장하지 않습니다.");
   // Check sentence endings, leaving quoted speech alone.
   const narration = answer.replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, "");
   if (/(?:한다|했다|된다|됐다|이다|였다|있다|없다|겠다|느꼈다|배웠다|깨달았다|이해했다|바꿨다|늘었다|복구했다)(?=[.!?。！？](?:\s|$)|\s*$)/m.test(narration))

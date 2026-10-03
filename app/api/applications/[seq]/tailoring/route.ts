@@ -1,3 +1,4 @@
+import { requireApplicationRole } from "@/lib/application-role";
 import { after } from "next/server";
 import { isSameOrigin } from "@/lib/request-origin";
 import { getJobBySeq } from "@/lib/db";
@@ -32,6 +33,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
   if (listResumeFiles().length === 0 && !isApplicantProfileFilled(readApplicantProfile()))
     return Response.json({ error: "평가할 이력이 없습니다. 설정에서 이력서를 올리거나 지원 정보를 먼저 입력해주세요." }, { status: 400 });
   try {
+    requireApplicationRole(seq);
     const task = createApplicationTask(seq, "tailoring", 2);
     after(() => executeApplicationTask(task.id, async (progress) => {
       await evaluateResumeTailoring(seq, progress);

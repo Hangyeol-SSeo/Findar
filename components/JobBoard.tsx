@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import CompanyResearchPanel from "./CompanyResearchPanel";
 import ApplicationDraftPanel from "./ApplicationDraftPanel";
+import ApplicationRole from "./ApplicationRole";
 import ResumeTailoringPanel from "./ResumeTailoringPanel";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
@@ -106,6 +107,7 @@ interface Progress {
 }
 
 export default function JobBoard() {
+  const [roleRevision, setRoleRevision] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1097,6 +1099,8 @@ export default function JobBoard() {
               </button>
             </div>
 
+            <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
+
             {/* Panel tabs */}
             <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
               {(["detail", "company", "tailoring", "draft"] as const).map((tab) => (
@@ -1121,11 +1125,11 @@ export default function JobBoard() {
               </div>
             ) : panelTab === "tailoring" ? (
               <div className="flex-1 overflow-y-auto p-5">
-                <ResumeTailoringPanel key={selectedJob.seq} seq={selectedJob.seq} />
+                <ResumeTailoringPanel key={`${selectedJob.seq}:${roleRevision}`} seq={selectedJob.seq} />
               </div>
             ) : panelTab === "draft" ? (
               <div className="flex-1 overflow-y-auto p-5">
-                <ApplicationDraftPanel key={selectedJob.seq} seq={selectedJob.seq} companyName={selectedJob.company} />
+                <ApplicationDraftPanel key={selectedJob.seq} roleRevision={roleRevision} seq={selectedJob.seq} companyName={selectedJob.company} />
               </div>
             ) : (
             <div className="flex-1 overflow-y-auto p-5">

@@ -15,6 +15,7 @@ let hasResumeFiles = false;
 let release;
 const gate = new Promise((resolve) => (release = resolve));
 const routeStubs = {
+  '@/lib/application-role': { requireApplicationRole: () => ({ role: '분석', revision: '1' }) },
   'next/server': { after: (fn) => scheduled.push(fn) },
   '@/lib/db': { getJobBySeq: (seq) => (seq === 'missing' ? undefined : { seq }) },
   '@/lib/resume-files': { listResumeFiles: () => (hasResumeFiles ? [{ name: 'a.pdf' }] : []) },
