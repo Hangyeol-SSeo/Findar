@@ -78,6 +78,12 @@ db.exec(`
     generatedAt INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS application_roles (
+    seq TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    revision TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS resume_tailoring (
     seq TEXT PRIMARY KEY,
     resultJson TEXT NOT NULL,
@@ -729,3 +735,16 @@ function backfillCategories(): void {
 }
 
 backfillCategories();
+
+// A single target per posting, independent of scraped positions and application status.
+export function getApplicationRole(seq: string): { role: string; revision: string } {
+  return (db.prepare("SELECT role, revision FROM application_roles WHERE seq = ?").get(seq) as { role: string; revision: string } | undefined) ?? { role: "", revision: "" };
+}
+export function saveApplicationRole(seq: string, role: string, expectedRevision: string) {
+  return db.transaction(() => {
+    if (getApplicationRole(seq).revision !== expectedRevision) throw new Error("다른 창에서 지원 직무가 변경되었습니다. 새로고침 후 다시 저장해주세요.");
+    const revision = crypto.randomUUID();
+    db.prepare("INSERT INTO application_roles (seq, role, revision) VALUES (?, ?, ?) ON CONFLICT(seq) DO UPDATE SET role = excluded.role, revision = excluded.revision").run(seq, role, revision);
+    return { role, revision };
+  })();
+}

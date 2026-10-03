@@ -16,7 +16,7 @@ function newRow(id: string): QuestionRow {
   return { id, question: "", maxChars: "", countSpaces: true, guidance: "", freeform: false };
 }
 
-export default function ApplicationDraftPanel({ seq, companyName }: { seq: string; companyName: string }) {
+export default function ApplicationDraftPanel({ seq, companyName, roleRevision }: { seq: string; companyName: string; roleRevision?: string | null }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
   const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
@@ -89,7 +89,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
           if (task.kind === "writing") {
             // 실패한 묶음 작업도 앞 문항까지 저장됐을 수 있다. 조회는 전체에서 한 번만 한다.
             reloadDraft = true;
-            if (task.status === "completed") setNotice(`문항 ${task.done}개를 작성하고 저장했습니다.${task.result?.needsInfo ? ` ${task.result.needsInfo}개는 경험 보완이 필요합니다.` : ""} 자동 입력 탭에서 저장된 답변을 지원서에 넣을 수 있습니다.`);
+            if (task.status === "completed") setNotice(`문항 ${task.done}개 처리를 마쳤습니다.${task.result?.needsInfo ? ` ${task.result.needsInfo}개는 자료·정보 보완이 필요합니다.` : " 답변을 저장했습니다."} 작성된 답변은 자동 입력 탭에서 지원서에 넣을 수 있습니다.`);
           }
           const document = task.result?.document;
           if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
@@ -247,7 +247,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
     </section>}
 
     {workspace === "essay" && <><section className="space-y-3">
-      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">공고와 문항의 평가 의도를 분석하고 글을 구상한 뒤, 구상에 맞는 경험을 선택하여 존댓말로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
+      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
       {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
         <div className="flex items-center justify-between">
           <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={row.freeform} disabled={essayBusy} onChange={(e) => toggleFreeform(row.id, e.target.checked)} />자유 문항</label>
@@ -257,7 +257,7 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
           updateRow(row.id, { question: e.target.value, countSpaces: /공백\s*제외/.test(e.target.value) ? false : row.countSpaces });
         }} placeholder={`문항 ${i + 1} — 실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요.`} /></label>
         <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label={`문항 ${i + 1} 최대 글자 수`} className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={row.maxChars} onChange={(e) => updateRow(row.id, { maxChars: e.target.value })} disabled={essayBusy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={row.countSpaces} onChange={(e) => updateRow(row.id, { countSpaces: e.target.checked })} disabled={essayBusy} />공백 포함</label></div>
-        <label className="block text-xs text-gray-600">이번 문항의 추가 경험·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={essayBusy} placeholder="쓸 경험의 구체적인 사실, 강조할 판단, 빼고 싶은 내용 등을 적어주세요." /></label>
+        <label className="block text-xs text-gray-600">이번 문항의 추가 자료·관점·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={essayBusy} placeholder="구체적인 경험, 본인의 견해, 참고할 자료의 본문과 출처, 수정 요청 등을 적어주세요." /></label>
       </div>)}
       <div className="flex items-center gap-2">
         <button type="button" disabled={essayBusy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
@@ -275,7 +275,9 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
       return <section key={index} className="rounded-xl border border-gray-200 p-4 space-y-3">
         <h4 className="whitespace-pre-wrap text-sm font-semibold text-gray-800">{answer.question}</h4>
         <p className="text-xs leading-5 text-gray-500">{answer.intent}</p>
-        {answer.status === "needs_info" ? <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800"><p className="font-medium">답변에 필요한 경험을 보완해주세요</p><ul className="mt-2 list-disc pl-4">{answer.missingInfo.map((info, i) => <li key={i}>{info}</li>)}</ul></div> : <>
+        {roleRevision != null && answer.roleRevision !== roleRevision && <p className="text-xs text-amber-700">현재 지원 직무로 생성된 답변이 아닙니다. 기존 답변을 검토하거나 다시 작성해주세요.</p>}
+        {answer.targetRole && <p className="text-xs text-gray-500">작성 기준 직무: {answer.targetRole}</p>}
+        {answer.status === "needs_info" ? <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800"><p className="font-medium">답변에 필요한 정보를 보완해주세요</p><ul className="mt-2 list-disc pl-4">{answer.missingInfo.map((info, i) => <li key={i}>{info}</li>)}</ul></div> : <>
           <textarea aria-label={`${answer.question} 답변`} className={inputStyle} rows={12} value={answer.answer} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} />
           <p className={`text-xs ${answer.maxChars && count > answer.maxChars ? "text-red-600" : "text-gray-400"}`}>{count.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""} · 공백 {answer.countSpaces ? "포함" : "제외"}{dirty ? " · 수정 내용 저장 필요" : ""}</p>
         </>}
@@ -300,11 +302,11 @@ export default function ApplicationDraftPanel({ seq, companyName }: { seq: strin
             <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
           </div>
         </details>}
-        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p></div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
+        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
         <div className="flex flex-wrap gap-3 text-xs">
           <button disabled={essayBusy} className="text-blue-600 disabled:opacity-40" onClick={() => {
             setRows([{ id: `q${nextRowId.current++}`, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: false }]);
-            setNotice("위 문항 입력란에서 경험이나 수정 요청을 보완한 뒤 다시 작성해주세요.");
+            setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요.");
           }}>이 문항 보완해서 다시 작성</button>
           {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
             await save();

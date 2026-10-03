@@ -36,6 +36,7 @@ export interface TailoringEvaluation {
 }
 
 export interface ResumeTailoringResult {
+  targetRole?: string;
   seq: string;
   focus: string;
   summary: string;

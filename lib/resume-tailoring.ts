@@ -1,7 +1,8 @@
+import { requireApplicationRole, assertApplicationRole, APPLICATION_ROLE_RULES } from "./application-role";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getAIModelId } from "./ai-model-settings";
 import { createHash } from "crypto";
-import { getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";
+import { getApplicationRole, getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";
 import { readApplicantProfile } from "./applicant-profile";
 import { readCareerGoals } from "./profile";
 import { currentResumeHash, ensureResumeInventory } from "./resume-inventory";
@@ -19,10 +20,10 @@ import {
 const MODEL_CALL_TIMEOUT_MS = 300_000;
 
 // 평가 입력(이력서 파일, 지원 정보, 지원 방향)이 바뀌었는지 판정하는 해시. AI 호출 없이 계산된다.
-function computeInputsHash(): string {
+function computeInputsHash(seq: string): string {
   const applicant = readApplicantProfile();
   return createHash("sha256")
-    .update(`${currentResumeHash()}\n${applicant.updatedAt}\n${readCareerGoals()}`)
+    .update(`${currentResumeHash()}\n${applicant.updatedAt}\n${readCareerGoals()}\n${JSON.stringify(getApplicationRole(seq))}`)
     .digest("hex");
 }
 
@@ -30,7 +31,7 @@ export function getCachedTailoring(seq: string): { result: ResumeTailoringResult
   const row = getResumeTailoringRow(seq);
   if (!row) return { result: null, stale: false };
   try {
-    return { result: JSON.parse(row.resultJson) as ResumeTailoringResult, stale: row.inputsHash !== computeInputsHash() || row.model !== getAIModelId("resumeTailoring") };
+    return { result: JSON.parse(row.resultJson) as ResumeTailoringResult, stale: row.inputsHash !== computeInputsHash(seq) || row.model !== getAIModelId("resumeTailoring") };
   } catch {
     return { result: null, stale: false };
   }
@@ -124,7 +125,8 @@ export async function evaluateResumeTailoring(
   const model = getAIModelId("resumeTailoring");
   const job = getJobBySeq(seq);
   if (!job) throw new Error("공고를 찾을 수 없습니다.");
-  const inputsHash = computeInputsHash();
+  const selection = requireApplicationRole(seq);
+  const inputsHash = computeInputsHash(seq);
 
   const inventory = await ensureResumeInventory();
   progress?.(1);
@@ -137,13 +139,15 @@ export async function evaluateResumeTailoring(
     공고명: job.title,
     채용유형: job.positionType,
     경력요건: job.experienceYears,
+    지원직무: selection.role,
     모집직무: job.positions,
     업무요약: job.jdSummary,
     자격요건: job.qualifications,
-    원문: job.rawContent.slice(0, 3000),
+    원문: job.rawContent,
   });
   const careerGoals = readCareerGoals().trim();
   const prompt = `${RULES}
+${APPLICATION_ROLE_RULES}
 
 [공고]
 ${jobBlock}
@@ -165,11 +169,13 @@ ${OUTPUT}`;
   }
   const result: ResumeTailoringResult = {
     seq,
+    targetRole: selection.role,
     ...normalizeTailoring(raw, items),
     items,
     model,
     generatedAt: Date.now(),
   };
+  assertApplicationRole(seq, selection.revision);
   saveResumeTailoring(seq, JSON.stringify(result), inputsHash, model);
   progress?.(2);
   return result;

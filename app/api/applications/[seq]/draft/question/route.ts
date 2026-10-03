@@ -1,3 +1,4 @@
+import { requireApplicationRole } from "@/lib/application-role";
 import { after } from "next/server";
 import { isSameOrigin } from "@/lib/request-origin";
 import { getJobBySeq } from "@/lib/db";
@@ -17,6 +18,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
     const inputs = values.map(parseEssayRequest);
     if (new Set(inputs.map((input) => input.question)).size !== inputs.length)
       throw new Error("같은 문항이 중복되어 있습니다. 문항을 구분해서 입력해주세요.");
+    requireApplicationRole(seq);
     const task = createApplicationTask(seq, "writing", inputs.length);
     after(() => executeApplicationTask(task.id, async (progress) => {
       const beforePlanning = JSON.stringify(getCachedApplicationDraft(seq));
