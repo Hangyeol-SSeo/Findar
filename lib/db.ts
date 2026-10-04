@@ -91,6 +91,13 @@ db.exec(`
     model TEXT NOT NULL DEFAULT '',
     generatedAt INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS sheet_sync_pending (
+    seq TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    lastError TEXT NOT NULL DEFAULT '',
+    updatedAt INTEGER NOT NULL
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -353,7 +360,7 @@ export function setJobBookmarked(seq: string, bookmarked: boolean): void {
   setJobBookmarkedStmt.run(bookmarked ? 1 : 0, seq);
 }
 
-interface ApplicationRow {
+export interface ApplicationRow {
   seq: string;
   status: string;
   notes: string;
@@ -399,6 +406,32 @@ export function upsertApplicationStatus(
     updatedAt: now,
     createdAt: existing?.createdAt ?? now,
   });
+}
+
+export function getApplication(seq: string): ApplicationRow | undefined {
+  return selectApplicationStmt.get(seq) as ApplicationRow | undefined;
+}
+
+// Google 시트 동기화(lib/sheet-sync.ts) 재시도 큐. 행에는 seq만 두고, 보낼 내용은 전송 시점의
+// applications/jobs에서 다시 만든다 — 재시도가 늦어져도 항상 최신 상태가 시트에 적힌다.
+export function markSheetSyncPending(seq: string): void {
+  db.prepare(`
+    INSERT INTO sheet_sync_pending (seq, updatedAt) VALUES (?, ?)
+    ON CONFLICT(seq) DO UPDATE SET updatedAt = excluded.updatedAt
+  `).run(seq, Date.now());
+}
+
+export function clearSheetSyncPending(seq: string): void {
+  db.prepare(`DELETE FROM sheet_sync_pending WHERE seq = ?`).run(seq);
+}
+
+export function recordSheetSyncFailure(seq: string, error: string): void {
+  db.prepare(`UPDATE sheet_sync_pending SET attempts = attempts + 1, lastError = ?, updatedAt = ? WHERE seq = ?`)
+    .run(error.slice(0, 500), Date.now(), seq);
+}
+
+export function getPendingSheetSyncSeqs(): string[] {
+  return (db.prepare(`SELECT seq FROM sheet_sync_pending ORDER BY updatedAt`).all() as { seq: string }[]).map((r) => r.seq);
 }
 
 export interface CompanyRow {

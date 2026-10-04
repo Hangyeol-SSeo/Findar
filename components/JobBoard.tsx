@@ -6,6 +6,7 @@ import CompanyResearchPanel from "./CompanyResearchPanel";
 import ApplicationDraftPanel from "./ApplicationDraftPanel";
 import ApplicationRole from "./ApplicationRole";
 import ResumeTailoringPanel from "./ResumeTailoringPanel";
+import CategoryTooltip from "./CategoryTooltip";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -460,7 +461,10 @@ export default function JobBoard() {
   const allCategories = useMemo(() => {
     const catSet = new Set<string>();
     jobs.forEach((job) => jobCategories(job).forEach((c) => catSet.add(c)));
-    return Array.from(catSet).sort();
+    // 어느 직군에도 안 걸린 "기타"는 가나다순 중간에 묻히지 않게 맨 끝에 둔다.
+    const hasEtc = catSet.delete("기타");
+    const sorted = Array.from(catSet).sort();
+    return hasEtc ? [...sorted, "기타"] : sorted;
   }, [jobs]);
 
   const hiddenJobs = useMemo(() => {
@@ -819,19 +823,20 @@ export default function JobBoard() {
                       전체
                     </button>
                     {allCategories.map((cat) => (
-                      <button
-                        key={cat}
-                        onClick={() =>
-                          setPositionFilter(positionFilter === cat ? "전체" : cat)
-                        }
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                          positionFilter === cat
-                            ? "bg-indigo-600 text-white"
-                            : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
-                        }`}
-                      >
-                        {cat}
-                      </button>
+                      <CategoryTooltip key={cat} category={cat}>
+                        <button
+                          onClick={() =>
+                            setPositionFilter(positionFilter === cat ? "전체" : cat)
+                          }
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            positionFilter === cat
+                              ? "bg-indigo-600 text-white"
+                              : "bg-white text-gray-500 border border-gray-200 hover:bg-gray-50"
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      </CategoryTooltip>
                     ))}
                   </div>
                 </div>
