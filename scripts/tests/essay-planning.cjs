@@ -25,6 +25,8 @@ function compile(file, req) {
 stubs['./application-skills'] = compile('lib/application-skills.ts', require);
 stubs['./essay-plan'] = compile('lib/essay-plan.ts', require);
 stubs['./essay-contract'] = compile('lib/essay-contract.ts', require);
+stubs['./essay-diff'] = compile('lib/essay-diff.ts', require);
+stubs['./essay-style'] = compile('lib/essay-style.ts', id => stubs[id] || require(id));
 const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/application-draft.ts', id => stubs[id] || require(id));
 (async () => {
   const result = await generateCustomEssayAnswer('test', { question: '성장과정', countSpaces: true, guidance: '판단의 이유를 기록했습니다.' });
