@@ -1091,20 +1091,21 @@ export default function JobBoard() {
         )}
         {selectedJob && (
           <div className="h-full flex flex-col">
-            {/* Panel header */}
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
-              <span className="text-sm font-medium text-blue-600">
-                {selectedJob.company}
-              </span>
+            {/* Panel header — 지원 직무는 회사명 옆 칩으로 두고, 바꿀 때만 떠 있는 편집 창을 연다. */}
+            <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-100">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="shrink-0 text-sm font-medium text-blue-600">
+                  {selectedJob.company}
+                </span>
+                <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
+              </div>
               <button
                 onClick={() => setSelectedJob(null)}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none p-1"
+                className="shrink-0 text-gray-400 hover:text-gray-600 text-xl leading-none p-1"
               >
                 &times;
               </button>
             </div>
-
-            <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
 
             {/* Panel tabs */}
             <div className="flex px-5 pt-3 gap-1 border-b border-gray-100">
