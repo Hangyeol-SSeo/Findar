@@ -2,6 +2,7 @@ import { isSameOrigin } from "@/lib/request-origin";
 import { getCachedApplicationDraft } from "@/lib/application-draft";
 import { saveApplicationDraft, getJobBySeq } from "@/lib/db";
 import { detectSubmissionMethod } from "@/lib/application-method";
+import { recordManualEdit } from "@/lib/essay-revision";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ seq: string }> }) {
   const { seq } = await params;
@@ -27,7 +28,11 @@ export async function PUT(request: Request, { params }: { params: Promise<{ seq:
     if (!Array.isArray(body.essayAnswers) || body.essayAnswers.length !== current.essayAnswers.length ||
       body.essayAnswers.some((a: { question?: unknown; answer?: unknown }, i: number) => !a || a.question !== current.essayAnswers[i].question || typeof a.answer !== "string" || a.answer.length > 30000))
       return Response.json({ error: "저장할 답변이 올바르지 않습니다." }, { status: 400 });
-    const draft = { ...current, revision: crypto.randomUUID(), essayAnswers: current.essayAnswers.map((a, i) => ({ ...a, answer: body.essayAnswers[i].answer })) };
+    // 문항별 답변은 직접 고칠 때마다 버전을 남기고 수정 성향을 기록한다. 이전 방식 공통 답변은 본문만 바꾼다.
+    const draft = { ...current, revision: crypto.randomUUID(), essayAnswers: current.essayAnswers.map((a, i) => {
+      const text = body.essayAnswers[i].answer as string;
+      return a.source === "user_question" ? recordManualEdit(a, text) : { ...a, answer: text };
+    }) };
     saveApplicationDraft(seq, JSON.stringify(draft), current.model);
     return Response.json({ draft });
   } catch { return Response.json({ error: "저장 요청을 읽지 못했습니다." }, { status: 400 }); }

@@ -7,6 +7,17 @@ import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
 import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
+import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest } from "./EssayRevisionTools";
+import Toast, { useToast } from "./Toast";
+
+// 첨삭·조사 작업이 끝났을 때 알릴 문구(작업 결과 종류별).
+const OUTCOME_MESSAGES: Record<string, string> = {
+  "pending-revision": "고쳐쓰기 결과가 도착했습니다. 바뀐 부분을 비교하고 반영 여부를 골라주세요.",
+  feedback: "첨삭 결과가 도착했습니다. 제안을 하나씩 반영하거나 넘길 수 있습니다.",
+  "needs-info": "고쳐쓰기에 정보가 더 필요합니다. 답변 아래의 질문을 확인해주세요.",
+  candidates: "업계 사례 후보를 찾았습니다. 읽을 자료와 구성 방향을 골라주세요.",
+  findings: "자료 정리를 마쳤습니다. 쓸 자료를 골라 고쳐쓰기를 요청해주세요.",
+};
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
 const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40";
@@ -39,6 +50,13 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     field?.focus({ preventScroll: true });
   }, [rows]);
   const [pollRevision, setPollRevision] = useState(0);
+  const { message: toastMessage, showToast } = useToast(6000);
+  // 문항별 첨삭·조사 오류는 그 답변 아래에 보여준다(위쪽 알림만으로는 놓치기 쉬움).
+  const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
+  const [highlightQuestion, setHighlightQuestion] = useState<string | null>(null);
+  const attention = useRef<{ question?: string; block?: string } | null>(null);
+  // 이 화면이 열려 있는 동안 진행 중이던 작업만 끝났을 때 알린다 — 다시 열었을 때 지난 작업으로 화면이 튀지 않게.
+  const watchedTasks = useRef(new Set<string>());
   const [tasks, setTasks] = useState<ApplicationTask[]>([]);
   const handledTasks = useRef(new Set<string>());
   const dirtyRef = useRef(false);
@@ -93,9 +111,29 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         setTasks(data.tasks);
         let reloadDraft = false;
         for (const task of data.tasks) {
-          if (taskActive(task) || handledTasks.current.has(task.id)) continue;
+          if (taskActive(task)) { watchedTasks.current.add(task.id); continue; }
+          if (handledTasks.current.has(task.id)) continue;
           handledTasks.current.add(task.id);
+          const watched = watchedTasks.current.has(task.id);
+          if (task.kind === "revision" || task.kind === "research") {
+            reloadDraft = true;
+            if (!watched) continue;
+            const question = task.question ?? "";
+            if (task.status === "failed") {
+              setAnswerErrors((prev) => ({ ...prev, [question]: task.error ?? "작업에 실패했습니다." }));
+              showToast(`${task.kind === "research" ? "업계 사례 조사" : "첨삭"}에 실패했습니다. 답변 아래에서 이유를 확인해주세요.`);
+            } else {
+              showToast(OUTCOME_MESSAGES[task.result?.outcome ?? ""] ?? "작업을 마쳤습니다.");
+            }
+            const outcome = task.result?.outcome;
+            attention.current = { question, block: task.status === "failed" ? "error" : outcome === "candidates" || outcome === "findings" ? "research" : outcome };
+            continue;
+          }
           if (task.status === "failed") setError(task.error ?? "작업에 실패했습니다.");
+          if (watched && task.kind === "writing") {
+            showToast(task.status === "failed" ? "자기소개서 작성에 실패했습니다. 위쪽 알림을 확인해주세요." : "자기소개서 작성을 마쳤습니다.");
+            attention.current = {};
+          }
           if (task.kind === "writing") {
             // 실패한 묶음 작업도 앞 문항까지 저장됐을 수 있다. 조회는 전체에서 한 번만 한다.
             reloadDraft = true;
@@ -120,14 +158,35 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     }
     void refresh();
     return () => { stopped = true; abort.abort(); clearTimeout(timer); };
-  }, [seq, pollRevision]);
+  }, [seq, pollRevision, showToast]);
+
+  // 작업이 끝나면 결과가 놓인 곳으로 화면을 옮긴다: 첨삭·조사는 해당 답변의 첨삭 영역(잠시 강조), 문항 작성은 위쪽 알림.
+  useEffect(() => {
+    const target = attention.current;
+    if (!target) return;
+    attention.current = null;
+    // 결과 블록(비교 화면·첨삭 결과·보완 질문·조사·오류)의 시작이 보이게 옮긴다. 블록이 길어도 윗부분부터 읽을 수 있다.
+    const anchor = target.question !== undefined ? document.querySelector(`[data-revision-anchor="${encodeURIComponent(target.question)}"]`) : null;
+    const element = target.question === undefined ? document.querySelector("[data-draft-status]")
+      : anchor?.querySelector(`[data-block="${target.block}"]`) ?? anchor;
+    element?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (target.question !== undefined) setHighlightQuestion(target.question);
+  }, [draft, answerErrors]);
+  useEffect(() => {
+    if (highlightQuestion === null) return;
+    const timer = setTimeout(() => setHighlightQuestion(null), 2500);
+    return () => clearTimeout(timer);
+  }, [highlightQuestion]);
 
   const writingTask = tasks.find((t) => t.kind === "writing" && taskActive(t));
   const writingBusy = busy === "writing" || !!writingTask;
-  const essayBusy = writingBusy || ["save", "bank"].includes(busy);
+  const revisionTask = tasks.find((t) => (t.kind === "revision" || t.kind === "research") && taskActive(t));
+  const revisionBusy = busy === "revision" || !!revisionTask;
+  const essayBusy = writingBusy || revisionBusy || ["save", "bank", "answer-action", "import"].includes(busy);
   const documentBusy = busy === "document";
   const progress = writingTask ? { done: writingTask.done, total: writingTask.total } : null;
   function acceptTask(task: ApplicationTask) {
+    watchedTasks.current.add(task.id);
     setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]);
     // Restart after explicit creation, including tasks already completed in the POST response.
     setPollRevision((value) => value + 1);
@@ -139,10 +198,12 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     if (!response.ok) throw new Error(data.error || "요청에 실패했습니다.");
     return data;
   }
-  async function save() {
-    if (!draft || !dirty) return;
+  // 저장 후의 최신 revision을 돌려준다 — 바로 이어지는 첨삭 동작이 그 값으로 충돌을 검사한다.
+  async function save(): Promise<string | null> {
+    if (!draft || !dirty) return draft?.revision ?? null;
     const data = await api("draft", draft, "PUT");
     setDraft(data.draft); setDirty(false);
+    return data.draft.revision ?? null;
   }
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label); setError(""); setNotice("");
@@ -176,6 +237,49 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       setNotice("백그라운드에서 문항을 작성합니다. 탭을 바꾸거나 다른 공고의 작업을 시작할 수 있습니다.");
     });
   }
+  async function startRevision(question: string, mode: "rewrite" | "review", text: string, findingIds?: string[]) {
+    let started = false;
+    setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
+    await run("revision", async () => {
+      await save();
+      const data = await api("draft/revision", { question, mode, ...(mode === "rewrite" ? { instruction: text, findingIds } : { focus: text }) });
+      acceptTask(data.task);
+      started = true;
+      setNotice(mode === "rewrite" ? "고쳐쓰기를 시작했습니다. 끝나면 답변 아래에 비교 화면이 나타납니다." : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
+    });
+    return started;
+  }
+  async function startResearch(question: string, request: ResearchRequest) {
+    let started = false;
+    setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
+    await run("revision", async () => {
+      await save();
+      const data = await api("draft/research", { question, ...request });
+      acceptTask(data.task);
+      started = true;
+      setNotice(request.step === "scope" ? "업계 사례 후보를 찾고 있습니다. 끝나면 알려드립니다." : "고른 자료를 읽고 정리하고 있습니다. 끝나면 알려드립니다.");
+    });
+    return started;
+  }
+  async function answerAction(question: string, action: AnswerAction) {
+    setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
+    await run("answer-action", async () => {
+      const revision = await save();
+      const data = await api("draft/answer-action", { question, revision, ...action });
+      setDraft(data.draft);
+    });
+  }
+  async function importAnswer(input: { question: string; maxChars?: number; countSpaces: boolean; answer: string }) {
+    let imported = false;
+    await run("import", async () => {
+      const revision = await save();
+      const data = await api("draft/import", { ...input, revision });
+      setDraft(data.draft);
+      imported = true;
+      setNotice("직접 쓴 글을 저장했습니다. 답변 아래의 첨삭하기로 다듬을 수 있습니다.");
+    });
+    return imported;
+  }
   function editAnswer(index: number, answer: string) {
     setDraft((prev) => prev ? { ...prev, essayAnswers: prev.essayAnswers.map((a, i) => i === index ? { ...a, answer } : a) } : prev);
     setDirty(true);
@@ -204,13 +308,16 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
       <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
-        <span>{task.kind === "writing" ? "자기소개서" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "completed" ? "완료" : "실패"}</span>
+        <span>{task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "research" ? "업계 사례 조사" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "completed" ? "완료" : "실패"}</span>
         {task.error && <span className="text-red-600">{task.error}</span>}
         {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.result.document.filled}/{task.result.document.total}칸 입력 · 다운로드</a>}
       </div>)}
     </section>}
-    {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-    {notice && <p role="status" className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">{notice}</p>}
+    <div data-draft-status className="space-y-2">
+      {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {notice && <p role="status" className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">{notice}</p>}
+    </div>
+    <Toast message={toastMessage} />
     {workspace === "fill" && <section className="rounded-xl border border-gray-200 p-4 space-y-3">
       <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서에 개인정보·자기소개서 입력</h3><a className="text-xs text-blue-600 underline" href="/settings">저장 정보 수정</a></div>
       <p className="text-xs leading-5 text-gray-500">설정의 개인정보와 이 공고에 저장된 자기소개서 답변을 실제 양식에 채웁니다. 작성 중인 답변은 완료 후 다시 입력해주세요. 입력 결과를 확인한 뒤 제출해주세요.</p>
@@ -278,6 +385,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         </button>
       </div>
       {writingBusy && <p className="text-xs text-gray-500" role="status">전체 문항의 구상과 경험 배치를 정한 뒤 리서치 근거를 연결해 작성하고 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
+      <EssayImportForm disabled={essayBusy} onImport={importAnswer} />
     </section>
     {currentAnswers.map(({ a, index }) => {
       const answer = a as EssayAnswer;
@@ -312,14 +420,14 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
             <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
           </div>
         </details>}
-        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
+        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">직접 수정·제안 반영·버전 복원 이후의 본문이라 위 근거 검토가 현재 글과 다를 수 있습니다.</p>}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
         <div className="flex flex-wrap gap-3 text-xs">
           <button type="button" disabled={essayBusy} className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700 transition hover:bg-blue-100 active:scale-95 active:bg-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:pointer-events-none disabled:opacity-40" onClick={() => {
             const id = `q${nextRowId.current++}`;
             focusGuidanceRowId.current = id;
             setRows([{ id, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: answer.question === FREEFORM_ESSAY_QUESTION }]);
-            setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요.");
-          }}>이 문항 보완해서 다시 작성</button>
+            setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요. 지금 글을 다듬으려면 ‘첨삭하기’를 이용해주세요.");
+          }} title="구상부터 처음부터 다시 작성합니다. 지금 글은 버전 기록에 남습니다.">새로 쓰기</button>
           {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
             await save();
             const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company: companyName, question: answer.question, answer: answer.answer }) });
@@ -327,6 +435,11 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
             setNotice("검토한 답변을 다음 작성에 참고할 자료로 저장했습니다.");
           })}>검토한 답변을 자료로 저장</button></>}
         </div>
+        <EssayRevisionTools answer={answer} disabled={essayBusy} revising={revisionBusy} error={answerErrors[answer.question] || undefined}
+          highlight={highlightQuestion === answer.question}
+          onRevise={(mode, text, findingIds) => startRevision(answer.question, mode, text, findingIds)}
+          onResearch={(request) => startResearch(answer.question, request)}
+          onAction={(action) => void answerAction(answer.question, action)} />
       </section>;
     })}
     {!!legacyAnswers.length && <details className="rounded-lg border border-gray-200 p-3"><summary className="text-xs text-gray-500 cursor-pointer">이전 방식으로 작성한 답변 {legacyAnswers.length}개 보관됨</summary><p className="my-2 text-xs text-gray-400">자동으로 만든 공통 답변입니다. 실제 문항에 대한 새 답변과 구분해 보관합니다.</p>{legacyAnswers.map(({ a, index }) => <div key={index} className="mt-3"><p className="text-xs font-medium mb-1">{a.question}</p><textarea aria-label={`이전 답변 ${a.question}`} rows={5} value={a.answer} className={inputStyle} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} /></div>)}</details>}
