@@ -7,9 +7,9 @@ import { readApplicantProfile } from "./applicant-profile";
 import { readNarrativeProfile } from "./narrative-profile";
 import { ensureEssayBank } from "./essay-bank";
 import { normalizeCompanyName } from "./company-normalize";
-import { parseModelJson, validateEssay, type EssayAnswer, type EssayRequest, type EssaySource } from "./essay-contract";
+import { parseModelJson, validateEssay, type EssayAnswer, type EssayEvidence, type EssayRequest, type EssaySource } from "./essay-contract";
 import { loadApplicationSkills } from "./application-skills";
-import { validatePlans, applyMaterials, type EssayPlan } from "./essay-plan";
+import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
 export type { EssayAnswer } from "./essay-contract";
 
 class OpinionReviewError extends Error {
@@ -165,6 +165,22 @@ const OUTPUT = `순수 JSON 객체만 반환한다:
 "missingInfo":["부족한 핵심 사실을 확인할 질문"], "reviewNotes":["수치의 조건 또는 사용자가 확인할 구체적 사항"]}
 근거 인용은 JSON 직렬화된 text에서 가져오며 문구를 고치지 않는다. 본문 속 모든 수치는 evidence.quote 안에서도 확인 가능해야 한다.`;
 
+// 구상의 회사 근거가 답변 evidence에 인용됐는지 본다. 둘 다 원문 대조를 통과한 연속 발췌라서,
+// 모델이 실제로 쓴 구절만 짧게 인용해도(구상 인용의 일부) 같은 사실을 인용한 것으로 인정한다.
+// 단, 너무 짧은 단편은 우연히 겹칠 수 있어 제외한다.
+const MIN_PARTIAL_QUOTE_CHARS = 10;
+function citesPlannedResearch(evidence: EssayEvidence[], research: PlanCitation): boolean {
+  return evidence.some((e) => e.sourceId === research.sourceId && (
+    e.quote.includes(research.quote) ||
+    (e.quote.trim().length >= MIN_PARTIAL_QUOTE_CHARS && research.quote.includes(e.quote.trim()))
+  ));
+}
+
+function quotePreview(quote: string): string {
+  const text = quote.replace(/\s+/g, " ").trim();
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
 type WritingContext = Awaited<ReturnType<typeof collectContext>>;
 export interface PreparedEssayBatch {
   model: string;
@@ -243,14 +259,25 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
   };
   if (plan.missingInfo.length) return attach({ ...request, answer: "", intent: plan.intent, evidence: [], missingInfo: plan.missingInfo, reviewNotes: plan.notes, status: "needs_info", source: "user_question", generatedAt: Date.now() });
   const background = `${WRITING_RULES}\n${APPLICATION_ROLE_RULES}\n${skills.write}\n[사용자 문항과 조건]\n${JSON.stringify(request)}\n[사실 자료]\n${JSON.stringify(sources)}\n[수정할 이전 답변: 사실 근거 아님]\n${previousAnswer || "없음"}\n[다른 답변: 중복 검토용, 사실 근거 아님]\n${JSON.stringify(otherAnswers)}\n[전체 문항 구상과 소재 배치]\n${JSON.stringify(batch.plans)}\n${OUTPUT}`;
-  const plannedBackground = `${background}\n[이 문항의 구상과 선정 소재: 사실 근거가 아닌 작성 방향]\n${JSON.stringify(plan)}`;
+  const researchRule = plan.researchMode === "direct" && plan.research.length
+    ? `\n[회사 근거 인용 규칙] 아래 회사 근거를 본문의 논거로 사용하고, 각각을 evidence에 같은 sourceId와 quote 원문 그대로(줄이거나 고치지 말고) 넣으세요.\n${JSON.stringify(plan.research.map((r) => ({ sourceId: r.sourceId, quote: r.quote })))}`
+    : "";
+  const plannedBackground = `${background}\n[이 문항의 구상과 선정 소재: 사실 근거가 아닌 작성 방향]\n${JSON.stringify(plan)}${researchRule}`;
   const first = await askModel(`${plannedBackground}\n구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.`, signal, batch.model);
   // A separate editorial pass must inspect the draft against the original evidence, not merely paraphrase it.
   let edited = await askModel(`${plannedBackground}\n[검토할 초안]\n${first}\n\n${skills.review}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 조건에 맞는 최종 JSON을 반환하라.`, signal, batch.model);
+  // 마지막 검증에서 evidence에 빠진 회사 근거. 다른 이유로 수정 호출을 할 때 함께 바로잡도록 알려준다.
+  let missingResearch: PlanCitation[] = [];
   const validate = async (text: string) => {
     const answer = validateEssay(parseModelJson(text), request, sources, forbiddenNames, plan.personalEvidence === "optional");
-    if (answer.status === "draft" && plan.researchMode === "direct" && plan.research.some((r) => !answer.evidence.some((e) => e.sourceId === r.sourceId && e.quote.includes(r.quote))))
-      throw new Error("구상에서 선정한 회사 근거가 답변의 evidence에 반영되지 않았습니다.");
+    // 회사 근거 누락은 사실 오류가 아니라 구상 반영도의 문제다. 이것만으로는 수정 호출(추가 비용)을 하거나
+    // 답변을 버리지 않고, 검토 메모로 남겨 사용자가 확인하게 한다.
+    missingResearch = answer.status === "draft" && plan.researchMode === "direct"
+      ? plan.research.filter((r) => !citesPlannedResearch(answer.evidence, r))
+      : [];
+    if (missingResearch.length)
+      answer.reviewNotes = [...answer.reviewNotes, ...missingResearch.map((r) =>
+        `확인 필요: 구상에서 고른 회사 근거(${r.sourceId}) “${quotePreview(r.quote)}”가 답변 근거에 반영되지 않았습니다. 회사 내용이 충분히 드러나는지 확인해주세요.`)];
     if (answer.status === "draft" && plan.questionTypes.includes("opinion")) {
       const citedIds = new Set(answer.evidence.map(e => e.sourceId));
       const audit = parseModelJson(await askModel(`당신은 작성자와 독립된 엄격한 사실·논증 검토자입니다. 아래 답변을 승인하려 하지 말고 반증 가능성을 점검하세요.
@@ -289,7 +316,10 @@ issues는 원문과 모순되는 사실, 근거 없는 구체적 사실 단정, 
 수익구조, 고객 관계, 업무 분담 등 문항이 요구하는 여러 측면과 상충관계를 논증하세요. 경험을 억지로 넣거나 회사 가치관을 산업 사실의 근거로 삼지 마세요. 개인 경험·신념·회사 사실을 발명하지 마세요.
 모든 문장은 존댓말로 쓰고 글자 수 상한을 지키세요. 금지 명칭: ${JSON.stringify(forbiddenNames)}. 인용은 원문의 연속 발췌만 허용합니다. 순수 조건부 논증에는 evidence=[]도 가능합니다.
 ${OUTPUT}` : plannedBackground;
-    edited = await askModel(`${repairBackground}\n[수정할 결과]\n${edited}\n검증 실패: ${reason}\n지적된 문제를 모두 해결한 최종 JSON만 반환하라.`, signal, batch.model);
+    const researchFix = missingResearch.length
+      ? `\n함께 바로잡을 점: 다음 회사 근거가 evidence에 없습니다. 같은 sourceId와 quote 원문 그대로 넣으세요. ${JSON.stringify(missingResearch.map((r) => ({ sourceId: r.sourceId, quote: r.quote })))}`
+      : "";
+    edited = await askModel(`${repairBackground}\n[수정할 결과]\n${edited}\n검증 실패: ${reason}${researchFix}\n지적된 문제를 모두 해결한 최종 JSON만 반환하라.`, signal, batch.model);
     try { return await validate(edited); }
     catch (finalError) {
       if (!(finalError instanceof OpinionReviewError)) throw finalError;
