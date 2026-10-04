@@ -28,6 +28,16 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   const [dirty, setDirty] = useState(false);
   const nextRowId = useRef(1);
   const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
+  // "이 문항 보완해서 다시 작성"으로 채운 입력란은 답변 목록보다 한참 위에 있어서, 렌더링 뒤 그 칸으로 이동시킨다.
+  const focusGuidanceRowId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = focusGuidanceRowId.current;
+    if (!id) return;
+    focusGuidanceRowId.current = null;
+    const field = document.querySelector<HTMLTextAreaElement>(`[data-guidance-row="${id}"]`);
+    field?.scrollIntoView({ behavior: "smooth", block: "center" });
+    field?.focus({ preventScroll: true });
+  }, [rows]);
   const [pollRevision, setPollRevision] = useState(0);
   const [tasks, setTasks] = useState<ApplicationTask[]>([]);
   const handledTasks = useRef(new Set<string>());
@@ -257,7 +267,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
           updateRow(row.id, { question: e.target.value, countSpaces: /공백\s*제외/.test(e.target.value) ? false : row.countSpaces });
         }} placeholder={`문항 ${i + 1} — 실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요.`} /></label>
         <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label={`문항 ${i + 1} 최대 글자 수`} className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={row.maxChars} onChange={(e) => updateRow(row.id, { maxChars: e.target.value })} disabled={essayBusy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={row.countSpaces} onChange={(e) => updateRow(row.id, { countSpaces: e.target.checked })} disabled={essayBusy} />공백 포함</label></div>
-        <label className="block text-xs text-gray-600">이번 문항의 추가 자료·관점·수정 요청 <span className="text-gray-400">(선택)</span><textarea className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={essayBusy} placeholder="구체적인 경험, 본인의 견해, 참고할 자료의 본문과 출처, 수정 요청 등을 적어주세요." /></label>
+        <label className="block text-xs text-gray-600">이번 문항의 추가 자료·관점·수정 요청 <span className="text-gray-400">(선택)</span><textarea data-guidance-row={row.id} className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={essayBusy} placeholder="구체적인 경험, 본인의 견해, 참고할 자료의 본문과 출처, 수정 요청 등을 적어주세요." /></label>
       </div>)}
       <div className="flex items-center gap-2">
         <button type="button" disabled={essayBusy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
@@ -304,8 +314,10 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         </details>}
         <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
         <div className="flex flex-wrap gap-3 text-xs">
-          <button disabled={essayBusy} className="text-blue-600 disabled:opacity-40" onClick={() => {
-            setRows([{ id: `q${nextRowId.current++}`, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: false }]);
+          <button type="button" disabled={essayBusy} className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700 transition hover:bg-blue-100 active:scale-95 active:bg-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:pointer-events-none disabled:opacity-40" onClick={() => {
+            const id = `q${nextRowId.current++}`;
+            focusGuidanceRowId.current = id;
+            setRows([{ id, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: answer.question === FREEFORM_ESSAY_QUESTION }]);
             setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요.");
           }}>이 문항 보완해서 다시 작성</button>
           {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
