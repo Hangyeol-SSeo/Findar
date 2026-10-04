@@ -1,7 +1,7 @@
 import { getApplicationRole } from "./db";
 export function requireApplicationRole(seq: string) {
   const selection = getApplicationRole(seq);
-  if (!selection.role) throw new Error("공고 상단에서 지원 직무를 선택하거나 입력한 뒤 저장해주세요.");
+  if (!selection.role) throw new Error("공고 상단 회사명 옆의 ‘지원 직무’를 눌러 직무를 선택하거나 입력한 뒤 저장해주세요.");
   return selection;
 }
 export function assertApplicationRole(seq: string, revision: string) {

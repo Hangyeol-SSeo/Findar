@@ -15,15 +15,17 @@ export function listApplicationTasks(seq: string) {
 export function getApplicationTask(seq: string, id: string) {
   return listApplicationTasks(seq).find((t) => t.id === id);
 }
-export function createApplicationTask(seq: string, kind: ApplicationTask["kind"], total = 1) {
+export function createApplicationTask(seq: string, kind: ApplicationTask["kind"], total = 1, question?: string) {
   prune();
-  if (kind === "writing" && listApplicationTasks(seq).some((t) => t.kind === kind && taskActive(t)))
-    throw new Error("이 공고의 문항 작성이 이미 진행 중입니다. 다른 공고나 자동입력 작업은 함께 실행할 수 있습니다.");
+  // 문항 작성과 첨삭은 같은 답변 묶음을 읽고 저장하므로, 한 공고에서 동시에 하나만 돌린다.
+  const essayKinds: ApplicationTask["kind"][] = ["writing", "revision", "research"];
+  if (essayKinds.includes(kind) && listApplicationTasks(seq).some((t) => essayKinds.includes(t.kind) && taskActive(t)))
+    throw new Error("이 공고의 문항 작성·첨삭·조사가 이미 진행 중입니다. 끝난 뒤 다시 실행해주세요. 다른 공고나 자동입력 작업은 함께 실행할 수 있습니다.");
   if (kind === "tailoring" && listApplicationTasks(seq).some((t) => t.kind === kind && taskActive(t)))
     throw new Error("이 공고의 이력 평가가 이미 진행 중입니다.");
   if ([...tasks.values()].filter(taskActive).length >= 12) throw new Error("동시 작업이 많습니다. 진행 중인 작업이 끝나면 다시 실행해주세요.");
   const now = Date.now();
-  const task: ApplicationTask = { id: randomUUID(), seq, kind, status: "queued", createdAt: now, updatedAt: now, done: 0, total };
+  const task: ApplicationTask = { id: randomUUID(), seq, kind, status: "queued", createdAt: now, updatedAt: now, done: 0, total, ...(question ? { question } : {}) };
   tasks.set(task.id, task);
   return { ...task };
 }

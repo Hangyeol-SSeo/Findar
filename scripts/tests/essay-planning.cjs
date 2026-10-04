@@ -13,7 +13,7 @@ const stubs = {
   './profile': { getCachedProfile: () => null },
   './applicant-profile': { readApplicantProfile: () => ({ education: [], projects: [], activities: [], awards: [], workExperiences: [] }) },
   './narrative-profile': { readNarrativeProfile: () => ({ core: '', episodes: [] }) },
-  './essay-bank': { ensureEssayBank: async () => ({ entries: [] }) },
+  './essay-bank': { ensureEssayBank: async () => ({ entries: [] }), summarizeEditPreferences: () => '' },
   './company-normalize': { normalizeCompanyName: x => x },
 };
 function compile(file, req) {

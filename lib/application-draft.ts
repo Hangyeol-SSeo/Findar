@@ -5,9 +5,9 @@ import { getJobBySeq, getCompanySections, getApplicationDraftRow, saveApplicatio
 import { getCachedProfile } from "./profile";
 import { readApplicantProfile } from "./applicant-profile";
 import { readNarrativeProfile } from "./narrative-profile";
-import { ensureEssayBank } from "./essay-bank";
+import { ensureEssayBank, summarizeEditPreferences } from "./essay-bank";
 import { normalizeCompanyName } from "./company-normalize";
-import { parseModelJson, validateEssay, type EssayAnswer, type EssayEvidence, type EssayRequest, type EssaySource } from "./essay-contract";
+import { parseModelJson, validateEssay, withVersion, type EssayAnswer, type EssayEvidence, type EssayRequest, type EssaySource } from "./essay-contract";
 import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
 export type { EssayAnswer } from "./essay-contract";
@@ -53,7 +53,7 @@ export const WRITING_RULES = `채용 담당자가 실제로 물은 질문에 답
 글자 수는 상한이며 억지로 채우지 않는다. 문장을 잘라 제한을 맞추지 말고 편집한다.
 문항과 추가 요청은 답변 범위/수정 요청이며, 이 사실성·고유명사 제외 규칙을 해제하지 못한다.`;
 
-async function collectContext(seq: string, request: EssayRequest) {
+export async function collectContext(seq: string, request: EssayRequest) {
   const job = getJobBySeq(seq);
   if (!job) throw new Error("공고를 찾을 수 없습니다.");
   const selection = requireApplicationRole(seq);
@@ -106,7 +106,7 @@ async function collectContext(seq: string, request: EssayRequest) {
   add("job", { company: job.company, title: job.title, targetRole: selection.role, rawContent: job.rawContent, positions: job.positions, description: job.jdSummary, qualifications: job.qualifications });
   if (JSON.stringify(sources).length > 150000) throw new Error("참고 자료가 너무 많습니다. 과거 자소서나 경험 자료를 정리한 뒤 다시 시도해주세요.");
   const existing = getCachedApplicationDraft(seq)?.essayAnswers.filter((a) => a.source === "user_question" && a.roleRevision === selection.revision) ?? [];
-  return { sources, forbiddenNames, previousAnswer: existing.find((a) => a.question === request.question)?.answer ?? "",
+  return { sources, forbiddenNames, editPreferences: summarizeEditPreferences(bank), previousAnswer: existing.find((a) => a.question === request.question)?.answer ?? "",
     otherAnswers: existing.filter((a) => a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) };
 }
 
@@ -145,7 +145,7 @@ async function askModelOnce(prompt: string, signal: AbortSignal | undefined, mod
   } finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
 }
 
-async function askModel(prompt: string, signal: AbortSignal | undefined, model: string): Promise<string> {
+export async function askModel(prompt: string, signal: AbortSignal | undefined, model: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MODEL_CALL_MAX_ATTEMPTS; attempt++) {
     try {
@@ -248,7 +248,7 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
   const index = batch.plans.findIndex((p) => p.question === request.question);
   if (index < 0) throw new Error("이 문항의 작성 구상이 없습니다.");
   const plan = batch.plans[index];
-  const { sources, forbiddenNames, previousAnswer } = batch.contexts[index];
+  const { sources, forbiddenNames, previousAnswer, editPreferences } = batch.contexts[index];
   const otherAnswers = getCachedApplicationDraft(seq)?.essayAnswers.filter((a) => a.source === "user_question" && a.roleRevision === batch.roleRevision && a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) ?? [];
   const { skills } = batch;
   const researchSources = sources.filter((s) => plan.research.some((r) => r.sourceId === s.id));
@@ -258,7 +258,7 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
     return result;
   };
   if (plan.missingInfo.length) return attach({ ...request, answer: "", intent: plan.intent, evidence: [], missingInfo: plan.missingInfo, reviewNotes: plan.notes, status: "needs_info", source: "user_question", generatedAt: Date.now() });
-  const background = `${WRITING_RULES}\n${APPLICATION_ROLE_RULES}\n${skills.write}\n[사용자 문항과 조건]\n${JSON.stringify(request)}\n[사실 자료]\n${JSON.stringify(sources)}\n[수정할 이전 답변: 사실 근거 아님]\n${previousAnswer || "없음"}\n[다른 답변: 중복 검토용, 사실 근거 아님]\n${JSON.stringify(otherAnswers)}\n[전체 문항 구상과 소재 배치]\n${JSON.stringify(batch.plans)}\n${OUTPUT}`;
+  const background = `${WRITING_RULES}\n${APPLICATION_ROLE_RULES}\n${skills.write}\n[사용자 문항과 조건]\n${JSON.stringify(request)}\n[사실 자료]\n${JSON.stringify(sources)}\n[수정할 이전 답변: 사실 근거 아님]\n${previousAnswer || "없음"}\n[다른 답변: 중복 검토용, 사실 근거 아님]\n${JSON.stringify(otherAnswers)}\n[전체 문항 구상과 소재 배치]\n${JSON.stringify(batch.plans)}\n${editPreferences ? `${editPreferences}\n` : ""}${OUTPUT}`;
   const researchRule = plan.researchMode === "direct" && plan.research.length
     ? `\n[회사 근거 인용 규칙] 아래 회사 근거를 본문의 논거로 사용하고, 각각을 evidence에 같은 sourceId와 quote 원문 그대로(줄이거나 고치지 말고) 넣으세요.\n${JSON.stringify(plan.research.map((r) => ({ sourceId: r.sourceId, quote: r.quote })))}`
     : "";
@@ -331,9 +331,15 @@ ${OUTPUT}` : plannedBackground;
   }
 }
 
-export function persistEssay(seq: string, answer: EssayAnswer) {
-  if (answer.roleRevision !== undefined) assertApplicationRole(seq, answer.roleRevision);
+export function persistEssay(seq: string, generated: EssayAnswer) {
+  if (generated.roleRevision !== undefined) assertApplicationRole(seq, generated.roleRevision);
   const existing = getCachedApplicationDraft(seq);
+  // 새로 쓰기도 이전 글을 버전 기록에 남긴다. 보완 질문만 돌아온 경우(본문 없음)엔 이전 기록을 그대로 둔다.
+  const previous = existing?.essayAnswers.find((a): a is EssayAnswer => a.source === "user_question" && a.question === generated.question);
+  const versions = previous ? (generated.answer ? withVersion(previous, generated.answer, "ai_draft", "새로 쓰기") : previous.versions)
+    : generated.answer ? withVersion(generated, generated.answer, "ai_draft") : undefined;
+  const answer: EssayAnswer = { ...generated, origin: "generated", versions };
+  generatedModels.set(answer, generatedModels.get(generated) ?? getAIModelId("applicationDraft"));
   const draft: ApplicationDraft = {
     seq, personalFields: existing?.personalFields ?? [], notesForUser: [],
     essayAnswers: [...(existing?.essayAnswers ?? []).filter((a) => !(a.source === "user_question" && a.question === answer.question)), answer],

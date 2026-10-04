@@ -31,6 +31,18 @@ export interface EssayEntry {
   createdAt: number;
 }
 
+// 사용자가 자기소개서를 어떻게 고치는지에 대한 신호. 직접 고친 문장, 받아들인/넘긴 첨삭 제안이 쌓이고,
+// 다음 초안·첨삭 프롬프트에 "수정 성향"으로 들어가 점점 사용자 문체에 맞춰지게 한다(추가 AI 호출 없음).
+export interface EssayEditSignal {
+  kind: "manual" | "accepted" | "rejected";
+  before: string;
+  after: string;
+  category: string;
+  createdAt: number;
+}
+const MAX_EDIT_SIGNALS = 60;
+const SIGNAL_TEXT_LIMIT = 300;
+
 export interface EssayBank {
   sourcesHash: string; // cover-letters/ 파일들의 해시 — 바뀌면 imported 항목만 재추출
   generatedAt: number;
@@ -38,6 +50,7 @@ export interface EssayBank {
   entries: EssayEntry[];
   styleNotes: string; // 문체/어조에 대한 AI 관찰 (초안 생성 시 톤 맞추는 데 사용)
   recurringThemes: string[]; // 반복적으로 등장하는 경험/에피소드 소재
+  editSignals: EssayEditSignal[];
 }
 
 function emptyEssayBank(): EssayBank {
@@ -48,6 +61,7 @@ function emptyEssayBank(): EssayBank {
     entries: [],
     styleNotes: "",
     recurringThemes: [],
+    editSignals: [],
   };
 }
 
@@ -164,6 +178,7 @@ export async function ensureEssayBank(opts?: {
       recurringThemes: extracted.recurringThemes.length
         ? extracted.recurringThemes
         : cached.recurringThemes,
+      editSignals: cached.editSignals,
     };
     writeBank(bank);
     return bank;
@@ -207,4 +222,39 @@ export function summarizeEssayBankForPrompt(bank: EssayBank, limit = 6): string 
     ),
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+export function recordEditSignals(signals: Omit<EssayEditSignal, "createdAt">[]): void {
+  const usable = signals.filter((sig) => sig.before.trim() !== sig.after.trim());
+  if (!usable.length) return;
+  const bank = readBank();
+  const now = Date.now();
+  bank.editSignals = [
+    ...bank.editSignals,
+    ...usable.map((sig) => ({
+      ...sig,
+      before: sig.before.slice(0, SIGNAL_TEXT_LIMIT),
+      after: sig.after.slice(0, SIGNAL_TEXT_LIMIT),
+      createdAt: now,
+    })),
+  ].slice(-MAX_EDIT_SIGNALS);
+  writeBank(bank);
+}
+
+// 프롬프트용 수정 성향 요약. 원문을 그대로 몇 쌍 보여주는 방식이라 별도 요약 호출이 필요 없다.
+export function summarizeEditPreferences(bank: EssayBank): string {
+  const recent = [...bank.editSignals].reverse();
+  const manual = recent.filter((sig) => sig.kind === "manual").slice(0, 6);
+  const accepted = recent.filter((sig) => sig.kind === "accepted").slice(0, 4);
+  const rejected = new Map<string, number>();
+  for (const sig of recent.filter((sig) => sig.kind === "rejected" && sig.category))
+    rejected.set(sig.category, (rejected.get(sig.category) ?? 0) + 1);
+  const rejectedTop = [...rejected].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (!manual.length && !accepted.length && !rejectedTop.length) return "";
+  return [
+    "[사용자 수정 성향: 사실 근거가 아니라 문체·표현 선택의 참고. 사실은 반드시 자료에서만 가져온다]",
+    ...manual.map((sig) => `- 사용자가 직접 고친 표현: “${sig.before}” → “${sig.after}”`),
+    ...accepted.map((sig) => `- 받아들인 첨삭${sig.category ? `(${sig.category})` : ""}: “${sig.before}” → “${sig.after}”`),
+    ...rejectedTop.map(([category, n]) => `- 자주 넘긴 첨삭 유형: ${category} (${n}회) — 이런 방향의 수정은 신중히 제안한다`),
+  ].join("\n");
 }

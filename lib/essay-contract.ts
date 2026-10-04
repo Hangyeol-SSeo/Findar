@@ -8,6 +8,41 @@ export interface EssayRequest {
 }
 
 export interface EssayEvidence { sourceId: string; quote: string; usedFor: string }
+
+// 한 문항 답변의 변천. versions의 마지막 항목이 현재 본문과 같다(새 버전을 쌓을 때마다 함께 맞춘다).
+export type EssayVersionKind = "ai_draft" | "user_import" | "user_edit" | "ai_revision" | "suggestion" | "restore";
+export interface EssayVersion { id: string; answer: string; kind: EssayVersionKind; note: string; createdAt: number }
+export const MAX_ESSAY_VERSIONS = 10;
+
+// 첨삭 A(요청대로 고쳐쓰기)의 결과. 바로 적용하지 않고 사용자가 비교 화면에서 반영/버리기를 고른다.
+export interface PendingRevision {
+  instruction: string; baseText: string; answer: string; changeSummary: string[];
+  evidence: EssayEvidence[]; reviewNotes: string[]; createdAt: number;
+}
+// 첨삭 B(첨삭 받기)의 결과. 제안은 원문 구절을 바꾸는 단순 치환이라 반영할 때 AI를 다시 부르지 않는다.
+export interface EssaySuggestion {
+  id: string; original: string; replacement: string; category: string; reason: string;
+  status: "pending" | "applied" | "dismissed";
+}
+export interface EssayFeedback {
+  focus: string; baseText: string; summary: string; strengths: string[]; issues: string[];
+  suggestions: EssaySuggestion[]; createdAt: number;
+}
+
+// 고쳐쓰기 요청이 자료에 없는 사실을 필요로 할 때 모델이 돌려준 질문. 오류가 아니라 사용자가 답할 보완 요청이다.
+export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number }
+
+// 버튼을 눌렀을 때만 도는 업계 사례 조사. 후보 찾기(scoped) → 사용자가 자료와 구성 방향 선택 → 자료 정리(collected)
+// → 그 자료로 고쳐쓰기의 단계를 거쳐, 조사 중간에 사용자가 방향을 정할 수 있다.
+export interface ResearchCandidate { id: string; title: string; url: string; summary: string; publisher: string; date: string }
+export interface ResearchFinding { id: string; title: string; url: string; fact: string; quote: string; date: string }
+export interface IndustryResearch {
+  instruction: string; topic: string; stage: "scoped" | "collected";
+  directionQuestions: string[]; candidates: ResearchCandidate[];
+  direction: string; selectedIds: string[]; findings: ResearchFinding[];
+  notes: string[]; createdAt: number; updatedAt: number;
+}
+
 export interface EssayAnswer extends EssayRequest {
   answer: string;
   intent: string;
@@ -21,6 +56,37 @@ export interface EssayAnswer extends EssayRequest {
   roleRevision?: string;
   plan?: EssayPlan;
   researchSources?: EssaySource[];
+  origin?: "generated" | "imported";
+  versions?: EssayVersion[];
+  // 직접 수정·제안 반영·버전 복원 뒤에는 evidence가 현재 본문을 검토한 결과가 아니다.
+  evidenceStale?: boolean;
+  pendingRevision?: PendingRevision;
+  feedback?: EssayFeedback;
+  revisionNeedsInfo?: RevisionNeedsInfo;
+  industryResearch?: IndustryResearch;
+}
+
+// 기존 답변(versions 도입 전)도 현재 본문을 첫 버전으로 보고 이어서 쌓는다.
+export function withVersion(answer: EssayAnswer, text: string, kind: EssayVersionKind, note = ""): EssayVersion[] {
+  const versions = answer.versions?.length ? [...answer.versions]
+    : answer.answer ? [{ id: crypto.randomUUID(), answer: answer.answer, kind: answer.origin === "imported" ? "user_import" as const : "ai_draft" as const, note: "", createdAt: answer.generatedAt }]
+    : [];
+  if (versions.at(-1)?.answer === text) return versions;
+  return [...versions, { id: crypto.randomUUID(), answer: text, kind, note, createdAt: Date.now() }].slice(-MAX_ESSAY_VERSIONS);
+}
+
+// 반말 종결 검사. 인용한 말(따옴표 안)은 제외한다.
+export function hasBanmalEnding(text: string): boolean {
+  const narration = text.replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, "");
+  return /(?:한다|했다|된다|됐다|이다|였다|있다|없다|겠다|느꼈다|배웠다|깨달았다|이해했다|바꿨다|늘었다|복구했다)(?=[.!?。！？](?:\s|$)|\s*$)/m.test(narration);
+}
+
+export function containsForbiddenName(text: string, forbiddenNames: string[]): boolean {
+  return forbiddenNames.some((name) => name && text.toLowerCase().includes(name.toLowerCase())) || /\[비공개[^\]]*\]/.test(text);
+}
+
+export function extractNumbers(text: string): string[] {
+  return text.replace(/(\d),(?=\d)/g, "$1").match(/\d+(?:\.\d+)?/g) ?? [];
 }
 export interface EssaySource { id: string; text: string; links?: { title: string; url: string }[]; generatedAt?: number; status?: string; contentJson?: unknown }
 
@@ -81,17 +147,14 @@ export function validateEssay(
     return { ...request, answer: "", intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "needs_info", source: "user_question", generatedAt: Date.now() };
   }
   if (!answer || (!evidence.length && !allowReasoningOnly)) throw new Error("근거 없는 답변은 저장하지 않습니다.");
-  // Check sentence endings, leaving quoted speech alone.
-  const narration = answer.replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, "");
-  if (/(?:한다|했다|된다|됐다|이다|였다|있다|없다|겠다|느꼈다|배웠다|깨달았다|이해했다|바꿨다|늘었다|복구했다)(?=[.!?。！？](?:\s|$)|\s*$)/m.test(narration))
+  if (hasBanmalEnding(answer))
     throw new Error("답변에 반말 종결이 포함되어 있습니다. 모든 서술 문장을 존댓말로 다시 작성해주세요.");
   if (request.maxChars && characterCount(answer, request.countSpaces) > request.maxChars)
     throw new Error("답변이 글자 수 제한을 초과했습니다.");
-  if (forbiddenNames.some((name) => name && answer.toLowerCase().includes(name.toLowerCase())) || /\[비공개[^\]]*\]/.test(answer))
+  if (containsForbiddenName(answer, forbiddenNames))
     throw new Error("답변에 제외 대상 고유명사가 포함되어 있습니다.");
   // A numeric claim must occur in the quoted evidence. Semantic equivalence is checked by the editor.
-  const numbers = (s: string) => s.replace(/(\d),(?=\d)/g, "$1").match(/\d+(?:\.\d+)?/g) ?? [];
-  const supported = new Set(evidence.flatMap((e) => numbers(e.quote)));
-  if (numbers(answer).some((n) => !supported.has(n))) throw new Error("근거에서 확인되지 않는 수치가 포함되어 있습니다.");
+  const supported = new Set(evidence.flatMap((e) => extractNumbers(e.quote)));
+  if (extractNumbers(answer).some((n) => !supported.has(n))) throw new Error("근거에서 확인되지 않는 수치가 포함되어 있습니다.");
   return { ...request, answer, intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "draft", source: "user_question", generatedAt: Date.now() };
 }
