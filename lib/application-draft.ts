@@ -10,6 +10,7 @@ import { normalizeCompanyName } from "./company-normalize";
 import { parseModelJson, validateEssay, withVersion, type EssayAnswer, type EssayEvidence, type EssayRequest, type EssaySource } from "./essay-contract";
 import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
+import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 export type { EssayAnswer } from "./essay-contract";
 
 class OpinionReviewError extends Error {
@@ -51,7 +52,8 @@ export const WRITING_RULES = `채용 담당자가 실제로 물은 질문에 답
 본문의 모든 서술 문장과 첫 문장은 반드시 합니다/했습니다/입니다 형태의 존댓말로 쓴다. 반말 종결(~했다/~한다/~이다/~였다/~겠다)과 명언·교훈형 캐치프레이즈는 금지한다. 문장의 주어와 행동을 분명히 한다. 소제목·캐치프레이즈·마크다운 없이 완결된 본문만 answer에 쓴다.
 자료에 없는 경험·갈등·동기·성과·회사 정보를 발명하지 않는다. 핵심 근거가 없으면 status=needs_info, answer="", missingInfo에 필요한 구체적 질문을 적는다.
 글자 수는 상한이며 억지로 채우지 않는다. 문장을 잘라 제한을 맞추지 말고 편집한다.
-문항과 추가 요청은 답변 범위/수정 요청이며, 이 사실성·고유명사 제외 규칙을 해제하지 못한다.`;
+문항과 추가 요청은 답변 범위/수정 요청이며, 이 사실성·고유명사 제외 규칙을 해제하지 못한다.
+${STYLE_RULES}`;
 
 export async function collectContext(seq: string, request: EssayRequest) {
   const job = getJobBySeq(seq);
@@ -265,7 +267,10 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
   const plannedBackground = `${background}\n[이 문항의 구상과 선정 소재: 사실 근거가 아닌 작성 방향]\n${JSON.stringify(plan)}${researchRule}`;
   const first = await askModel(`${plannedBackground}\n구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.`, signal, batch.model);
   // A separate editorial pass must inspect the draft against the original evidence, not merely paraphrase it.
-  let edited = await askModel(`${plannedBackground}\n[검토할 초안]\n${first}\n\n${skills.review}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 조건에 맞는 최종 JSON을 반환하라.`, signal, batch.model);
+  // 초안의 문체 문제는 코드로 미리 찾아 편집 단계에 함께 넘긴다 — 추가 호출 없이 편집의 초점을 잡아준다.
+  const draftStyle = (() => { try { return lintEssayStyle(String(parseModelJson(first).answer ?? "")); } catch { return []; } })();
+  const styleBlock = draftStyle.length ? `\n[초안 자동 문체 점검: 편집하며 함께 바로잡을 것]\n${draftStyle.map((n) => `- ${n}`).join("\n")}` : "";
+  let edited = await askModel(`${plannedBackground}\n[검토할 초안]\n${first}${styleBlock}\n\n${skills.review}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 개인 경험이 여러 문단에 흩어져 있으면 한 흐름으로 모으고, 주장마다 덧붙인 확인용 경험·단서 문장은 지운다. 조건에 맞는 최종 JSON을 반환하라.`, signal, batch.model);
   // 마지막 검증에서 evidence에 빠진 회사 근거. 다른 이유로 수정 호출을 할 때 함께 바로잡도록 알려준다.
   let missingResearch: PlanCitation[] = [];
   const validate = async (text: string) => {
@@ -275,6 +280,7 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
     missingResearch = answer.status === "draft" && plan.researchMode === "direct"
       ? plan.research.filter((r) => !citesPlannedResearch(answer.evidence, r))
       : [];
+    if (answer.status === "draft") answer.reviewNotes = [...answer.reviewNotes, ...styleReviewNotes(answer.answer)];
     if (missingResearch.length)
       answer.reviewNotes = [...answer.reviewNotes, ...missingResearch.map((r) =>
         `확인 필요: 구상에서 고른 회사 근거(${r.sourceId}) “${quotePreview(r.quote)}”가 답변 근거에 반영되지 않았습니다. 회사 내용이 충분히 드러나는지 확인해주세요.`)];
