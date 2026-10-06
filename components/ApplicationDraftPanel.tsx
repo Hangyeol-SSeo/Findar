@@ -430,7 +430,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
           }} title="구상부터 처음부터 다시 작성합니다. 지금 글은 버전 기록에 남습니다.">새로 쓰기</button>
           {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
             await save();
-            const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company: companyName, question: answer.question, answer: answer.answer }) });
+            const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seq, company: companyName, question: answer.question, answer: answer.answer }) });
             if (!response.ok) throw new Error("확정 답변을 경험 자료로 저장하지 못했습니다.");
             setNotice("검토한 답변을 다음 작성에 참고할 자료로 저장했습니다.");
           })}>검토한 답변을 자료로 저장</button></>}

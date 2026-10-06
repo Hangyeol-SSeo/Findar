@@ -31,7 +31,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ seq:
     // 문항별 답변은 직접 고칠 때마다 버전을 남기고 수정 성향을 기록한다. 이전 방식 공통 답변은 본문만 바꾼다.
     const draft = { ...current, revision: crypto.randomUUID(), essayAnswers: current.essayAnswers.map((a, i) => {
       const text = body.essayAnswers[i].answer as string;
-      return a.source === "user_question" ? recordManualEdit(a, text) : { ...a, answer: text };
+      return a.source === "user_question" ? recordManualEdit(seq, a, text) : { ...a, answer: text };
     }) };
     saveApplicationDraft(seq, JSON.stringify(draft), current.model);
     return Response.json({ draft });

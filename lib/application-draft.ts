@@ -11,6 +11,7 @@ import { parseModelJson, validateEssay, withVersion, type EssayAnswer, type Essa
 import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
+import { logEssayEvent } from "./essay-log";
 export type { EssayAnswer } from "./essay-contract";
 
 class OpinionReviewError extends Error {
@@ -337,7 +338,7 @@ ${OUTPUT}` : plannedBackground;
   }
 }
 
-export function persistEssay(seq: string, generated: EssayAnswer) {
+export function persistEssay(seq: string, generated: EssayAnswer, threadId?: string) {
   if (generated.roleRevision !== undefined) assertApplicationRole(seq, generated.roleRevision);
   const existing = getCachedApplicationDraft(seq);
   // 새로 쓰기도 이전 글을 버전 기록에 남긴다. 보완 질문만 돌아온 경우(본문 없음)엔 이전 기록을 그대로 둔다.
@@ -352,5 +353,12 @@ export function persistEssay(seq: string, generated: EssayAnswer) {
     model: generatedModels.get(answer) ?? getAIModelId("applicationDraft"), generatedAt: Date.now(), revision: crypto.randomUUID(),
   };
   saveApplicationDraft(seq, JSON.stringify(draft), draft.model);
+  // 새로 쓰기는 이전 답변의 열린 첨삭 결과·수정본을 함께 대체하므로, 무엇이 사라졌는지도 남긴다.
+  logEssayEvent({ seq, question: answer.question, type: "draft_generated", threadId, textBefore: previous?.answer || null, textAfter: answer.answer || null, detail: {
+    status: answer.status, model: draft.model, guidance: answer.guidance, maxChars: answer.maxChars ?? null, intent: answer.intent,
+    missingInfo: answer.missingInfo, reviewNotes: answer.reviewNotes, evidenceSources: [...new Set(answer.evidence.map((e) => e.sourceId))],
+    ...(previous?.pendingRevision ? { replacedPendingRevision: previous.pendingRevision.instruction } : {}),
+    ...(previous?.feedback ? { replacedFeedback: previous.feedback.suggestions.filter((x) => x.status === "pending").length } : {}),
+  } });
   return draft;
 }

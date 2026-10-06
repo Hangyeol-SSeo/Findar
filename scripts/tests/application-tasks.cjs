@@ -12,6 +12,7 @@ const stubs = {
   '@/lib/application-role': { requireApplicationRole: () => ({ role: '분석', revision: '1' }) },
   'next/server': { after: fn => scheduled.push(fn) },
   '@/lib/db': { getJobBySeq: seq => ({ seq }) },
+  '@/lib/essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
   '@/lib/application-draft': {
     getCachedApplicationDraft: seq => drafts.get(seq) ?? null,
     prepareEssayBatch: async (_seq, inputs) => ({ plans: inputs }),

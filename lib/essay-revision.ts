@@ -6,6 +6,8 @@ import { askModel, collectContext, getCachedApplicationDraft, WRITING_RULES, typ
 import { loadApplicationSkills } from "./application-skills";
 import { recordEditSignals } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
+import { logEssayEvent, logEssayEvents, newEssayThread, type EssayEventInput } from "./essay-log";
+import { locateInEssay } from "./essay-log-analysis";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import {
   containsForbiddenName, extractNumbers, hasBanmalEnding, parseEssayRequest, parseModelJson, validateEssay, withVersion,
@@ -77,6 +79,8 @@ export function importEssay(seq: string, input: { question: unknown; maxChars?: 
     model: draft?.model ?? "", generatedAt: draft?.generatedAt ?? now, revision: randomUUID(),
   };
   saveApplicationDraft(seq, JSON.stringify(next), next.model);
+  logEssayEvent({ seq, question: request.question, type: "answer_imported", textBefore: previous?.answer || null, textAfter: text,
+    detail: { maxChars: request.maxChars ?? null, replacedPrevious: !!previous } });
   return next;
 }
 
@@ -120,6 +124,22 @@ function researchSources(answer: EssayAnswer, findingIds: string[]): EssaySource
 // 첨삭 A: 요청한 부분만 고친 수정본. 형식·규칙 검증에 실패했을 때만 한 번 고쳐 달라고 한다.
 // 요청이 자료에 없는 사실을 필요로 하면 실패 대신 보완 질문(revisionNeedsInfo)으로 저장한다.
 export async function reviseEssay(seq: string, question: string, instruction: string, findingIds: string[] = []): Promise<RevisionOutcome> {
+  const threadId = newEssayThread();
+  const current = getCachedApplicationDraft(seq)?.essayAnswers.find((a) => isUserAnswer(a, question));
+  const research = current?.industryResearch;
+  logEssayEvent({ seq, question, type: "revision_requested", threadId, textBefore: current?.answer ?? null, detail: {
+    instruction,
+    ...(findingIds.length ? { researchThreadId: research?.threadId ?? null,
+      findings: research?.findings.filter((f) => findingIds.includes(f.id)).map((f) => ({ fact: f.fact, title: f.title, url: f.url, date: f.date })) ?? [] } : {}),
+  } });
+  try { return await runRevision(seq, question, instruction, findingIds, threadId); }
+  catch (error) {
+    logEssayEvent({ seq, question, type: "revision_failed", threadId, detail: { instruction, error: error instanceof Error ? error.message : String(error) } });
+    throw error;
+  }
+}
+
+async function runRevision(seq: string, question: string, instruction: string, findingIds: string[], threadId: string): Promise<RevisionOutcome> {
   const prepared = await prepare(seq, question, instruction);
   const { selection, current, baseText, request, context, model, skills } = prepared;
   const sources = [...prepared.sources, ...researchSources(current, findingIds)];
@@ -159,12 +179,19 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   const draft = updateEssayAnswer(seq, question, (answer) => {
     if (answer.answer !== baseText) throw new Error("첨삭하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
     if (essay.status === "needs_info")
-      return { ...answer, revisionNeedsInfo: { instruction, questions: essay.missingInfo, createdAt: Date.now() } };
+      return { ...answer, revisionNeedsInfo: { instruction, questions: essay.missingInfo, createdAt: Date.now(), threadId } };
     return { ...answer, revisionNeedsInfo: undefined, pendingRevision: {
       instruction, baseText, answer: essay.answer, changeSummary: stringList(value.changeSummary),
-      evidence: essay.evidence, reviewNotes: [...essay.reviewNotes, ...styleReviewNotes(essay.answer)], createdAt: Date.now(),
+      evidence: essay.evidence, reviewNotes: [...essay.reviewNotes, ...styleReviewNotes(essay.answer)], createdAt: Date.now(), threadId,
     } };
   });
+  if (essay.status === "needs_info")
+    logEssayEvent({ seq, question, type: "revision_needs_info", threadId, textBefore: baseText, detail: { instruction, questions: essay.missingInfo, model } });
+  else
+    logEssayEvent({ seq, question, type: "revision_proposed", threadId, textBefore: baseText, textAfter: essay.answer, detail: {
+      instruction, model, intent: essay.intent, changeSummary: stringList(value.changeSummary), reviewNotes: essay.reviewNotes,
+      evidenceSources: [...new Set(essay.evidence.map((e) => e.sourceId))],
+    } });
   return { draft, outcome: essay.status === "needs_info" ? "needs-info" : "pending-revision" };
 }
 
@@ -193,6 +220,17 @@ function validSuggestions(value: unknown, baseText: string, sources: EssaySource
 
 // 첨삭 B: 글을 다시 쓰지 않고 평가와 구절 단위 제안만 받는다.
 export async function reviewEssay(seq: string, question: string, focus: string): Promise<RevisionOutcome> {
+  const threadId = newEssayThread();
+  const current = getCachedApplicationDraft(seq)?.essayAnswers.find((a) => isUserAnswer(a, question));
+  logEssayEvent({ seq, question, type: "review_requested", threadId, textBefore: current?.answer ?? null, detail: { focus } });
+  try { return await runReview(seq, question, focus, threadId); }
+  catch (error) {
+    logEssayEvent({ seq, question, type: "review_failed", threadId, detail: { focus, error: error instanceof Error ? error.message : String(error) } });
+    throw error;
+  }
+}
+
+async function runReview(seq: string, question: string, focus: string, threadId: string): Promise<RevisionOutcome> {
   const { selection, current, baseText, context, sources, model, skills } = await prepare(seq, question, "");
   const style = lintEssayStyle(baseText);
   const prompt = `${APPLICATION_ROLE_RULES}
@@ -228,14 +266,23 @@ suggestions의 original은 답변에서 그대로 복사한 연속 구절(한 �
   }
   const feedback: EssayFeedback = {
     focus, baseText, summary: value.summary as string, strengths: stringList(value.strengths), issues: stringList(value.issues),
-    suggestions: validSuggestions(value.suggestions, baseText, sources, context.forbiddenNames), createdAt: Date.now(),
+    suggestions: validSuggestions(value.suggestions, baseText, sources, context.forbiddenNames), createdAt: Date.now(), threadId,
   };
   assertApplicationRole(seq, selection.revision);
   const draft = updateEssayAnswer(seq, question, (answer) => {
     if (answer.answer !== baseText) throw new Error("첨삭하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
     return { ...answer, feedback };
   });
+  logEssayEvent({ seq, question, type: "review_received", threadId, textBefore: baseText, detail: {
+    focus, model, summary: feedback.summary, strengths: feedback.strengths, issues: feedback.issues, styleNotes: style,
+    suggestions: feedback.suggestions.map((sug) => ({ ...suggestionDetail(sug, baseText), status: sug.status })),
+    droppedSuggestions: Array.isArray(value.suggestions) ? value.suggestions.length - feedback.suggestions.length : 0,
+  } });
   return { draft, outcome: "feedback" };
+}
+
+function suggestionDetail(s: EssaySuggestion, text: string) {
+  return { suggestionId: s.id, category: s.category, original: s.original, replacement: s.replacement, reason: s.reason, location: locateInEssay(text, s.original) };
 }
 
 export type EssayAnswerAction =
@@ -251,6 +298,8 @@ export type EssayAnswerAction =
 // 화면의 즉시 처리 동작들. 모두 AI 호출 없이 저장된 결과만 다룬다.
 export function applyEssayAnswerAction(seq: string, question: string, input: EssayAnswerAction, expectedRevision: string | null): ApplicationDraft {
   const signals: Parameters<typeof recordEditSignals>[0] = [];
+  const events: EssayEventInput[] = [];
+  const log = (event: Omit<EssayEventInput, "seq" | "question">) => events.push({ seq, question, ...event });
   const draft = updateEssayAnswer(seq, question, (answer) => {
     switch (input.action) {
       case "accept-revision": {
@@ -259,14 +308,21 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
         if (answer.answer !== pending.baseText)
           throw new Error("첨삭을 요청한 뒤 글이 바뀌어 비교 결과가 맞지 않습니다. 버리고 다시 요청해주세요.");
         signals.push(...changedPairs(pending.baseText, pending.answer).slice(0, 3).map((p) => ({ kind: "accepted" as const, category: "고쳐쓰기", ...p })));
+        log({ type: "revision_accepted", threadId: pending.threadId, textBefore: pending.baseText, textAfter: pending.answer,
+          detail: { instruction: pending.instruction, proposedAt: pending.createdAt } });
         return {
           ...answer, answer: pending.answer, evidence: pending.evidence, reviewNotes: pending.reviewNotes,
           status: "draft", missingInfo: [], evidenceStale: false, pendingRevision: undefined,
           versions: withVersion(answer, pending.answer, "ai_revision", pending.instruction.slice(0, 80)),
         };
       }
-      case "discard-revision":
+      case "discard-revision": {
+        const pending = answer.pendingRevision;
+        if (pending) log({ type: "revision_discarded", threadId: pending.threadId, textBefore: answer.answer, detail: {
+          instruction: pending.instruction, proposedAnswer: pending.answer, changeSummary: pending.changeSummary, proposedAt: pending.createdAt,
+        } });
         return { ...answer, pendingRevision: undefined };
+      }
       case "apply-suggestion": {
         const suggestion = answer.feedback?.suggestions.find((s) => s.id === input.suggestionId && s.status === "pending");
         if (!suggestion || !answer.feedback) throw new Error("반영할 제안을 찾을 수 없습니다.");
@@ -278,6 +334,7 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
         if (!suggestion.replacement && /\s$/.test(before) && /^\s/.test(after)) after = after.replace(/^\s+/, "");
         const text = before + suggestion.replacement + after;
         signals.push({ kind: "accepted", category: suggestion.category, before: suggestion.original, after: suggestion.replacement });
+        log({ type: "suggestion_applied", threadId: answer.feedback.threadId, textBefore: answer.answer, textAfter: text, detail: suggestionDetail(suggestion, answer.answer) });
         return {
           ...answer, answer: text, evidenceStale: true,
           versions: withVersion(answer, text, "suggestion", suggestion.category),
@@ -288,19 +345,36 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
         const suggestion = answer.feedback?.suggestions.find((s) => s.id === input.suggestionId);
         if (!suggestion || !answer.feedback) throw new Error("제안을 찾을 수 없습니다.");
         signals.push({ kind: "rejected", category: suggestion.category, before: suggestion.original, after: suggestion.replacement });
+        log({ type: "suggestion_dismissed", threadId: answer.feedback.threadId, detail: suggestionDetail(suggestion, answer.answer) });
         return { ...answer, feedback: { ...answer.feedback, suggestions: answer.feedback.suggestions.map((s) => (s.id === suggestion.id ? { ...s, status: "dismissed" as const } : s)) } };
       }
-      case "close-feedback":
+      case "close-feedback": {
+        const feedback = answer.feedback;
+        // 손대지 않고 닫은 제안도 "관심 없음"이라는 신호라 원문과 함께 남긴다.
+        if (feedback) log({ type: "feedback_closed", threadId: feedback.threadId, detail: {
+          applied: feedback.suggestions.filter((x) => x.status === "applied").length,
+          dismissed: feedback.suggestions.filter((x) => x.status === "dismissed").length,
+          untouched: feedback.suggestions.filter((x) => x.status === "pending").map((x) => suggestionDetail(x, answer.answer)),
+        } });
         return { ...answer, feedback: undefined };
+      }
       case "dismiss-needs-info":
+        if (answer.revisionNeedsInfo) log({ type: "needs_info_dismissed", threadId: answer.revisionNeedsInfo.threadId,
+          detail: { instruction: answer.revisionNeedsInfo.instruction, questions: answer.revisionNeedsInfo.questions } });
         return { ...answer, revisionNeedsInfo: undefined };
       case "close-research":
+        if (answer.industryResearch) log({ type: "research_closed", threadId: answer.industryResearch.threadId, detail: {
+          topic: answer.industryResearch.topic, stage: answer.industryResearch.stage, findings: answer.industryResearch.findings.length,
+        } });
         return { ...answer, industryResearch: undefined };
       case "restore-version": {
         const versions = answer.versions ?? [];
         const index = versions.findIndex((v) => v.id === input.versionId);
         if (index < 0) throw new Error("복원할 버전을 찾을 수 없습니다.");
         const text = versions[index].answer;
+        log({ type: "version_restored", textBefore: answer.answer, textAfter: text, detail: {
+          versionId: versions[index].id, versionNumber: index + 1, versionKind: versions[index].kind, versionNote: versions[index].note, versionCreatedAt: versions[index].createdAt,
+        } });
         return {
           ...answer, answer: text, status: "draft", missingInfo: [], evidenceStale: true,
           versions: withVersion(answer, text, "restore", `${index + 1}번째 버전 복원`),
@@ -309,12 +383,15 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
     }
   }, expectedRevision);
   recordEditSignals(signals);
+  logEssayEvents(events);
   return draft;
 }
 
-// 직접 고친 답변을 저장할 때: 버전을 남기고, 바뀐 문장 쌍을 수정 성향 신호로 기록한다.
-export function recordManualEdit(previous: EssayAnswer, text: string): EssayAnswer {
+// 직접 고친 답변을 저장할 때: 버전을 남기고, 바뀐 문장 쌍을 수정 성향 신호로, 전후 전문을 작성 기록으로 남긴다.
+export function recordManualEdit(seq: string, previous: EssayAnswer, text: string): EssayAnswer {
   if (previous.answer === text) return previous;
   recordEditSignals(changedPairs(previous.answer, text).slice(0, 3).map((p) => ({ kind: "manual" as const, category: "", ...p })));
+  logEssayEvent({ seq, question: previous.question, type: "manual_edit", textBefore: previous.answer, textAfter: text,
+    detail: { fromVersionKind: previous.versions?.at(-1)?.kind ?? (previous.origin === "imported" ? "user_import" : "ai_draft") } });
   return { ...previous, answer: text, evidenceStale: true, versions: withVersion(previous, text, "user_edit") };
 }

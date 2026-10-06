@@ -18,6 +18,7 @@ export const MAX_ESSAY_VERSIONS = 10;
 export interface PendingRevision {
   instruction: string; baseText: string; answer: string; changeSummary: string[];
   evidence: EssayEvidence[]; reviewNotes: string[]; createdAt: number;
+  threadId?: string; // 작성 기록(essay-log)에서 요청·결과·반영을 잇는 id
 }
 // 첨삭 B(첨삭 받기)의 결과. 제안은 원문 구절을 바꾸는 단순 치환이라 반영할 때 AI를 다시 부르지 않는다.
 export interface EssaySuggestion {
@@ -27,10 +28,11 @@ export interface EssaySuggestion {
 export interface EssayFeedback {
   focus: string; baseText: string; summary: string; strengths: string[]; issues: string[];
   suggestions: EssaySuggestion[]; createdAt: number;
+  threadId?: string;
 }
 
 // 고쳐쓰기 요청이 자료에 없는 사실을 필요로 할 때 모델이 돌려준 질문. 오류가 아니라 사용자가 답할 보완 요청이다.
-export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number }
+export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string }
 
 // 버튼을 눌렀을 때만 도는 업계 사례 조사. 후보 찾기(scoped) → 사용자가 자료와 구성 방향 선택 → 자료 정리(collected)
 // → 그 자료로 고쳐쓰기의 단계를 거쳐, 조사 중간에 사용자가 방향을 정할 수 있다.
@@ -41,6 +43,7 @@ export interface IndustryResearch {
   directionQuestions: string[]; candidates: ResearchCandidate[];
   direction: string; selectedIds: string[]; findings: ResearchFinding[];
   notes: string[]; createdAt: number; updatedAt: number;
+  threadId?: string;
 }
 
 export interface EssayAnswer extends EssayRequest {

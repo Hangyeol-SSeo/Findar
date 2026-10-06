@@ -15,6 +15,7 @@ const stubs = {
   './narrative-profile': { readNarrativeProfile: () => ({ core: '', episodes: [] }) },
   './essay-bank': { ensureEssayBank: async () => ({ entries: [] }), summarizeEditPreferences: () => '' },
   './company-normalize': { normalizeCompanyName: x => x },
+  './essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
 };
 function compile(file, req) {
   const mod = { exports: {} };

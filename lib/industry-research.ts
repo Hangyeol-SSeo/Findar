@@ -5,6 +5,7 @@ import { getAIModelId } from "./ai-model-settings";
 import { parseModelJson, type IndustryResearch, type ResearchCandidate, type ResearchFinding } from "./essay-contract";
 import { findEssayAnswer, updateEssayAnswer } from "./essay-revision";
 import type { ApplicationDraft } from "./application-draft";
+import { logEssayEvent, newEssayThread } from "./essay-log";
 
 // 자기소개서 첨삭에 필요한 업계 사례를 웹에서 찾는 기능. 버튼을 눌렀을 때만 돌고, 두 단계로 나눠
 // 중간에 사용자가 방향을 정한다:
@@ -68,8 +69,20 @@ function essayContext(seq: string, question: string) {
   return { selection, answer };
 }
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 // 1단계: 후보 자료와 구성 방향 질문. 같은 문항의 이전 조사는 새 조사로 바뀐다.
 export async function scopeIndustryResearch(seq: string, question: string, instruction: string, topic: string): Promise<ApplicationDraft> {
+  const threadId = newEssayThread();
+  logEssayEvent({ seq, question, type: "research_requested", threadId, detail: { instruction, topic } });
+  try { return await runScope(seq, question, instruction, topic, threadId); }
+  catch (error) {
+    logEssayEvent({ seq, question, type: "research_failed", threadId, detail: { step: "scope", error: errorText(error) } });
+    throw error;
+  }
+}
+
+async function runScope(seq: string, question: string, instruction: string, topic: string, threadId: string): Promise<ApplicationDraft> {
   const { selection, answer } = essayContext(seq, question);
   const value = await runResearch(`[자기소개서 문항] ${question}
 [지원 직무] ${selection.role}
@@ -98,13 +111,34 @@ JSON 객체 하나만 반환: {"candidates":[{"title":"자료 제목","url":"htt
     directionQuestions: (Array.isArray(value.directionQuestions) ? value.directionQuestions : []).map((q: unknown) => text(q, 300)).filter(Boolean).slice(0, 3),
     candidates, direction: "", selectedIds: [], findings: [],
     notes: (Array.isArray(value.notes) ? value.notes : []).map((n: unknown) => text(n, 300)).filter(Boolean),
-    createdAt: now, updatedAt: now,
+    createdAt: now, updatedAt: now, threadId,
   };
-  return updateEssayAnswer(seq, question, (current) => ({ ...current, industryResearch: research }));
+  const draft = updateEssayAnswer(seq, question, (current) => ({ ...current, industryResearch: research }));
+  logEssayEvent({ seq, question, type: "research_scoped", threadId, detail: {
+    model: getAIModelId("industryResearch"), directionQuestions: research.directionQuestions, notes: research.notes,
+    candidates: candidates.map((c) => ({ title: c.title, url: c.url, publisher: c.publisher, date: c.date })),
+  } });
+  return draft;
 }
 
 // 2단계: 사용자가 고른 자료만 열어 사실과 원문 발췌를 정리한다. 구성 방향은 발췌를 고르는 기준으로 쓴다.
 export async function collectIndustryResearch(seq: string, question: string, selectedIds: string[], direction: string): Promise<ApplicationDraft> {
+  const research = findEssayAnswer(seq, question).industryResearch;
+  const threadId = research?.threadId ?? newEssayThread();
+  const chosen = research?.candidates.filter((c) => selectedIds.includes(c.id)).slice(0, MAX_SELECTED) ?? [];
+  // 후보 중 무엇을 고르고 무엇을 뺐는지가 사용자의 관점이라 둘 다 남긴다.
+  logEssayEvent({ seq, question, type: "research_sources_selected", threadId, detail: {
+    direction, selected: chosen.map((c) => ({ title: c.title, url: c.url })),
+    skipped: research?.candidates.filter((c) => !chosen.includes(c)).map((c) => ({ title: c.title, url: c.url })) ?? [],
+  } });
+  try { return await runCollect(seq, question, selectedIds, direction, threadId); }
+  catch (error) {
+    logEssayEvent({ seq, question, type: "research_failed", threadId, detail: { step: "collect", error: errorText(error) } });
+    throw error;
+  }
+}
+
+async function runCollect(seq: string, question: string, selectedIds: string[], direction: string, threadId: string): Promise<ApplicationDraft> {
   const { selection, answer } = essayContext(seq, question);
   const research = answer.industryResearch;
   if (!research) throw new Error("먼저 업계 사례 후보를 찾아주세요.");
@@ -131,7 +165,12 @@ JSON 객체 하나만 반환: {"findings":[{"url":"읽은 자료 url","title":"�
   }
   if (!findings.length) throw new Error("고른 자료에서 쓸 만한 사실을 정리하지 못했습니다. 다른 자료를 골라 다시 시도해주세요.");
   const notes = (Array.isArray(value.notes) ? value.notes : []).map((n: unknown) => text(n, 300)).filter(Boolean);
-  return updateEssayAnswer(seq, question, (current) => current.industryResearch ? ({
+  const draft = updateEssayAnswer(seq, question, (current) => current.industryResearch ? ({
     ...current, industryResearch: { ...current.industryResearch, stage: "collected", direction, selectedIds: selected.map((c) => c.id), findings, notes, updatedAt: Date.now() },
   }) : current);
+  logEssayEvent({ seq, question, type: "research_collected", threadId, detail: {
+    model: getAIModelId("industryResearch"), direction, notes,
+    findings: findings.map((f) => ({ title: f.title, url: f.url, fact: f.fact, quote: f.quote, date: f.date })),
+  } });
+  return draft;
 }

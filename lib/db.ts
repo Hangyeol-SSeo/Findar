@@ -98,6 +98,25 @@ db.exec(`
     lastError TEXT NOT NULL DEFAULT '',
     updatedAt INTEGER NOT NULL
   );
+
+  -- 자기소개서 작성·첨삭·수정·피드백의 추가 전용 기록(lib/essay-log.ts). application_drafts는 현재 상태만 담고
+  -- 첨삭 결과·버린 수정본은 닫으면 사라지므로, 변화 과정은 여기에만 남는다. 지우거나 고치지 않는다.
+  CREATE TABLE IF NOT EXISTS essay_events (
+    id TEXT PRIMARY KEY,
+    seq TEXT NOT NULL,
+    question TEXT NOT NULL,
+    type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    threadId TEXT,
+    textBefore TEXT,
+    textAfter TEXT,
+    detail TEXT NOT NULL DEFAULT '{}',
+    analysis TEXT,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_essay_events_answer ON essay_events(seq, question, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_essay_events_type ON essay_events(type, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_essay_events_thread ON essay_events(threadId);
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -579,6 +598,59 @@ const upsertDraftStmt = db.prepare(`
 
 export function saveApplicationDraft(seq: string, draftJson: string, model: string): void {
   upsertDraftStmt.run({ seq, draftJson, model, generatedAt: Date.now() });
+}
+
+export function listApplicationDraftRows(): ApplicationDraftRow[] {
+  return db.prepare(`SELECT * FROM application_drafts`).all() as ApplicationDraftRow[];
+}
+
+export interface EssayEventRow {
+  id: string;
+  seq: string;
+  question: string;
+  type: string;
+  actor: string;
+  threadId: string | null;
+  textBefore: string | null;
+  textAfter: string | null;
+  detail: string;
+  analysis: string | null;
+  createdAt: number;
+}
+
+const insertEssayEventStmt = db.prepare(`
+  INSERT INTO essay_events (id, seq, question, type, actor, threadId, textBefore, textAfter, detail, analysis, createdAt)
+  VALUES (@id, @seq, @question, @type, @actor, @threadId, @textBefore, @textAfter, @detail, @analysis, @createdAt)
+`);
+const insertEssayEventsTx = db.transaction((rows: EssayEventRow[]) => { for (const row of rows) insertEssayEventStmt.run(row); });
+
+export function insertEssayEvents(rows: EssayEventRow[]): void {
+  if (rows.length) insertEssayEventsTx(rows);
+}
+
+export function hasEssayEvents(seq: string, question: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM essay_events WHERE seq = ? AND question = ? LIMIT 1`).get(seq, question);
+}
+
+export interface EssayEventFilter { seq?: string; question?: string; threadId?: string; types?: string[]; since?: number; until?: number; limit?: number }
+
+// 시간순(오래된 것부터). limit이 있으면 조건에 맞는 가장 최근 limit개를 시간순으로 돌려준다.
+export function listEssayEventRows(filter: EssayEventFilter = {}): EssayEventRow[] {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (filter.seq !== undefined) { where.push("seq = ?"); params.push(filter.seq); }
+  if (filter.question !== undefined) { where.push("question = ?"); params.push(filter.question); }
+  if (filter.threadId !== undefined) { where.push("threadId = ?"); params.push(filter.threadId); }
+  if (filter.types?.length) { where.push(`type IN (${filter.types.map(() => "?").join(", ")})`); params.push(...filter.types); }
+  if (filter.since !== undefined) { where.push("createdAt >= ?"); params.push(filter.since); }
+  if (filter.until !== undefined) { where.push("createdAt <= ?"); params.push(filter.until); }
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const columns = "id, seq, question, type, actor, threadId, textBefore, textAfter, detail, analysis, createdAt";
+  const sql = filter.limit
+    ? `SELECT ${columns} FROM (SELECT rowid AS r, * FROM essay_events ${clause} ORDER BY createdAt DESC, r DESC LIMIT ?) ORDER BY createdAt, r`
+    : `SELECT ${columns} FROM essay_events ${clause} ORDER BY createdAt, rowid`;
+  if (filter.limit) params.push(filter.limit);
+  return db.prepare(sql).all(...params) as EssayEventRow[];
 }
 
 export interface ResumeTailoringRow {
