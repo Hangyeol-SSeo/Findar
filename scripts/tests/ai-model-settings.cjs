@@ -14,7 +14,7 @@ const gatewayCalls = [];
 const originalFetch = global.fetch;
 global.fetch = async (url, options) => {
   gatewayCalls.push({ url, options, body: JSON.parse(options.body) });
-  return Response.json({ content: [{ type: 'text', text: '{}' }], stop_reason: 'end_turn' });
+  return Response.json({ choices: [{ message: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }] });
 };
 
 function load(relative) {
@@ -104,8 +104,8 @@ function load(relative) {
   assert.equal(calls.at(-1).env, undefined);
   await matchJob(profile, job);
   assert.equal(calls.length, 1, 'FreeRide must bypass the Claude Agent SDK');
-  assert.equal(gatewayCalls.at(-1).body.model, AI_MODEL_IDS.FREERIDE_CODING);
-  assert.equal(gatewayCalls.at(-1).url, process.env.FREERIDE_BASE_URL + '/v1/messages');
+  assert.equal(gatewayCalls.at(-1).body.model, 'auto');
+  assert.equal(gatewayCalls.at(-1).url, process.env.FREERIDE_BASE_URL + '/v1/chat/completions');
 
   fs.writeFileSync(file, '{broken');
   assert.equal(readAIModelSettings().settings.matching, AI_MODEL_IDS.FREERIDE_CODING);

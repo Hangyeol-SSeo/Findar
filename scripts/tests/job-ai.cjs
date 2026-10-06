@@ -49,17 +49,17 @@ function load(relative) {
 }
 
 function gatewayResponse(text) {
-  return Response.json({ content: [{ type: 'text', text }], stop_reason: 'end_turn' });
+  return Response.json({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
 }
 
 function successfulGateway() {
   global.fetch = async (url, options) => {
     const body = JSON.parse(options.body);
-    // The installed gateway accepts only user/assistant in messages. No SDK system messages or tools.
-    assert.equal(url, 'http://127.0.0.1:11343/v1/messages');
+    // OpenAI-format route (the gateway's /v1/messages forces model=auto). No SDK system messages or tools.
+    assert.equal(url, 'http://127.0.0.1:11343/v1/chat/completions');
     assert.deepEqual(Object.keys(body).sort(), ['max_tokens', 'messages', 'model', 'stream']);
     assert.equal(body.stream, false);
-    assert.equal(body.model, 'freeride/coding');
+    assert.equal(body.model, process.env.FREERIDE_MODEL ? process.env.FREERIDE_MODEL : 'auto', 'presets map to auto; a pinned model is sent as-is');
     assert.equal(body.messages.length, 1);
     assert.equal(body.messages[0].role, 'user');
     assert.equal(typeof body.messages[0].content, 'string');
@@ -119,11 +119,11 @@ function successfulGateway() {
   } finally { console.error = oldError; }
   global.fetch = async () => new Response('not JSON');
   await assert.rejects(queryJobAI('summarization', 'fixture'), /응답 형식/);
-  for (const body of [null, {}, { content: [{ type: 'tool_use' }] }]) {
+  for (const body of [null, {}, { choices: [] }, { choices: [{ message: { content: null, tool_calls: [] }, finish_reason: 'tool_calls' }] }]) {
     global.fetch = async () => Response.json(body);
     await assert.rejects(queryJobAI('summarization', 'fixture'), /결과를 반환하지/);
   }
-  global.fetch = async () => Response.json({ content: [{ type: 'text', text: 'partial' }], stop_reason: 'max_tokens' });
+  global.fetch = async () => Response.json({ choices: [{ message: { content: 'partial' }, finish_reason: 'length' }] });
   await assert.rejects(queryJobAI('summarization', 'fixture'), /길이 제한/);
   global.fetch = async () => { throw new TypeError('fetch failed'); };
   await assert.rejects(queryJobAI('summarization', 'fixture'), /서버에 연결/);
@@ -139,7 +139,14 @@ function successfulGateway() {
   successfulGateway();
   await queryJobAI('matching', 'fixture');
   assert.equal(nativeCalls.length, 1);
-  console.log('PASS gateway request compatibility, single/batch summary and matching, refresh SSE success/error, failure handling, live model selection, and native Claude routing');
+
+  // A specific free model in FREERIDE_MODEL is pinned on the gateway request instead of auto.
+  process.env.FREERIDE_MODEL = 'apodex/apodex-1.1-mini:free';
+  writeAIModelSettings({ ...readAIModelSettings().settings, summarization: process.env.FREERIDE_MODEL });
+  await queryJobAI('summarization', 'fixture');
+  assert.equal(calls.at(-1).model, 'apodex/apodex-1.1-mini:free');
+  delete process.env.FREERIDE_MODEL;
+  console.log('PASS gateway request compatibility, pinned FreeRide model, single/batch summary and matching, refresh SSE success/error, failure handling, live model selection, and native Claude routing');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   global.fetch = originalFetch;
   AbortSignal.timeout = originalTimeout;
