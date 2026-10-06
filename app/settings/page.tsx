@@ -5,6 +5,7 @@ import Link from "next/link";
 import ApplicantProfileForm from "@/components/ApplicantProfileForm";
 import NarrativeProfileForm from "@/components/NarrativeProfileForm";
 import ResumeUploadForm from "@/components/ResumeUploadForm";
+import EssaySourceUploadForm from "@/components/EssaySourceUploadForm";
 import AIModelSettingsForm from "@/components/AIModelSettingsForm";
 import Toast, { useToast } from "@/components/Toast";
 
@@ -12,7 +13,7 @@ export default function SettingsPage() {
   const [careerGoals, setCareerGoals] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"resume" | "matching" | "applicant" | "narrative" | "models">("resume");
+  const [tab, setTab] = useState<"resume" | "essays" | "matching" | "applicant" | "narrative" | "models">("resume");
   const { message: toastMessage, showToast } = useToast();
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold tracking-tight mt-3 mb-6">설정</h1>
 
       <div className="flex gap-1 overflow-x-auto border-b border-gray-100 mb-6">
-        {(["resume", "matching", "applicant", "narrative", "models"] as const).map((t) => (
+        {(["resume", "essays", "matching", "applicant", "narrative", "models"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -64,7 +65,7 @@ export default function SettingsPage() {
                 : "border-transparent text-gray-400 hover:text-gray-600"
             }`}
           >
-            {t === "resume" ? "이력서" : t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : t === "narrative" ? "가치관과 서사" : "AI 모델"}
+            {t === "resume" ? "이력서" : t === "essays" ? "과거 자소서·면접" : t === "matching" ? "매칭 설정" : t === "applicant" ? "지원 정보" : t === "narrative" ? "가치관과 서사" : "AI 모델"}
           </button>
         ))}
       </div>
@@ -76,6 +77,12 @@ export default function SettingsPage() {
           이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
         </p>
         <ResumeUploadForm showToast={showToast} />
+      </div>
+      <div hidden={tab !== "essays"}>
+        <p className="text-gray-500 mb-4">
+          예전에 쓴 자기소개서와 면접 대본을 올리면 문항·답변을 원문 그대로 정리해 두고, 자기소개서를 쓸 때 실제 경험과 표현의 참고 자료로 씁니다.
+        </p>
+        <EssaySourceUploadForm showToast={showToast} />
       </div>
       <div hidden={tab !== "matching"}>
         <p className="text-gray-500 mb-6">

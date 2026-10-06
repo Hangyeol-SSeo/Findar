@@ -95,7 +95,12 @@ export async function collectContext(seq: string, request: EssayRequest) {
   applicant.activities.forEach((a, i) => add(`profile.activity.${i}`, { role: a.role, detail: a.detail }));
   applicant.awards.forEach((a, i) => add(`profile.award.${i}`, { detail: a.detail, date: a.date }));
   [...bank.entries].sort((a, b) => relevance(b.question + b.answer) - relevance(a.question + a.answer) || b.createdAt - a.createdAt)
-    .slice(0, 8).forEach((e) => add(`past.${e.id}`, { question: e.question, answer: e.answer }));
+    .slice(0, 8).forEach((e) => add(`past.${e.id}`, {
+      // 면접 답변은 말로 한 내용이라 문체를 그대로 옮기지 말고 경험·사실의 근거로만 보게 종류를 밝힌다.
+      kind: e.kind === "interview" ? "과거 면접 답변" : e.source === "saved" ? "Findar에서 확정한 답변" : "과거 자기소개서",
+      ...(e.company ? { company: e.company } : {}), ...(e.context ? { context: e.context } : {}),
+      question: e.question, answer: e.answer,
+    }));
   if (request.guidance) add("user.current", request.guidance);
   const sections = getCompanySections(normalizeCompanyName(job.company)).filter((s) => s.status !== "failed" && s.content);
   sections.forEach((s) => {
