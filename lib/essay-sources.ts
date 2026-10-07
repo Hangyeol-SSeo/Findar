@@ -68,6 +68,17 @@ function setMeta(kind: EssaySourceKind, name: string, meta: EssaySourceMeta | nu
   writeMetaStore(store);
 }
 
+// 이미 올린 파일의 회사·직무를 나중에 적거나 고친다. 둘 다 비우면 기록을 지운다.
+export function updateEssaySourceMeta(kind: EssaySourceKind, name: string, meta: EssaySourceMeta | null): EssaySourceFile {
+  const target = listEssaySources(kind).find((f) => f.name === name);
+  if (!target) throw new Error("파일을 찾을 수 없습니다.");
+  const store = readMetaStore();
+  if (meta) store[essaySourceKey(target)] = meta;
+  else delete store[essaySourceKey(target)];
+  writeMetaStore(store);
+  return target;
+}
+
 function migrateLegacyCoverLetters(): void {
   if (!existsSync(LEGACY_COVER_LETTER_DIR)) return;
   try {

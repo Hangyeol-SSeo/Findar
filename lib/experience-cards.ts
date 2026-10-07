@@ -114,6 +114,18 @@ export function profileSources(items: ResumeItem[]): CardSource[] {
   }));
 }
 
+// 카드 출처는 모델 출력이 아니라 근거 구절이 나온 자료에서 코드로 옮긴다.
+function originsOf(evidence: CardEvidence[], byId: Map<string, CardSource>): CardOrigin[] {
+  const origins = new Map<string, CardOrigin>();
+  for (const e of evidence) {
+    const entry = byId.get(e.entryId);
+    if (!entry) continue;
+    const origin = { company: entry.company, context: entry.context, question: entry.question.slice(0, 200), kind: e.kind };
+    origins.set(JSON.stringify([origin.company, origin.context, origin.question, origin.kind]), origin);
+  }
+  return [...origins.values()];
+}
+
 export function validateCards(value: unknown, sources: CardSource[]): { cards: ExperienceCard[]; rejected: number } {
   const byId = new Map(sources.map((e) => [e.id, e]));
   const raw: unknown[] = Array.isArray((value as { cards?: unknown })?.cards) ? (value as { cards: unknown[] }).cards : [];
@@ -143,16 +155,10 @@ export function validateCards(value: unknown, sources: CardSource[]): { cards: E
     const precision = Object.fromEntries(Object.entries((c.precision ?? {}) as Record<string, unknown>)
       .filter(([k, v]) => k.trim() && ["exact", "approx", "unknown"].includes(String(v))).slice(0, 20)
       .map(([k, v]) => [k.trim().slice(0, 60), v as Precision]));
-    const origins = new Map<string, CardOrigin>();
-    for (const e of evidence) {
-      const entry = byId.get(e.entryId)!;
-      const origin = { company: entry.company, context: entry.context, question: entry.question.slice(0, 200), kind: e.kind };
-      origins.set(JSON.stringify([origin.company, origin.context, origin.question, origin.kind]), origin);
-    }
     cards.push({
       id: `EXP-${String(cards.length + 1).padStart(2, "0")}`, event_id: eventIds.get(rawEvent)!,
       period: str(c.period, 60) || "불명", context: str(c.context), ...lists, evidence, precision,
-      sensitive: c.sensitive === true, user_confirmed: false, approval: null, droppedItems, origins: [...origins.values()],
+      sensitive: c.sensitive === true, user_confirmed: false, approval: null, droppedItems, origins: originsOf(evidence, byId),
     });
   }
   return { cards, rejected };
@@ -235,12 +241,36 @@ export async function ensureExperienceCards(): Promise<CardStore> {
   return state.findarCardRun;
 }
 
+// 동기 호출용: 캐시된 이력서 항목 목록으로 원료를 모은다.
+function cachedSources(): CardSource[] {
+  return [...essaySources(getCachedEssayBank().entries), ...profileSources(profileItems(getCachedResumeInventory()?.items ?? null))];
+}
+
+// 과거 자료의 회사·직무만 고쳤을 때: 카드가 그 직전 원료로 만든 최신 상태였다면, 다시 만들지 않고(AI 호출 없음)
+// 카드 출처만 새 회사·배경으로 바꾼다. 확인 해시는 출처를 포함하지 않으므로 확인은 그대로 유지된다.
+// 원료의 다른 부분까지 바뀐 상태였다면 그대로 두고, "카드 다시 만들기"가 새 값으로 만든다.
+export function syncCardOrigins<T>(change: () => T): T {
+  if (state.findarCardRun) throw new Error("경험 카드를 정리하는 중에는 고칠 수 없습니다. 정리가 끝난 뒤 다시 시도해주세요.");
+  const model = getAIModelId("essayBank");
+  const skill = loadVendorSkills().cards;
+  const wasFresh = readStore().sourcesHash === hashSources(cachedSources(), model, skill);
+  const result = change();
+  if (!wasFresh) return result;
+  const sources = cachedSources();
+  const byId = new Map(sources.map((e) => [e.id, e]));
+  updateStore((s) => {
+    s.cards = s.cards.map((card) => ({ ...card, origins: originsOf(card.evidence, byId) }));
+    s.sourcesHash = hashSources(sources, model, skill);
+  });
+  return result;
+}
+
 export function getExperienceCardStatus() {
   const store = readStore();
   const inventory = getCachedResumeInventory();
   // 이력서는 있는데 항목 목록이 아직 없으면 카드를 만들어야 이력서가 들어간다.
   const resumePending = listResumePdfs().length > 0 && !inventory;
-  const sources = [...essaySources(getCachedEssayBank().entries), ...profileSources(profileItems(inventory?.items ?? null))];
+  const sources = cachedSources();
   const stale = resumePending || !store.coversProfile || store.sourcesHash !== hashSources(sources, getAIModelId("essayBank"), loadVendorSkills().cards);
   return {
     cards: store.cards, generatedAt: store.generatedAt || null, error: store.error,
