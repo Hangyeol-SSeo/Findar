@@ -75,12 +75,30 @@ function jobTexts(text: string): { anchors: string[]; names: string[] } {
 const MIN_ANCHOR_CHARS = 5;
 const compact = (text: string) => text.replace(/\s+/g, " ").trim();
 
+// 근거 고정에 쓰는 원문: 문항, 공고의 업무·자격요건, 사용자 요청. 공고의 이름 문자열은 "이름의 일부일 뿐인 구절"을 거르는 데 쓴다.
+export interface AnchorTexts { question: string[]; job: string[]; request: string[]; jobNames: string[] }
+export function anchorTextsFrom(sources: EssaySource[], question: string, extraRequests: string[] = []): AnchorTexts {
+  const job = sources.filter((s) => s.id === "job").map((s) => jobTexts(s.text));
+  return {
+    question: [question],
+    job: job.flatMap((j) => j.anchors),
+    request: [...sources.filter((s) => s.id.startsWith("user.current")).map((s) => s.text), ...extraRequests],
+    jobNames: job.flatMap((j) => j.names).map((n) => n.replace(/\s/g, "")).filter(Boolean),
+  };
+}
+// anchor가 원문 구절과 그대로 일치하는지(5자 이상, 회사명·공고 제목·직무명의 일부가 아님). 소재 배치와 고쳐쓰기가 함께 쓴다.
+export function isValidAnchor(anchor: unknown, texts: AnchorTexts): anchor is MaterialAnchor {
+  const a = anchor as Partial<MaterialAnchor> | undefined;
+  const pool = a?.source === "question" || a?.source === "job" || a?.source === "request" ? texts[a.source] : undefined;
+  const quote = typeof a?.quote === "string" ? a.quote : "";
+  const bare = quote.replace(/\s/g, "");
+  return !!pool && bare.length >= MIN_ANCHOR_CHARS && !texts.jobNames.some((n) => n.includes(bare)) && pool.some((t) => compact(t).includes(compact(quote)));
+}
+export const ANCHOR_RULE = `anchor.quote는 문항(question)·공고의 업무·자격요건(job)·사용자 요청(request) 중 하나에서 ${MIN_ANCHOR_CHARS}자 이상의 원문 구절을 그대로 복사해야 합니다(회사명·직무명만으로는 안 됩니다). 원문에 없는 요구에 경험을 연결하지 마세요.`;
+
 export function applyMaterials(value: Record<string, unknown>, plans: EssayPlan[], sources: EssaySource[]): EssayPlan[] {
   if (!Array.isArray(value.materials) || value.materials.length !== plans.length) throw new Error("문항별 소재 배치 수가 일치하지 않습니다.");
-  const job = sources.filter((s) => s.id === "job").map((s) => jobTexts(s.text));
-  const jobAnchors = job.flatMap((j) => j.anchors);
-  const jobNames = job.flatMap((j) => j.names).map((n) => n.replace(/\s/g, "")).filter(Boolean);
-  const requestTexts = sources.filter((s) => s.id.startsWith("user.current")).map((s) => s.text);
+
   return plans.map((plan) => {
     const rows = (value.materials as Record<string, unknown>[]).filter((v) => v && v.question === plan.question);
     if (rows.length !== 1 || !Array.isArray(rows[0].selectedMaterials)) throw new Error("문항별 소재 배치가 누락되거나 중복되었습니다.");
@@ -88,10 +106,7 @@ export function applyMaterials(value: Record<string, unknown>, plans: EssayPlan[
       const source = sources.find((s) => s.id === m?.sourceId && s.id !== "job" && !s.id.startsWith("company."));
       if (!source || !source.text.includes(field(m.quote))) throw new Error("선정한 경험이 저장 자료와 일치하지 않습니다.");
       const anchor = m.anchor;
-      const anchorTexts = { question: [plan.question], job: jobAnchors, request: requestTexts }[anchor?.source as MaterialAnchor["source"]];
-      const bare = typeof anchor?.quote === "string" ? anchor.quote.replace(/\s/g, "") : "";
-      if (!anchor || !anchorTexts || bare.length < MIN_ANCHOR_CHARS || jobNames.some((n) => n.includes(bare)) || !anchorTexts.some((t) => compact(t).includes(compact(field(anchor.quote)))))
-        throw new Error(`문항 “${plan.question}”의 소재 ${m.sourceId}: anchor.quote는 문항(question)·공고의 업무·자격요건(job)·사용자 요청(request) 중 하나에서 ${MIN_ANCHOR_CHARS}자 이상의 원문 구절을 그대로 복사해야 합니다(회사명·직무명만으로는 안 됩니다). 원문에 없는 요구에 경험을 연결하지 마세요.`);
+      if (!isValidAnchor(anchor, anchorTextsFrom(sources, plan.question))) throw new Error(`문항 “${plan.question}”의 소재 ${m.sourceId}: ${ANCHOR_RULE}`);
       if (m.fit !== "direct" && m.fit !== "transferable") throw new Error("소재의 fit은 direct 또는 transferable이어야 합니다. 어느 쪽으로도 원문 구절과 닿지 않으면 고르지 마세요.");
       return { sourceId: m.sourceId, quote: m.quote, reason: field(m.reason), anchor: { source: anchor.source, quote: anchor.quote }, fit: m.fit };
     });

@@ -11,8 +11,8 @@ function compile(file, req) {
 }
 const normalize = compile('lib/company-normalize.ts', require);
 const contract = compile('lib/essay-contract.ts', require);
-const harness = compile('lib/application-harness.ts', (id) => ({ './company-normalize': normalize }[id] ?? require(id)));
 const plan = compile('lib/essay-plan.ts', require);
+const harness = compile('lib/application-harness.ts', (id) => ({ './company-normalize': normalize, './essay-contract': contract, './essay-plan': plan }[id] ?? require(id)));
 const cards = compile('lib/experience-cards.ts', (id) => ({
   './essay-contract': contract, './vendor-skills': compile('lib/vendor-skills.ts', require),
   './ai-model-settings': { getAIModelId: () => 'test-model' },

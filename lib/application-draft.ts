@@ -13,7 +13,7 @@ import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import { logEssayEvent } from "./essay-log";
 import { cardSourceContent, describeOrigins, getConfirmedCards } from "./experience-cards";
-import { assertEvidenceContained, ContextAuditError, contextAuditPrompt, contextIssueNotes, otherCompanyNames, parseContextAudit, type ContextIssue } from "./application-harness";
+import { assertEvidenceContained, CONTEXT_AUDIT_UNAVAILABLE, ContextAuditError, contextIssueNotes, jobSourceText, otherCompanyNames, runContextAudit } from "./application-harness";
 import { duplicateSentences, imNotAiFindings, jasoseoStyleFindings } from "./vendor-checks";
 import { loadVendorSkills } from "./vendor-skills";
 export type { EssayAnswer } from "./essay-contract";
@@ -152,7 +152,11 @@ async function askModelOnce(prompt: string, signal: AbortSignal | undefined, mod
       abortController: controller,
     } })) {
       if (message.type === "result") {
-        if (message.subtype !== "success" || message.is_error) throw new Error("작성 모델 호출이 실패했습니다. 잠시 후 다시 시도해주세요.");
+        if (message.subtype !== "success" || message.is_error) {
+          // 실패 종류(최대 턴·실행 오류 등)를 남겨야 일시적 오류와 프롬프트 문제를 구분할 수 있다. 사용자 메시지는 그대로 둔다.
+          console.error("[application-draft] 모델 결과 실패:", JSON.stringify({ model, subtype: message.subtype, is_error: message.is_error, turns: message.num_turns }));
+          throw new Error("작성 모델 호출이 실패했습니다. 잠시 후 다시 시도해주세요.");
+        }
         return message.result;
       }
     }
@@ -382,17 +386,12 @@ issues는 원문과 모순되는 사실, 근거 없는 구체적 사실 단정, 
     // 하네스(독립 검증): 작성자의 구상·이유를 받지 않은 별도 호출이 답변을 공고와만 대조해 다른 회사 맥락·다른 직무 요건·억지 연결을
     // 찾는다. 지적은 답변의 원문 문장이어야 인정한다. 처음 지적되면 수정 호출로 넘기고, 수정 뒤에도 남으면 검토 메모로 남긴다.
     if (answer.status === "draft") {
-      let issues: ContextIssue[] = [];
-      try {
-        issues = parseContextAudit(parseModelJson(await askModel(contextAuditPrompt({
-          company, role: batch.role, jobText: sources.find((s) => s.id === "job")?.text ?? "", question: request.question, answer: answer.answer,
-          otherCompanies, materialOrigins: [...new Set(answer.evidence.flatMap((e) => materialOrigins.get(e.sourceId) ?? []))],
-        }), signal, batch.model)), answer.answer);
-      } catch (error) {
-        console.error("[application-draft] 직무·회사 맥락 검증 실패:", error);
-        answer.reviewNotes = [...answer.reviewNotes, "직무·회사 맥락 검증을 실행하지 못했습니다. 다른 회사·직무 내용이 섞이지 않았는지 직접 확인해주세요."];
-      }
-      if (issues.length) throw new ContextAuditError(issues, answer);
+      const issues = await runContextAudit({
+        company, role: batch.role, jobText: jobSourceText(sources), question: request.question, answer: answer.answer,
+        otherCompanies, materialOrigins: [...new Set(answer.evidence.flatMap((e) => materialOrigins.get(e.sourceId) ?? []))],
+      }, (prompt) => askModel(prompt, signal, batch.model));
+      if (issues === null) answer.reviewNotes = [...answer.reviewNotes, CONTEXT_AUDIT_UNAVAILABLE];
+      else if (issues.length) throw new ContextAuditError(issues, answer);
     }
     return attach(answer);
   };

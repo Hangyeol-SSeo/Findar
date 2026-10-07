@@ -1,5 +1,6 @@
 import { normalizeCompanyName } from "./company-normalize";
-import type { EssayEvidence } from "./essay-contract";
+import { parseModelJson, type EssayEvidence } from "./essay-contract";
+import { ANCHOR_RULE, isValidAnchor, type AnchorTexts, type MaterialAnchor } from "./essay-plan";
 
 // 자기소개서 작성의 "맥락 오염"을 코드로 막는 관문들. 다른 회사에 낸 지원서의 내용이 섞이거나, 다른 직무의 경험을
 // 지원 직무에 억지로 끌어오는 것은 프롬프트 지시만으로는 막기 어렵다(모델은 그럴듯한 연결 이유를 만든다).
@@ -39,6 +40,23 @@ export function assertEvidenceContained(evidence: EssayEvidence[], selectedIds: 
   const outside = [...new Set(evidence.map((e) => e.sourceId).filter((id) => isExperienceSource(id) && !allowed.has(id)))];
   if (outside.length)
     throw new Error(`소재 배치에서 고르지 않은 경험(${outside.join(", ")})을 근거로 썼습니다. 고른 소재(${selectedIds.join(", ") || "없음"})만 쓰고, 다른 경험이 꼭 필요하면 쓰지 말고 reviewNotes에 남기세요.`);
+}
+
+// 고쳐쓰기의 봉쇄: 이전 답변에 없던 경험을 새로 근거로 쓰려면 그 경험이 답하는 수정 요청·문항·공고 업무의 원문 구절(anchor)을
+// 대야 한다. 요청으로 경험을 더하는 것은 허용하되, 요청과 상관없이 다른 경험을 끌어오는 것은 막는다.
+export interface AddedMaterial { sourceId: string; anchor: MaterialAnchor }
+export function assertRevisionMaterials(evidence: EssayEvidence[], priorIds: string[], added: unknown, texts: AnchorTexts): AddedMaterial[] {
+  const prior = new Set(priorIds);
+  const fresh = [...new Set(evidence.map((e) => e.sourceId).filter((id) => isExperienceSource(id) && !prior.has(id)))];
+  const declared = (Array.isArray(added) ? added : []) as Partial<AddedMaterial>[];
+  const result: AddedMaterial[] = [];
+  for (const id of fresh) {
+    const entry = declared.find((a) => a?.sourceId === id);
+    if (!entry || !isValidAnchor(entry.anchor, texts))
+      throw new Error(`이전 답변에 없던 경험 ${id}를 근거로 썼습니다. 수정 요청과 상관없는 경험은 빼고, 요청이 그 경험을 필요로 하면 addedMaterials에 {"sourceId":"${id}","anchor":{"source":"request|question|job","quote":"..."}}로 이유를 대세요. ${ANCHOR_RULE}`);
+    result.push({ sourceId: id, anchor: { source: entry.anchor.source, quote: entry.anchor.quote } });
+  }
+  return result;
 }
 
 export const CONTEXT_ISSUE_TYPES = ["other_company", "other_role", "stretched_link"] as const;
@@ -101,4 +119,20 @@ export function parseContextAudit(value: Record<string, unknown>, answer: string
     seen.add(sentence);
     return [{ sentence, type, reason }];
   });
+}
+
+// 독립 검증 호출. 작성 단계의 함수(askModel)를 받아 순환 의존을 피한다. 검증 자체가 실패하면 null — 호출한 쪽이 사람 확인 메모를 남긴다.
+export async function runContextAudit(input: ContextAuditInput, ask: (prompt: string) => Promise<string>): Promise<ContextIssue[] | null> {
+  try {
+    return parseContextAudit(parseModelJson(await ask(contextAuditPrompt(input))), input.answer);
+  } catch (error) {
+    console.error("[application-harness] 직무·회사 맥락 검증 실패:", error);
+    return null;
+  }
+}
+
+export const CONTEXT_AUDIT_UNAVAILABLE = "직무·회사 맥락 검증을 실행하지 못했습니다. 다른 회사·직무 내용이 섞이지 않았는지 직접 확인해주세요.";
+
+export function jobSourceText(sources: { id: string; text: string }[]): string {
+  return sources.find((s) => s.id === "job")?.text ?? "";
 }
