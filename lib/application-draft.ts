@@ -11,6 +11,9 @@ import { parseModelJson, validateEssay, withVersion, type EssayAnswer, type Essa
 import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
+import { logEssayEvent } from "./essay-log";
+import { cardSourceContent, getConfirmedCards } from "./experience-cards";
+import { duplicateSentences, jasoseoStyleFindings } from "./vendor-checks";
 export type { EssayAnswer } from "./essay-contract";
 
 class OpinionReviewError extends Error {
@@ -93,8 +96,15 @@ export async function collectContext(seq: string, request: EssayRequest) {
   applicant.workExperiences.forEach((w, i) => add(`profile.work.${i}`, { role: w.position, duties: w.duties, period: [w.startDate, w.endDate] }));
   applicant.activities.forEach((a, i) => add(`profile.activity.${i}`, { role: a.role, detail: a.detail }));
   applicant.awards.forEach((a, i) => add(`profile.award.${i}`, { detail: a.detail, date: a.date }));
-  [...bank.entries].sort((a, b) => relevance(b.question + b.answer) - relevance(a.question + a.answer) || b.createdAt - a.createdAt)
-    .slice(0, 8).forEach((e) => add(`past.${e.id}`, { question: e.question, answer: e.answer }));
+  // 올린 과거 자소서·면접 대본은 원문 그대로가 아니라, 사용자가 확인한 경험 카드(lib/experience-cards.ts)로만 쓴다.
+  // 확인하지 않은 카드와 카드로 정리되기 전의 원문은 쓰지 않는다(cover-letter-team의 사용자 게이트).
+  getConfirmedCards().forEach((card) => add(`card.${card.id}`, cardSourceContent(card)));
+  // Findar에서 다듬어 "자료로 저장"한 답변은 사용자가 확정한 글이라 그대로 참고한다.
+  [...bank.entries].filter((e) => e.source === "saved")
+    .sort((a, b) => relevance(b.question + b.answer) - relevance(a.question + a.answer) || b.createdAt - a.createdAt)
+    .slice(0, 8).forEach((e) => add(`past.${e.id}`, {
+      kind: "Findar에서 확정한 답변", ...(e.company ? { company: e.company } : {}), question: e.question, answer: e.answer,
+    }));
   if (request.guidance) add("user.current", request.guidance);
   const sections = getCompanySections(normalizeCompanyName(job.company)).filter((s) => s.status !== "failed" && s.content);
   sections.forEach((s) => {
@@ -167,6 +177,23 @@ const OUTPUT = `순수 JSON 객체만 반환한다:
 "missingInfo":["부족한 핵심 사실을 확인할 질문"], "reviewNotes":["수치의 조건 또는 사용자가 확인할 구체적 사항"]}
 근거 인용은 JSON 직렬화된 text에서 가져오며 문구를 고치지 않는다. 본문 속 모든 수치는 evidence.quote 안에서도 확인 가능해야 한다.`;
 
+// 편집 단계가 남긴 내용 완성도 판정(cover-letter-team content-quality의 STRONG/ADEQUATE/THIN/NOT_READY)을 검토 메모로 옮긴다.
+// 원본 스킬에서는 THIN/NOT_READY가 최종 제출을 막지만, Findar의 답변은 초안이라 막지 않고 눈에 띄게 알린다.
+const CONTENT_RATINGS: Record<string, string> = {
+  STRONG: "STRONG(핵심 요구를 충분히 설명)", ADEQUATE: "ADEQUATE(기본 완성, 더 깊은 디테일은 보강 가능)",
+  THIN: "THIN(요소는 있으나 실제 능력·선택을 평가할 정보가 부족)", NOT_READY: "NOT_READY(문항 이탈 또는 필수 내용 미해결)",
+};
+function contentReviewNotes(text: string): string[] {
+  try {
+    const review = parseModelJson(text).contentReview as { rating?: unknown; assessment?: unknown; gaps?: unknown } | undefined;
+    const label = CONTENT_RATINGS[String(review?.rating)];
+    if (!review || !label) return [];
+    const gaps = Array.isArray(review.gaps) ? review.gaps.filter((g): g is string => typeof g === "string" && !!g.trim()) : [];
+    return [`내용 완성도: ${label}${typeof review.assessment === "string" && review.assessment.trim() ? ` — ${review.assessment.trim()}` : ""}`,
+      ...gaps.map((g) => `보강하면 좋은 정보: ${g}`)];
+  } catch { return []; }
+}
+
 // 구상의 회사 근거가 답변 evidence에 인용됐는지 본다. 둘 다 원문 대조를 통과한 연속 발췌라서,
 // 모델이 실제로 쓴 구절만 짧게 인용해도(구상 인용의 일부) 같은 사실을 인용한 것으로 인정한다.
 // 단, 너무 짧은 단편은 우연히 겹칠 수 있어 제외한다.
@@ -207,6 +234,23 @@ async function structuredStep(prompt: string, validate: (value: Record<string, u
   }
 }
 
+// 같은 사건(event_id)의 경험 카드를 여러 문항의 소재로 고르면 알린다(cover-letter-team: 문항 간 소재 중복은 사건 기준).
+// 다른 국면을 보여주는 재사용일 수 있어 막지 않고, 작성 결과의 검토 메모로 남긴다.
+function withEventReuseNotes(plans: EssayPlan[], sources: EssaySource[]): EssayPlan[] {
+  const eventOf = new Map<string, string>();
+  for (const s of sources.filter((x) => x.id.startsWith("card."))) {
+    try { eventOf.set(s.id, String(JSON.parse(s.text).event_id ?? "")); } catch { /* 카드 형식이 아니면 건너뜀 */ }
+  }
+  const usedBy = new Map<string, string[]>();
+  plans.forEach((p) => new Set(p.selectedMaterials.map((m) => eventOf.get(m.sourceId)).filter(Boolean) as string[])
+    .forEach((ev) => usedBy.set(ev, [...(usedBy.get(ev) ?? []), p.question])));
+  return plans.map((p) => {
+    const notes = [...usedBy].filter(([, qs]) => qs.length > 1 && qs.includes(p.question))
+      .map(([ev, qs]) => `소재 중복 확인: 같은 경험(${ev})을 다른 문항(${qs.filter((q) => q !== p.question).map((q) => `“${q.slice(0, 30)}”`).join(", ")})에도 썼습니다. 서로 다른 면을 보여주는지 확인해주세요.`);
+    return notes.length ? { ...p, materialNotes: notes } : p;
+  });
+}
+
 export async function prepareEssayBatch(seq: string, requests: EssayRequest[], signal?: AbortSignal): Promise<PreparedEssayBatch> {
   const selection = requireApplicationRole(seq);
   const model = getAIModelId("applicationDraft");
@@ -237,8 +281,9 @@ ${APPLICATION_ROLE_RULES}
 [문항별 추가 요청]\n${JSON.stringify(requests.map((r, i) => ({ question: r.question, guidance: r.guidance, sourceId: `user.current.${i}` })))}
 [개인 경험 자료]\n${JSON.stringify(sources.filter((s) => s.id !== "job" && !s.id.startsWith("company.")))}
 [기존 다른 답변: 사실 근거 아님]\n${JSON.stringify(contexts[0]?.otherAnswers ?? [])}
-순수 JSON만 반환하세요: {"materials":[{"question":"입력 문항 원문", "selectedMaterials":[{"sourceId":"개인 자료 id", "quote":"연속된 원문", "reason":"선정 이유와 중복 시 차별점"}], "missingInfo":["필요한 핵심 경험 질문"]}]}
-모든 문항을 함께 배치하고 각각 하나씩 반환하세요.`, (value) => applyMaterials(value, plans, sources), signal, model);
+순수 JSON만 반환하세요: {"materials":[{"question":"입력 문항 원문", "coverage":[{"requirement":"이 문항의 하위 요구 또는 구상의 소재 선정 기준", "status":"SUFFICIENT|WEAKLY_SUPPORTED|MISSING|NO_ACTUAL_EXPERIENCE|CONTRADICTORY|NOT_APPLICABLE|UNKNOWN", "sourceIds":["근거 개인 자료 id"], "rationale":"그 자료의 어느 내용이 왜 이 요구를 충족하는지(또는 왜 부족한지)"}], "selectedMaterials":[{"sourceId":"개인 자료 id", "quote":"연속된 원문", "reason":"선정 이유와 중복 시 차별점"}], "missingInfo":["필요한 핵심 경험 질문"]}]}
+모든 문항을 함께 배치하고 각각 하나씩 반환하세요. 모든 하위 요구를 coverage로 판정하고, selectedMaterials의 모든 소재는 SUFFICIENT 또는 WEAKLY_SUPPORTED 판정의 근거여야 합니다. 맞는 소재가 없으면 억지로 고르지 말고 MISSING 등으로 기록하세요. card.* 자료는 같은 event_id면 같은 사건입니다.`, (value) => applyMaterials(value, plans, sources), signal, model);
+  plans = withEventReuseNotes(plans, sources);
   // Use the same source snapshot in every answer, including experiences selected across questions.
   contexts.forEach((c) => { c.sources = sources; });
   assertApplicationRole(seq, selection.revision);
@@ -265,12 +310,19 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
     ? `\n[회사 근거 인용 규칙] 아래 회사 근거를 본문의 논거로 사용하고, 각각을 evidence에 같은 sourceId와 quote 원문 그대로(줄이거나 고치지 말고) 넣으세요.\n${JSON.stringify(plan.research.map((r) => ({ sourceId: r.sourceId, quote: r.quote })))}`
     : "";
   const plannedBackground = `${background}\n[이 문항의 구상과 선정 소재: 사실 근거가 아닌 작성 방향]\n${JSON.stringify(plan)}${researchRule}`;
-  const first = await askModel(`${plannedBackground}\n구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.`, signal, batch.model);
+  const first = await askModel(`${plannedBackground}\n구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. 소재 배치의 coverage가 WEAKLY_SUPPORTED인 요구는 근거가 뒷받침하는 범위로 주장을 줄이고, MISSING·NO_ACTUAL_EXPERIENCE인 요구를 지어낸 경험으로 채우지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.`, signal, batch.model);
   // A separate editorial pass must inspect the draft against the original evidence, not merely paraphrase it.
   // 초안의 문체 문제는 코드로 미리 찾아 편집 단계에 함께 넘긴다 — 추가 호출 없이 편집의 초점을 잡아준다.
-  const draftStyle = (() => { try { return lintEssayStyle(String(parseModelJson(first).answer ?? "")); } catch { return []; } })();
+  // Findar 점검(lintEssayStyle)과 외부 스킬 점검(jasoseo-plugin style_check.py)을 함께 넘긴다.
+  const draftStyle = (() => {
+    try {
+      const text = String(parseModelJson(first).answer ?? "");
+      return [...lintEssayStyle(text), ...jasoseoStyleFindings(text).map((n) => `jasoseo 문체 점검 ${n}`)];
+    } catch { return []; }
+  })();
   const styleBlock = draftStyle.length ? `\n[초안 자동 문체 점검: 편집하며 함께 바로잡을 것]\n${draftStyle.map((n) => `- ${n}`).join("\n")}` : "";
-  let edited = await askModel(`${plannedBackground}\n[검토할 초안]\n${first}${styleBlock}\n\n${skills.review}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 개인 경험이 여러 문단에 흩어져 있으면 한 흐름으로 모으고, 주장마다 덧붙인 확인용 경험·단서 문장은 지운다. 조건에 맞는 최종 JSON을 반환하라.`, signal, batch.model);
+  let edited = await askModel(`${plannedBackground}\n[검토할 초안]\n${first}${styleBlock}\n\n${skills.review}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 개인 경험이 여러 문단에 흩어져 있으면 한 흐름으로 모으고, 주장마다 덧붙인 확인용 경험·단서 문장은 지운다. 조건에 맞는 최종 JSON을 반환하라.
+최종 JSON에 "contentReview":{"rating":"STRONG|ADEQUATE|THIN|NOT_READY","assessment":"고친 최종 답변의 문장을 근거로 한 내용 완성도 판정 이유","gaps":["평가에 필요한데 자료에 없는 핵심 정보(사용자에게 확인할 것)"]}를 함께 넣어라. 판정 기준은 위 외부 스킬 원문의 문항별 판정이며, 작성자 입장에서 후하게 매기지 않는다.`, signal, batch.model);
   // 마지막 검증에서 evidence에 빠진 회사 근거. 다른 이유로 수정 호출을 할 때 함께 바로잡도록 알려준다.
   let missingResearch: PlanCitation[] = [];
   const validate = async (text: string) => {
@@ -280,7 +332,14 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
     missingResearch = answer.status === "draft" && plan.researchMode === "direct"
       ? plan.research.filter((r) => !citesPlannedResearch(answer.evidence, r))
       : [];
-    if (answer.status === "draft") answer.reviewNotes = [...answer.reviewNotes, ...styleReviewNotes(answer.answer)];
+    if (answer.status === "draft") {
+      answer.reviewNotes = [...answer.reviewNotes, ...styleReviewNotes(answer.answer),
+        ...jasoseoStyleFindings(answer.answer).map((n) => `문체 점검(jasoseo): ${n}`),
+        ...duplicateSentences([...otherAnswers, { question: request.question, answer: answer.answer }])
+          .filter((d) => d.questionA === request.question || d.questionB === request.question)
+          .map((d) => `문항 중복 확인: “${(d.questionA === request.question ? d.questionB : d.questionA).slice(0, 30)}” 답변과 거의 같은 문장이 있습니다 — “${(d.questionA === request.question ? d.sentenceA : d.sentenceB).slice(0, 60)}”`)];
+      answer.reviewNotes = [...answer.reviewNotes, ...contentReviewNotes(text), ...(plan.materialNotes ?? [])];
+    }
     if (missingResearch.length)
       answer.reviewNotes = [...answer.reviewNotes, ...missingResearch.map((r) =>
         `확인 필요: 구상에서 고른 회사 근거(${r.sourceId}) “${quotePreview(r.quote)}”가 답변 근거에 반영되지 않았습니다. 회사 내용이 충분히 드러나는지 확인해주세요.`)];
@@ -337,7 +396,7 @@ ${OUTPUT}` : plannedBackground;
   }
 }
 
-export function persistEssay(seq: string, generated: EssayAnswer) {
+export function persistEssay(seq: string, generated: EssayAnswer, threadId?: string) {
   if (generated.roleRevision !== undefined) assertApplicationRole(seq, generated.roleRevision);
   const existing = getCachedApplicationDraft(seq);
   // 새로 쓰기도 이전 글을 버전 기록에 남긴다. 보완 질문만 돌아온 경우(본문 없음)엔 이전 기록을 그대로 둔다.
@@ -352,5 +411,13 @@ export function persistEssay(seq: string, generated: EssayAnswer) {
     model: generatedModels.get(answer) ?? getAIModelId("applicationDraft"), generatedAt: Date.now(), revision: crypto.randomUUID(),
   };
   saveApplicationDraft(seq, JSON.stringify(draft), draft.model);
+  // 새로 쓰기는 이전 답변의 열린 첨삭 결과·수정본을 함께 대체하므로, 무엇이 사라졌는지도 남긴다.
+  logEssayEvent({ seq, question: answer.question, type: "draft_generated", threadId, textBefore: previous?.answer || null, textAfter: answer.answer || null, detail: {
+    status: answer.status, model: draft.model, guidance: answer.guidance, maxChars: answer.maxChars ?? null, intent: answer.intent,
+    missingInfo: answer.missingInfo, reviewNotes: answer.reviewNotes, evidenceSources: [...new Set(answer.evidence.map((e) => e.sourceId))],
+    ...(answer.plan?.coverage ? { coverage: answer.plan.coverage } : {}),
+    ...(previous?.pendingRevision ? { replacedPendingRevision: previous.pendingRevision.instruction } : {}),
+    ...(previous?.feedback ? { replacedFeedback: previous.feedback.suggestions.filter((x) => x.status === "pending").length } : {}),
+  } });
   return draft;
 }

@@ -14,24 +14,28 @@ export const STYLE_RULES = `[문장과 구성]
 "생각합니다", "봅니다", "판단합니다"는 핵심 주장에만 쓰고 사실과 근거는 단정형으로 쓴다. 같은 끝맺음을 연달아 반복하지 않는다.
 "값이 붙는다", "반대편에서 압력을 준다"처럼 뜻이 흐린 은유 대신 수익·비용·위험처럼 구체적인 말을 쓴다. 한 문장에는 되도록 한 가지 내용만 담는다.`;
 
-const HEDGE = /다만|물론/g;
-const OPINION_ENDING = /(?:생각합니다|봅니다|판단합니다|느낍니다)[.!?。]?$/;
+export const HEDGE = /다만|물론/g;
+export const OPINION_ENDING = /(?:생각합니다|봅니다|판단합니다|느낍니다)[.!?。]?$/;
 // "한 회사 안에"처럼 수량을 뜻하는 경우는 걸리지 않도록, 조사가 바로 붙은 익명 표현만 찾는다.
-const ANONYMIZED_SOURCE = /한 (?:증권사|기업|금융사|금융회사|은행|운용사|자산운용사)(?:의|는|은|가|에서|도)(?=\s)/g;
+export const ANONYMIZED_SOURCE = /한 (?:증권사|기업|금융사|금융회사|은행|운용사|자산운용사)(?:의|는|은|가|에서|도)(?=\s)/g;
 const LONG_SENTENCE = 110;
 
+export type StyleIssueCode = "hedge" | "opinion_ending" | "repeated_ending" | "anonymized_source" | "long_sentence";
+export interface StyleIssue { code: StyleIssueCode; note: string }
+
 // AI 호출 없이 문체 문제를 찾는다. 결과는 편집 단계 프롬프트에 넣거나(추가 호출 없음) 사용자 검토 메모로 보여준다.
-export function lintEssayStyle(text: string): string[] {
-  const notes: string[] = [];
+// code는 작성 기록(essay-log)이 수정 전후로 어떤 문제가 사라지고 생겼는지 비교하는 데 쓴다.
+export function inspectEssayStyle(text: string): StyleIssue[] {
+  const issues: StyleIssue[] = [];
   const sentences = splitSentences(text).map((s) => s.trim()).filter(Boolean);
-  if (!sentences.length) return notes;
+  if (!sentences.length) return issues;
 
   const hedges = text.match(HEDGE)?.length ?? 0;
-  if (hedges > 2) notes.push(`‘다만’·‘물론’ 같은 단서가 ${hedges}번 나옵니다. 꼭 필요한 곳만 남기면 주장이 더 분명해집니다.`);
+  if (hedges > 2) issues.push({ code: "hedge", note: `‘다만’·‘물론’ 같은 단서가 ${hedges}번 나옵니다. 꼭 필요한 곳만 남기면 주장이 더 분명해집니다.` });
 
   const opinions = sentences.filter((s) => OPINION_ENDING.test(s)).length;
   if (opinions >= 5 && opinions / sentences.length > 0.25)
-    notes.push(`‘생각합니다/봅니다/판단합니다’로 끝나는 문장이 ${opinions}개입니다. 사실과 근거는 단정형으로 쓰고 핵심 주장에만 남겨주세요.`);
+    issues.push({ code: "opinion_ending", note: `‘생각합니다/봅니다/판단합니다’로 끝나는 문장이 ${opinions}개입니다. 사실과 근거는 단정형으로 쓰고 핵심 주장에만 남겨주세요.` });
 
   // 존댓말은 거의 모두 "~습니다"로 끝나므로 마지막 어절(예: "봅니다", "있습니다")끼리 비교한다.
   const endings = sentences.map((s) => s.replace(/[.!?。！？\s]+$/, "").split(/\s+/).at(-1) ?? "");
@@ -40,16 +44,20 @@ export function lintEssayStyle(text: string): string[] {
     run = endings[i] === endings[i - 1] ? run + 1 : 1;
     if (run > longestRun) { longestRun = run; runEnding = endings[i]; }
   }
-  if (longestRun >= 3) notes.push(`‘${runEnding}’로 끝나는 문장이 ${longestRun}개 연달아 나옵니다. 끝맺음을 바꿔 리듬을 살려주세요.`);
+  if (longestRun >= 3) issues.push({ code: "repeated_ending", note: `‘${runEnding}’로 끝나는 문장이 ${longestRun}개 연달아 나옵니다. 끝맺음을 바꿔 리듬을 살려주세요.` });
 
   const anonymized = [...new Set(text.match(ANONYMIZED_SOURCE) ?? [])];
   if (anonymized.length)
-    notes.push(`‘${anonymized.join("’, ‘")}’처럼 출처를 익명으로 흐린 표현이 있습니다. 지원 회사의 사실이면 회사명을 밝히고, 아니라면 빼는 편이 자연스럽습니다.`);
+    issues.push({ code: "anonymized_source", note: `‘${anonymized.join("’, ‘")}’처럼 출처를 익명으로 흐린 표현이 있습니다. 지원 회사의 사실이면 회사명을 밝히고, 아니라면 빼는 편이 자연스럽습니다.` });
 
   const long = sentences.filter((s) => Array.from(s).length > LONG_SENTENCE).length;
-  if (long) notes.push(`${LONG_SENTENCE}자가 넘는 긴 문장이 ${long}개 있습니다. 한 문장에 한 가지 내용만 담도록 나눠주세요.`);
+  if (long) issues.push({ code: "long_sentence", note: `${LONG_SENTENCE}자가 넘는 긴 문장이 ${long}개 있습니다. 한 문장에 한 가지 내용만 담도록 나눠주세요.` });
 
-  return notes;
+  return issues;
+}
+
+export function lintEssayStyle(text: string): string[] {
+  return inspectEssayStyle(text).map((issue) => issue.note);
 }
 
 // 사용자에게 보여줄 검토 메모 형태.
