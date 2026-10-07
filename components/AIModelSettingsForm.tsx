@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { AI_FEATURES, type AIModelSettings, type AIModelSettingsResponse } from "@/lib/ai-model-types";
 
+const BULK_FEATURES = AI_FEATURES.filter(({ id }) => id !== "summarization" && id !== "matching");
+
 export default function AIModelSettingsForm({ showToast }: { showToast: (message: string) => void }) {
   const [data, setData] = useState<AIModelSettingsResponse | null>(null);
   const [settings, setSettings] = useState<AIModelSettings | null>(null);
@@ -50,9 +52,38 @@ export default function AIModelSettingsForm({ showToast }: { showToast: (message
   if (loading) return <p className="text-sm text-gray-400" role="status">모델 설정을 불러오는 중...</p>;
   if (!data || !settings) return <div role="alert" className="text-sm text-red-600">{error}<button onClick={() => void load()} className="ml-3 underline">다시 불러오기</button></div>;
 
+  const bulkOptions = data.options[BULK_FEATURES[0].id].filter((model) =>
+    BULK_FEATURES.every(({ id }) => data.options[id].some((option) => option.id === model.id)),
+  );
+  const sharedModel = settings[BULK_FEATURES[0].id];
+  const bulkModel = BULK_FEATURES.every(({ id }) => settings[id] === sharedModel)
+    && bulkOptions.some((model) => model.id === sharedModel) ? sharedModel : "";
+
   return (
     <div className="space-y-5">
       <p className="text-sm text-gray-500">저장하면 다음 생성부터 적용됩니다. 이미 생성된 결과는 각 기능에서 다시 생성할 때 변경됩니다.</p>
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <label htmlFor="ai-model-bulk" className="block text-sm font-semibold text-gray-700">모델 일괄 선택</label>
+        <p id="ai-model-bulk-description" className="text-xs text-gray-400 mt-1 mb-3">
+          공고 요약·공고 매칭을 제외한 {BULK_FEATURES.length}개 기능에 같은 모델을 선택합니다. 아래에서 기능별로 조정한 뒤 저장할 수 있습니다.
+        </p>
+        <select id="ai-model-bulk" aria-describedby="ai-model-bulk-description"
+          value={bulkModel} disabled={saving}
+          onChange={(event) => {
+            const model = event.target.value;
+            if (!model) return;
+            setSettings((current) => {
+              if (!current) return current;
+              const next = { ...current };
+              for (const { id } of BULK_FEATURES) next[id] = model;
+              return next;
+            });
+          }}
+          className="w-full border border-gray-200 rounded-lg bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-50">
+          <option value="" disabled>기능별로 다른 모델 사용 중</option>
+          {bulkOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+        </select>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {AI_FEATURES.map(({ id, label, description }) => (
           <div key={id} className="bg-white rounded-xl border border-gray-100 p-5">
