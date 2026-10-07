@@ -17,6 +17,10 @@ const cards = compile('lib/experience-cards.ts', (id) => ({
   './essay-contract': contract, './vendor-skills': compile('lib/vendor-skills.ts', require),
   './ai-model-settings': { getAIModelId: () => 'test-model' },
   './essay-bank': { getCachedEssayBank: () => ({ entries: [] }), getEssayBankProgress: () => ({ running: false }) },
+  './resume-inventory': { ensureResumeInventory: async () => null, getCachedResumeInventory: () => null },
+  './resume-files': { listResumePdfs: () => [] },
+  './applicant-profile': { readApplicantProfile: () => ({}) },
+  './resume-tailoring-contract': { buildApplicantItems: () => [] },
   '@anthropic-ai/claude-agent-sdk': { query: () => { throw new Error('no AI in tests'); } },
 }[id] ?? require(id)));
 const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
@@ -72,13 +76,30 @@ const entries = [
 const { cards: built } = cards.validateCards({ cards: [
   { event_id: 'a', context: '통신 모듈 개발', personal_actions: ['통신 모듈 개발'], evidence: [{ entryId: 'e1', quote: '방산 장비의 통신 모듈을 개발했습니다.' }], origins: [{ company: '모델이 지어낸 회사' }] },
   { event_id: 'b', context: '동아리', personal_actions: ['손실 원인 분석'], evidence: [{ entryId: 'e2', quote: '동아리에서 손실 원인을 분석했습니다.' }] },
-] }, entries);
+] }, cards.essaySources(entries));
 same(built[0].origins, [{ company: '가상방산', context: '임베디드 SW 개발 직무', question: '지원 동기', kind: 'cover_letter' }], 'origins come from source entries, not the model');
 same(built[1].evidence[0].kind, 'final', '"자료로 저장"한 답변도 카드의 근거가 된다');
 const sameAsTarget = (c) => normalize.normalizeCompanyName(c) === normalize.normalizeCompanyName('테스트증권');
 assert.ok(cards.describeOrigins(built[0], sameAsTarget)[0].startsWith('다른 회사(가상방산) · 자기소개서 · 임베디드 SW 개발 직무'));
 assert.ok(cards.describeOrigins(built[1], sameAsTarget)[0].startsWith('같은 회사(테스트증권) · Findar에서 확정한 답변'));
 assert.ok(cards.cardSourceContent(built[0], sameAsTarget).writtenFor[0].includes('다른 회사'));
+
+// 4-1) 이력서·지원 정보도 같은 카드 원료가 된다. 경험이 있는 항목만 쓰고, 같은 사건은 과거 자소서와 한 카드로 묶인다.
+const profile = cards.profileSources([
+  { id: 'r1', source: 'resume', section: '프로젝트', title: '투자동아리 모의 포트폴리오', period: '2024.03 ~ 2024.12', detail: '손실 기여도 분석, 비중 상한 규칙 제안' },
+  { id: 'r2', source: 'resume', section: '학력', title: '가상대학교 경영학과', period: '2020 ~ 2025', detail: '' },
+  { id: 'a.work.0', source: 'applicant', section: '경력', title: '가상증권 · 리스크관리팀 · 인턴', period: '2025.01 ~ 2025.02', detail: '일일 VaR 보고서 작성 보조' },
+]);
+same(profile.map((p) => [p.id, p.kind]), [['resume:r1', 'resume'], ['applicant:a.work.0', 'applicant']], 'education and other non-experience sections are not card material');
+assert.ok(profile[0].text.includes('손실 기여도 분석') && profile[0].company === '');
+const mixed = [...cards.essaySources([entries[1]]), ...profile];
+const { cards: merged } = cards.validateCards({ cards: [
+  { event_id: 'club', context: '투자동아리', personal_actions: ['손실 원인 분석'], evidence: [{ entryId: 'resume:r1', quote: '손실 기여도 분석' }, { entryId: 'e2', quote: '동아리에서 손실 원인을 분석했습니다.' }] },
+  { event_id: 'intern', context: '증권사 인턴', personal_actions: ['VaR 보고서 작성 보조'], evidence: [{ entryId: 'applicant:a.work.0', quote: '일일 VaR 보고서 작성 보조' }] },
+] }, mixed);
+same(merged[0].evidence.map((e) => e.kind), ['resume', 'final'], 'resume and essay quotes of the same event share one card');
+assert.ok(cards.describeOrigins(merged[0], sameAsTarget)[0].startsWith('이력서 · 프로젝트 · 투자동아리'), 'profile origins are labelled as primary records, not as another company');
+same(merged[1].origins[0].company, '', 'a real employer in the profile is not recorded as a past application company');
 
 // 5) 독립 검증 결과: 답변에 그대로 있는 문장만 인정하고, 정해진 종류만 받는다.
 const answer = '저는 통신 모듈을 개발하며 국방 보안의 중요성을 배웠습니다. 그래서 시장리스크 한도 관리를 맡고 싶습니다.';
@@ -92,7 +113,9 @@ same(issues.map((i) => i.type), ['other_company']);
 assert.ok(harness.contextIssueNotes(issues)[0].startsWith('직무·회사 맥락 확인(다른 회사 맥락)'));
 const prompt = harness.contextAuditPrompt({ company: '테스트증권', role: '리스크관리', jobText: job.text, question: base.question, answer, otherCompanies: ['가상방산'], materialOrigins: ['다른 회사(가상방산) · 자기소개서'] });
 assert.ok(prompt.includes('독립된 검토자') && prompt.includes('가상방산') && prompt.includes('stretched_link'));
+const withEmployer = harness.contextAuditPrompt({ company: '가상은행', role: '리스크관리', jobText: job.text, question: base.question, answer, otherCompanies: [], materialOrigins: [], employers: ['가상증권'] });
+assert.ok(withEmployer.includes('[지원자가 실제로 일한 곳(지원 정보)] 가상증권') && withEmployer.includes('회사 이름이 지원 회사와 달라도 경력입니다'), 'real employers must not be flagged as another company');
 const err = new harness.ContextAuditError(issues, { answer });
 assert.equal(err.answer.answer, answer);
 
-console.log('PASS other-company blocking, evidence containment, verbatim job/question/request anchors (role/company names rejected), code-attached card provenance incl. saved answers, independent audit findings must quote the answer');
+console.log('PASS resume/applicant experience items as card sources, other-company blocking, evidence containment, verbatim job/question/request anchors (role/company names rejected), code-attached card provenance incl. saved answers, independent audit findings must quote the answer');

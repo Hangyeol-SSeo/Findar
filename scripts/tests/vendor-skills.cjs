@@ -17,6 +17,10 @@ const cards = compile('lib/experience-cards.ts', (id) => ({
   './essay-contract': contract, './vendor-skills': vendor,
   './ai-model-settings': { getAIModelId: () => 'test-model' },
   './essay-bank': { getCachedEssayBank: () => ({ entries: [] }), getEssayBankProgress: () => ({ running: false }) },
+  './resume-inventory': { ensureResumeInventory: async () => null, getCachedResumeInventory: () => null },
+  './resume-files': { listResumePdfs: () => [] },
+  './applicant-profile': { readApplicantProfile: () => ({}) },
+  './resume-tailoring-contract': { buildApplicantItems: () => [] },
   '@anthropic-ai/claude-agent-sdk': { query: () => { throw new Error('no AI in tests'); } },
 }[id] ?? require(id)));
 const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
@@ -69,7 +73,7 @@ const { cards: valid, rejected } = cards.validateCards({ cards: [
     evidence: [{ entryId: 'e1', quote: '인터뷰 8건 중 5건을 직접 진행했습니다.' }, { entryId: 'e1', quote: '팀은 발표 평가 2위를 했습니다.' }], precision: { interview_count: 'exact', bogus: 'maybe' } },
   { event_id: 'club', context: '같은 동아리', personal_actions: ['질문지 초안 작성'], evidence: [{ entryId: 'e2', quote: '같은 동아리에서 질문지 초안을 썼습니다.' }] },
   { event_id: 'other', context: '지어낸 경험', personal_actions: ['없는 일'], evidence: [{ entryId: 'e1', quote: '원문에 없는 문장' }] },
-] }, entries);
+] }, cards.essaySources(entries));
 assert.equal(valid.length, 2);
 assert.equal(rejected, 1, 'a card whose quotes are not in the source must be rejected');
 same(valid.map((c) => [c.id, c.event_id]), [['EXP-01', 'EVT-01'], ['EXP-02', 'EVT-01']], 'same event keeps one EVT id');

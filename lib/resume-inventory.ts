@@ -110,6 +110,14 @@ export async function ensureResumeInventory(): Promise<ResumeInventory | null> {
   }
 }
 
+// AI 호출 없이, 현재 이력서·모델과 맞는 캐시가 있으면 돌려준다(경험 카드 상태 표시용).
+export function getCachedResumeInventory(): ResumeInventory | null {
+  const pdfs = listResumePdfs();
+  if (!pdfs.length) return null;
+  const cached = readCached();
+  return cached?.sourcesHash === hashResumeSources(pdfs) && cached.model === getAIModelId("resumeInventory") ? cached : null;
+}
+
 // AI 호출 없이 현재 이력서 해시와 캐시가 맞는지만 본다(평가 결과의 "오래됨" 판정용).
 export function currentResumeHash(): string {
   const pdfs = listResumePdfs();

@@ -184,7 +184,7 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
     const added = assertRevisionMaterials(essay.evidence, priorIds, value.addedMaterials, anchorTexts);
     const issues = await runContextAudit({
       company: context.company, role: selection.role, jobText: jobSourceText(sources), question, answer: essay.answer,
-      otherCompanies: context.otherCompanies, materialOrigins: [...new Set(essay.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
+      otherCompanies: context.otherCompanies, employers: context.employers, materialOrigins: [...new Set(essay.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
     }, (p) => askModel(p, undefined, model));
     if (issues?.length) throw new ContextAuditError<Checked>(issues, { value, essay, added, contextNotes: contextIssueNotes(issues) });
     return { value, essay, added, contextNotes: issues === null ? [CONTEXT_AUDIT_UNAVAILABLE] : [] };
@@ -307,7 +307,7 @@ suggestions의 original은 답변에서 그대로 복사한 연속 구절(한 �
   // 하네스: 첨삭 받기도 현재 글을 작성자와 독립된 호출로 공고와 대조해, 다른 회사·직무 맥락이 섞였으면 보완할 점 맨 앞에 둔다.
   const contextIssues: ContextIssue[] | null = await runContextAudit({
     company: context.company, role: selection.role, jobText: jobSourceText(sources), question, answer: baseText,
-    otherCompanies: context.otherCompanies, materialOrigins: [...new Set(current.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
+    otherCompanies: context.otherCompanies, employers: context.employers, materialOrigins: [...new Set(current.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
   }, (p) => askModel(p, undefined, model));
   const feedback: EssayFeedback = {
     focus, baseText, summary: value.summary as string, strengths: stringList(value.strengths),

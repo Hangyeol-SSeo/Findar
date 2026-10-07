@@ -12,7 +12,7 @@ import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import { logEssayEvent } from "./essay-log";
-import { cardSourceContent, describeOrigins, getConfirmedCards } from "./experience-cards";
+import { cardsCoverProfile, cardSourceContent, describeOrigins, getConfirmedCards } from "./experience-cards";
 import { assertEvidenceContained, CONTEXT_AUDIT_UNAVAILABLE, ContextAuditError, contextIssueNotes, jobSourceText, otherCompanyNames, runContextAudit } from "./application-harness";
 import { duplicateSentences, imNotAiFindings, jasoseoStyleFindings } from "./vendor-checks";
 import { loadVendorSkills } from "./vendor-skills";
@@ -69,8 +69,12 @@ export async function collectContext(seq: string, request: EssayRequest) {
   const narrative = readNarrativeProfile();
   const bank = await ensureEssayBank();
   const cards = getConfirmedCards();
-  // 과거 자료에 기록된 다른 회사 이름은 자료에서 가리고 답변에 쓰면 거부한다(하네스: 입력 차단).
-  const otherCompanies = otherCompanyNames([...bank.entries.map((e) => e.company), ...cards.flatMap((c) => (c.origins ?? []).map((o) => o.company))], job.company);
+  const profileInCards = cardsCoverProfile();
+  // 과거 자료에 기록된 다른 회사 이름은 자료에서 가리고 답변에 쓰면 거부한다(하네스: 입력 차단). 지원 정보에 적은 실제 근무처는
+  // "다른 지원 회사"가 아니라 경력이므로 빼서, 그 회사에 지원한 적이 있어도 경력 서술이 가려지지 않게 한다.
+  const employers = new Set(applicant.workExperiences.map((w) => normalizeCompanyName(w.companyName)).filter(Boolean));
+  const otherCompanies = otherCompanyNames([...bank.entries.map((e) => e.company), ...cards.flatMap((c) => (c.origins ?? []).map((o) => o.company))]
+    .filter((name) => !employers.has(normalizeCompanyName(name))), job.company);
   const forbiddenNames = [...new Set([
     ...otherCompanies,
     ...applicant.education.map((e) => e.schoolName), ...applicant.projects.map((p) => p.name),
@@ -83,10 +87,12 @@ export async function collectContext(seq: string, request: EssayRequest) {
     const text = typeof data === "string" ? data : JSON.stringify(data);
     if (text && text !== "[]") sources.push({ id, text: redact(text) });
   };
+  // 이력서·지원 정보가 경험 카드로 정리됐으면 원본 이력 대신 확인한 카드만 쓴다. 이력서 요약(narrative)도 경험을 담고 있어
+  // 소재 배치를 거치지 않는 우회 경로가 되므로 함께 뺀다. 지원 방향(careerGoals)은 사용자가 쓴 글이라 남긴다.
   if (profile) {
-    add("resume.summary", profile.narrative);
+    if (!profileInCards) add("resume.summary", profile.narrative);
     add("resume.direction", profile.careerGoals);
-    profile.projects.forEach((p, i) => add(`resume.experience.${i}`, { role: p.role, summary: p.summary, skills: p.stack }));
+    if (!profileInCards) profile.projects.forEach((p, i) => add(`resume.experience.${i}`, { role: p.role, summary: p.summary, skills: p.stack }));
   }
   add("memory.values", narrative.core);
   // Full episodes and full past answers: no 300-character truncation of action/results.
@@ -99,9 +105,11 @@ export async function collectContext(seq: string, request: EssayRequest) {
     .sort((a, b) => relevance(`${b.situation} ${b.reasoning} ${b.tags.join(" ")}`) - relevance(`${a.situation} ${a.reasoning} ${a.tags.join(" ")}`) || b.createdAt - a.createdAt)
     .slice(0, 6)
     .forEach((e) => add(`memory.episode.${e.id}`, { situation: e.situation, reasoning: e.reasoning, lesson: e.lesson, tags: e.tags }));
-  applicant.workExperiences.forEach((w, i) => add(`profile.work.${i}`, { role: w.position, duties: w.duties, period: [w.startDate, w.endDate] }));
-  applicant.activities.forEach((a, i) => add(`profile.activity.${i}`, { role: a.role, detail: a.detail }));
-  applicant.awards.forEach((a, i) => add(`profile.award.${i}`, { detail: a.detail, date: a.date }));
+  if (!profileInCards) {
+    applicant.workExperiences.forEach((w, i) => add(`profile.work.${i}`, { role: w.position, duties: w.duties, period: [w.startDate, w.endDate] }));
+    applicant.activities.forEach((a, i) => add(`profile.activity.${i}`, { role: a.role, detail: a.detail }));
+    applicant.awards.forEach((a, i) => add(`profile.award.${i}`, { detail: a.detail, date: a.date }));
+  }
   // 과거 자소서·면접 대본과 "자료로 저장"한 답변은 원문 그대로가 아니라, 사용자가 확인한 경험 카드(lib/experience-cards.ts)로만 쓴다.
   // 확인하지 않은 카드와 카드로 정리되기 전의 원문은 쓰지 않는다(cover-letter-team의 사용자 게이트). 카드의 writtenFor는
   // 그 경험이 원래 어느 회사·직무 지원서에서 나왔는지이며, 다른 회사 이름은 위 forbiddenNames로 가려진다.
@@ -121,7 +129,8 @@ export async function collectContext(seq: string, request: EssayRequest) {
   add("job", { company: job.company, title: job.title, targetRole: selection.role, rawContent: job.rawContent, positions: job.positions, description: job.jdSummary, qualifications: job.qualifications });
   if (JSON.stringify(sources).length > 150000) throw new Error("참고 자료가 너무 많습니다. 과거 자소서나 경험 자료를 정리한 뒤 다시 시도해주세요.");
   const existing = getCachedApplicationDraft(seq)?.essayAnswers.filter((a) => a.source === "user_question" && a.roleRevision === selection.revision) ?? [];
-  return { sources, forbiddenNames, otherCompanies, materialOrigins, company: job.company, editPreferences: summarizeEditPreferences(bank), previousAnswer: existing.find((a) => a.question === request.question)?.answer ?? "",
+  return { sources, forbiddenNames, otherCompanies, materialOrigins, company: job.company,
+    employers: applicant.workExperiences.map((w) => w.companyName.trim()).filter(Boolean), editPreferences: summarizeEditPreferences(bank), previousAnswer: existing.find((a) => a.question === request.question)?.answer ?? "",
     otherAnswers: existing.filter((a) => a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) };
 }
 
@@ -306,7 +315,7 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
   const index = batch.plans.findIndex((p) => p.question === request.question);
   if (index < 0) throw new Error("이 문항의 작성 구상이 없습니다.");
   const plan = batch.plans[index];
-  const { sources, forbiddenNames, previousAnswer, editPreferences, otherCompanies, materialOrigins, company } = batch.contexts[index];
+  const { sources, forbiddenNames, previousAnswer, editPreferences, otherCompanies, materialOrigins, company, employers } = batch.contexts[index];
   const otherAnswers = getCachedApplicationDraft(seq)?.essayAnswers.filter((a) => a.source === "user_question" && a.roleRevision === batch.roleRevision && a.question !== request.question).map((a) => ({ question: a.question, answer: a.answer })) ?? [];
   const { skills } = batch;
   const researchSources = sources.filter((s) => plan.research.some((r) => r.sourceId === s.id));
@@ -388,7 +397,7 @@ issues는 원문과 모순되는 사실, 근거 없는 구체적 사실 단정, 
     if (answer.status === "draft") {
       const issues = await runContextAudit({
         company, role: batch.role, jobText: jobSourceText(sources), question: request.question, answer: answer.answer,
-        otherCompanies, materialOrigins: [...new Set(answer.evidence.flatMap((e) => materialOrigins.get(e.sourceId) ?? []))],
+        otherCompanies, employers, materialOrigins: [...new Set(answer.evidence.flatMap((e) => materialOrigins.get(e.sourceId) ?? []))],
       }, (prompt) => askModel(prompt, signal, batch.model));
       if (issues === null) answer.reviewNotes = [...answer.reviewNotes, CONTEXT_AUDIT_UNAVAILABLE];
       else if (issues.length) throw new ContextAuditError(issues, answer);

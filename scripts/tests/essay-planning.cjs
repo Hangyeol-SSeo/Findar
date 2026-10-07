@@ -18,7 +18,7 @@ const stubs = {
   './company-normalize': { normalizeCompanyName: x => x },
   './essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
   './vendor-checks': { jasoseoStyleFindings: () => [], duplicateSentences: () => [], imNotAiFindings: () => [] },
-  './experience-cards': { getConfirmedCards: () => [], cardSourceContent: (c) => c, describeOrigins: () => [] },
+  './experience-cards': { getConfirmedCards: () => [], cardSourceContent: (c) => c, describeOrigins: () => [], cardsCoverProfile: () => false },
 };
 function compile(file, req) {
   const mod = { exports: {} };
