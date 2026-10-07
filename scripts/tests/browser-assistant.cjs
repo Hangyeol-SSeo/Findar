@@ -1,5 +1,11 @@
 // Run with FINDAR_PLAYWRIGHT pointing to the bundled Playwright package and a running dev server.
-const { chromium } = require(process.env.FINDAR_PLAYWRIGHT || 'playwright');
+let chromium;
+try { ({ chromium } = require(process.env.FINDAR_PLAYWRIGHT || 'playwright')); } catch (error) {
+  // Opt-in browser regression test (see README): skip unless Playwright is available.
+  if (process.env.FINDAR_PLAYWRIGHT || error.code !== 'MODULE_NOT_FOUND') throw error;
+  console.log('SKIP %s: Playwright not found (set FINDAR_PLAYWRIGHT)', require('node:path').basename(__filename));
+  process.exit(0);
+}
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');

@@ -213,7 +213,7 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
     { headings: ["학력", "학력사항", "학력정보", "교육사항"], prefix: "education", fields: [
       ["평점만점", "grade"], ["성적평점만점", "grade"], ["학교명구분", "school"], ["학교구분", "school"], ["학교및구분", "school"], ["학교명", "schoolName"],
       ["졸업구분", "status"], ["졸업여부", "status"], ["학위", "degreeType"], ["전공", "major"], ["입학일", "startDate"], ["구분", "school"],
-      ["졸업일", "endDate"], ["재학기간", "period"], ["학력기간", "period"], ["평점", "gpa"], ["학점", "gpa"],
+      ["졸업일", "endDate"], ["재학기간", "period"], ["학력기간", "period"], ["기간", "period"], ["평점", "gpa"], ["학점", "gpa"],
     ] },
     { headings: ["경력", "경력사항", "경력정보", "근무경력", "근무경력사항", "직장경력", "직장경력사항", "회사경력", "회사경력사항", "사회경력", "career", "workexperience"], prefix: "workExperiences", fields: [
       ["부서및직급직책", "departmentPosition"], ["부서직급직책", "departmentPosition"], ["근무부서직급", "departmentPosition"], ["부서직위", "departmentPosition"], ["부서직급", "departmentPosition"],

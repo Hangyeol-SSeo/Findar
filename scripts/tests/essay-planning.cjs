@@ -69,12 +69,15 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
   assert.deepEqual(prepared.plans.map(p => p.question), requests.map(r => r.question));
   assert.equal(prompts.length - before, 2);
   assert.equal(prepared.plans[1].selectedMaterials[0].sourceId, 'user.current.1');
-  // A direct research plan cannot silently disappear in the final answer.
-  queued = [answer, answer, { ...answer, evidence: [...answer.evidence, { sourceId: 'company.overview', quote: plan.research[0].quote, usedFor: '회사 선택의 이유' }] }];
+  // A direct research plan cannot silently disappear in the final answer: missing company
+  // evidence costs no extra call, but is surfaced as a review note.
+  queued = [answer, answer];
   const direct = await generateCustomEssayAnswer('test', requests[1], undefined, prepared);
   assert.equal(direct.plan.researchMode, 'direct');
   assert.ok(prompts.at(-1).includes('회사 근거'));
   assert.equal(queued.length, 0);
+  assert.equal(direct.status, 'draft');
+  assert.ok(direct.reviewNotes.some(n => n.startsWith('확인 필요: 구상에서 고른 회사 근거(company.overview)')));
   const incomplete = { ...prepared, plans: prepared.plans.map(p => ({ ...p, missingInfo: ['본인이 선택한 행동을 알려주세요.'] })) };
   const beforeMissing = prompts.length;
   const missing = await generateCustomEssayAnswer('test', requests[0], undefined, incomplete);
