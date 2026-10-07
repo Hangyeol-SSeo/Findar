@@ -9,6 +9,7 @@ interface Card {
   constraints: string[]; alternatives_considered: string[]; result_limitations: string[];
   evidence: { entryId: string; sourceFile: string; kind: string; quote: string }[];
   precision: Record<string, Precision>; sensitive: boolean; user_confirmed: boolean; droppedItems: string[];
+  origins?: { company: string; context: string; question: string; kind: string }[];
 }
 interface CardState {
   cards: Card[]; generatedAt: number | null; error: string; stale: boolean; running: boolean; essayRunning: boolean; sourceCount: number;
@@ -122,6 +123,12 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
                 {card.user_confirmed ? "확인 취소" : "확인"}
               </button>
             </div>
+            {!!card.origins?.length && (
+              <p className="mt-2 text-xs text-gray-500">
+                원래 쓰인 곳: {card.origins.map((o) => [o.company || "회사 미상", o.context].filter(Boolean).join(" · ")).filter((v, i, a) => a.indexOf(v) === i).join(" / ")}
+                <span className="text-gray-400"> — 다른 회사 이름은 작성 때 가려지고, 답변에 쓰이면 거부됩니다.</span>
+              </p>
+            )}
             <dl className="mt-3 space-y-2">
               {FIELDS.filter(([key]) => (card[key] as string[]).length).map(([key, label]) => (
                 <div key={key}>
@@ -145,7 +152,7 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
               <ul className="mt-2 space-y-2">
                 {card.evidence.map((e, i) => (
                   <li key={i} className="rounded bg-gray-50 p-2">
-                    <p className="text-gray-400">{e.kind === "interview" ? "면접 대본" : "자기소개서"} · {e.sourceFile.split("/").pop()}</p>
+                    <p className="text-gray-400">{e.kind === "interview" ? "면접 대본" : e.kind === "final" ? "확정한 답변" : "자기소개서"}{e.sourceFile && ` · ${e.sourceFile.split("/").pop()}`}</p>
                     <p className="mt-1 whitespace-pre-wrap text-gray-600">{e.quote}</p>
                   </li>
                 ))}

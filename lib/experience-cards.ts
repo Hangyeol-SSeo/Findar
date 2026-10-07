@@ -16,7 +16,10 @@ const STORE_PATH = join(process.cwd(), "data", "experience-cards.json");
 const MAX_SOURCE_CHARS = 150_000;
 
 export type Precision = "exact" | "approx" | "unknown";
-export interface CardEvidence { entryId: string; sourceFile: string; kind: "cover_letter" | "interview" | ""; quote: string }
+export type CardSourceKind = "cover_letter" | "interview" | "final" | "";
+export interface CardEvidence { entryId: string; sourceFile: string; kind: CardSourceKind; quote: string }
+// 이 경험이 원래 어느 회사·직무 지원을 위해 쓰인 글에서 나왔는지. 모델이 아니라 코드가 근거 항목에서 붙인다.
+export interface CardOrigin { company: string; context: string; question: string; kind: CardSourceKind }
 export interface ExperienceCard {
   id: string; // EXP-01
   event_id: string; // EVT-01 — 같은 사건에서 나온 카드는 같은 값. 문항 간 소재 중복은 이 값으로 본다
@@ -36,6 +39,7 @@ export interface ExperienceCard {
   approval: { content_hash: string; actor: "user"; confirmed_at: string } | null;
   // 코드 검사: 원문 구절에 없는 수치가 들어 있어 카드에서 뺀 항목
   droppedItems: string[];
+  origins: CardOrigin[];
 }
 
 interface CardStore { sourcesHash: string; model: string; generatedAt: number; cards: ExperienceCard[]; error: string }
@@ -78,6 +82,9 @@ const str = (value: unknown, limit = 300) => (typeof value === "string" ? value.
 // 모델이 돌려준 카드를 코드로 검사한다: 근거 구절은 원문에 그대로 있어야 하고(없으면 버림), 근거가 하나도 남지 않은
 // 카드는 버린다. 카드 칸에 원문 구절에 없는 수치가 있으면 그 항목을 빼서 droppedItems에 남긴다(cover-letter-team의
 // "숫자 토큰이 참조 필드에 없으면 차단"과 같은 규칙).
+const entryKind = (entry: EssayEntry): CardSourceKind => (entry.source === "saved" ? "final" : entry.kind ?? "");
+const KIND_LABEL: Record<CardSourceKind, string> = { cover_letter: "자기소개서", interview: "면접 대본", final: "Findar에서 확정한 답변", "": "자료" };
+
 export function validateCards(value: unknown, entries: EssayEntry[]): { cards: ExperienceCard[]; rejected: number } {
   const byId = new Map(entries.map((e) => [e.id, e]));
   const raw: unknown[] = Array.isArray((value as { cards?: unknown })?.cards) ? (value as { cards: unknown[] }).cards : [];
@@ -91,7 +98,7 @@ export function validateCards(value: unknown, entries: EssayEntry[]): { cards: E
       const entry = byId.get(str(e.entryId, 100));
       const quote = str(e.quote, 2000);
       if (!entry || !quote || !normalize(entry.answer).includes(normalize(quote))) return [];
-      return [{ entryId: entry.id, sourceFile: entry.sourceFile ?? "", kind: entry.kind ?? "", quote }];
+      return [{ entryId: entry.id, sourceFile: entry.sourceFile ?? "", kind: entryKind(entry), quote }];
     });
     if (!evidence.length) { rejected++; continue; }
     const known = new Set(evidence.flatMap((e) => extractNumbers(e.quote)));
@@ -107,26 +114,34 @@ export function validateCards(value: unknown, entries: EssayEntry[]): { cards: E
     const precision = Object.fromEntries(Object.entries((c.precision ?? {}) as Record<string, unknown>)
       .filter(([k, v]) => k.trim() && ["exact", "approx", "unknown"].includes(String(v))).slice(0, 20)
       .map(([k, v]) => [k.trim().slice(0, 60), v as Precision]));
+    const origins = new Map<string, CardOrigin>();
+    for (const e of evidence) {
+      const entry = byId.get(e.entryId)!;
+      const origin = { company: entry.company.trim(), context: (entry.context ?? "").trim(), question: entry.question.trim().slice(0, 200), kind: e.kind };
+      origins.set(JSON.stringify([origin.company, origin.context, origin.question, origin.kind]), origin);
+    }
     cards.push({
       id: `EXP-${String(cards.length + 1).padStart(2, "0")}`, event_id: eventIds.get(rawEvent)!,
       period: str(c.period, 60) || "불명", context: str(c.context), ...lists, evidence, precision,
-      sensitive: c.sensitive === true, user_confirmed: false, approval: null, droppedItems,
+      sensitive: c.sensitive === true, user_confirmed: false, approval: null, droppedItems, origins: [...origins.values()],
     });
   }
   return { cards, rejected };
 }
 
+// 올린 과거 자료와, Findar에서 다듬어 "자료로 저장"한 답변 모두 카드로만 작성에 쓰인다(원문을 통째로 넘기는 경로를 두지 않는다).
 function sourceEntries(): EssayEntry[] {
-  return getCachedEssayBank().entries.filter((e) => e.source === "imported" && e.answer.trim());
+  return getCachedEssayBank().entries.filter((e) => e.answer.trim());
 }
 
 function hashSources(entries: EssayEntry[], model: string, skill: string): string {
-  return createHash("sha256").update(JSON.stringify([model, skill, entries.map((e) => [e.sourceFile, e.question, e.answer]).sort()])).digest("hex");
+  // 회사·맥락은 카드 출처(origins)가 되므로, 사용자가 회사·직무를 적거나 고치면 카드를 다시 만든다.
+  return createHash("sha256").update(JSON.stringify([model, skill, entries.map((e) => [e.sourceFile, e.question, e.answer, e.company, e.context ?? ""]).sort()])).digest("hex");
 }
 
 async function extractCards(entries: EssayEntry[], model: string, skill: string) {
   const material = entries.map((e) => ({
-    entryId: e.id, kind: e.kind === "interview" ? "면접 대본" : "자기소개서", file: e.sourceFile ?? "",
+    entryId: e.id, kind: KIND_LABEL[entryKind(e)], file: e.sourceFile ?? "",
     company: e.company, background: e.context ?? "", question: e.question, answer: e.answer,
   }));
   if (JSON.stringify(material).length > MAX_SOURCE_CHARS) throw new Error("과거 자료가 너무 많아 한 번에 카드로 정리할 수 없습니다. 오래된 파일을 일부 지우고 다시 시도해주세요.");
@@ -216,13 +231,23 @@ export function getConfirmedCards(): ExperienceCard[] {
   return readStore().cards.filter((c) => c.user_confirmed && c.approval?.content_hash === cardContentHash(c));
 }
 
-// 작성 프롬프트의 사실 자료로 넣을 카드 내용(확인 기록·코드 검사 결과는 뺀다).
-export function cardSourceContent(card: ExperienceCard) {
+// 출처를 사람이 읽는 한 줄로. 같은 회사인지는 지원 회사와 정규화 이름으로 비교해 코드가 정한다.
+export function describeOrigins(card: ExperienceCard, sameCompany: (company: string) => boolean): string[] {
+  return (card.origins ?? []).map((o) => [
+    o.company ? `${sameCompany(o.company) ? "같은 회사" : "다른 회사"}(${o.company})` : "회사 미상",
+    KIND_LABEL[o.kind], o.context, o.question && `문항: ${o.question}`,
+  ].filter(Boolean).join(" · "));
+}
+
+// 작성 프롬프트의 사실 자료로 넣을 카드 내용(확인 기록·코드 검사 결과는 뺀다). 출처에 다른 회사 이름이 있으면
+// collectContext가 가린다(lib/application-harness.ts).
+export function cardSourceContent(card: ExperienceCard, sameCompany: (company: string) => boolean = () => false) {
   return {
     event_id: card.event_id, period: card.period, context: card.context,
+    writtenFor: describeOrigins(card, sameCompany),
     ...Object.fromEntries(LIST_FIELDS.filter((k) => card[k].length).map((k) => [k, card[k]])),
     precision: card.precision,
     ...(card.sensitive ? { sensitive: true } : {}),
-    sourceQuotes: card.evidence.map((e) => ({ kind: e.kind === "interview" ? "과거 면접 답변" : "과거 자기소개서", quote: e.quote })),
+    sourceQuotes: card.evidence.map((e) => ({ kind: KIND_LABEL[e.kind], quote: e.quote })),
   };
 }

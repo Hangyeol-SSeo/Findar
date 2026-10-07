@@ -8,7 +8,8 @@ import { recordEditSignals } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
 import { logEssayEvent, logEssayEvents, newEssayThread, type EssayEventInput } from "./essay-log";
 import { locateInEssay } from "./essay-log-analysis";
-import { jasoseoStyleFindings } from "./vendor-checks";
+import { imNotAiChangeRate, imNotAiFindings, jasoseoStyleFindings } from "./vendor-checks";
+import { loadVendorSkills } from "./vendor-skills";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import {
   containsForbiddenName, extractNumbers, hasBanmalEnding, parseEssayRequest, parseModelJson, validateEssay, withVersion,
@@ -177,7 +178,14 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   const { value, essay } = result;
   if (essay.status === "draft" && essay.answer === baseText) throw new Error("수정할 부분을 찾지 못했습니다. 바꾸고 싶은 부분을 더 구체적으로 적어주세요.");
   assertApplicationRole(seq, selection.revision);
-  const externalStyle = essay.status === "draft" ? jasoseoStyleFindings(essay.answer).map((n) => `문체 점검(jasoseo): ${n}`) : [];
+  const externalStyle = essay.status === "draft" ? [
+    ...jasoseoStyleFindings(essay.answer).map((n) => `문체 점검(jasoseo): ${n}`),
+    ...imNotAiFindings(essay.answer).map((n) => `AI 문체 점검(im-not-ai): ${n}`),
+  ] : [];
+  // im-not-ai의 과윤문 기준(변경률 30% 경고). 고쳐쓰기는 요청한 부분만 고쳐야 하므로 많이 바뀌었으면 알린다.
+  const changeRate = essay.status === "draft" ? imNotAiChangeRate(baseText, essay.answer) : null;
+  if (changeRate !== null && changeRate > 0.3)
+    externalStyle.unshift(`변경률 ${Math.round(changeRate * 100)}%: 요청한 부분보다 많이 바뀌었을 수 있습니다. 바뀐 문장이 요청 범위 안인지 비교해 확인해주세요.`);
   const draft = updateEssayAnswer(seq, question, (answer) => {
     if (answer.answer !== baseText) throw new Error("첨삭하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
     if (essay.status === "needs_info")
@@ -235,10 +243,12 @@ export async function reviewEssay(seq: string, question: string, focus: string):
 
 async function runReview(seq: string, question: string, focus: string, threadId: string): Promise<RevisionOutcome> {
   const { selection, current, baseText, context, sources, model, skills } = await prepare(seq, question, "");
-  const style = [...lintEssayStyle(baseText), ...jasoseoStyleFindings(baseText).map((n) => `jasoseo 문체 점검 ${n}`)];
+  const style = [...lintEssayStyle(baseText), ...jasoseoStyleFindings(baseText).map((n) => `jasoseo 문체 점검 ${n}`),
+    ...imNotAiFindings(baseText).map((n) => `im-not-ai AI 문체 점검: ${n}`)];
   const prompt = `${APPLICATION_ROLE_RULES}
 ${skills.review}
 ${STYLE_RULES}
+${loadVendorSkills().humanize}
 [지원 직무] ${selection.role}
 [문항과 조건] ${JSON.stringify({ question, maxChars: current.maxChars, countSpaces: current.countSpaces })}
 [중점적으로 봐줄 부분] ${focus || "글 전체"}

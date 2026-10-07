@@ -62,11 +62,25 @@ try {
   S.saveEssaySourceFile('cover_letter', 'real.pdf', new TextEncoder().encode('%PDF-1.4 changed'));
   assert.notEqual(S.hashEssaySource(S.listEssaySources('cover_letter').find((f) => f.name === 'real.pdf')), before);
 
+  // 사용자가 적은 회사·직무: 파일별로 저장되고, 바뀌면 해시가 달라져 다시 분석되며, 파일을 지우면 함께 지워진다.
+  assert.equal(S.parseEssaySourceMeta('  ', ''), null);
+  assert.deepEqual({ ...S.parseEssaySourceMeta(' 가상방산 ', '임베디드  SW') }, { company: '가상방산', role: '임베디드 SW' });
+  const metaName = S.saveEssaySourceText('cover_letter', '방산 지원서', '지원 동기 본문', S.parseEssaySourceMeta('가상방산', '임베디드 SW'));
+  const metaFile = () => S.listEssaySources('cover_letter').find((f) => f.name === metaName);
+  assert.equal(S.getEssaySourceMeta(metaFile()).company, '가상방산');
+  const metaHash = S.hashEssaySource(metaFile());
+  S.saveEssaySourceText('cover_letter', '방산 지원서', '지원 동기 본문', null);
+  assert.equal(S.getEssaySourceMeta(metaFile()).company, '가상방산', 're-upload without meta keeps the recorded company');
+  S.saveEssaySourceText('cover_letter', '방산 지원서', '지원 동기 본문', S.parseEssaySourceMeta('가상방산', '시스템 SW'));
+  assert.notEqual(S.hashEssaySource(metaFile()), metaHash, 'changing the role re-analyzes the file');
+  assert.equal(S.deleteEssaySource('cover_letter', metaName), true);
+  assert.equal(S.getEssaySourceMeta({ kind: 'cover_letter', name: metaName }), null);
+
   assert.equal(S.deleteEssaySource('cover_letter', '../interviews/면접.txt'), false, 'path traversal must not delete');
   assert.equal(S.deleteEssaySource('interview', '면접.txt'), true);
   assert.equal(S.listEssaySources('interview').some((f) => f.name === '면접.txt'), false);
 
-  console.log('PASS name sanitizing, DOCX/HWPX text extraction (entities, breaks, tabs, section order), PDF magic check, unsupported formats, paste, content hash, safe delete');
+  console.log('PASS user-entered company/role metadata, name sanitizing, DOCX/HWPX text extraction (entities, breaks, tabs, section order), PDF magic check, unsupported formats, paste, content hash, safe delete');
 } finally {
   process.chdir(root);
   fs.rmSync(work, { recursive: true, force: true });

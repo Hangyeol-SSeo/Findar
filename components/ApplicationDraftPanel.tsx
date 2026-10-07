@@ -425,7 +425,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
                 {source?.links?.filter((link) => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}
               </div>;
             })}
-            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}</p>)}
+            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}{m.anchor && <span className="text-gray-400"> · {m.fit === "transferable" ? "간접 연결" : "직접 경험"} — “{m.anchor.quote}”({m.anchor.source === "job" ? "공고" : m.anchor.source === "question" ? "문항" : "요청"})</span>}</p>)}
             {!!answer.plan.coverage?.length && <div className="space-y-1">
               <p className="font-medium">요구별 소재 판정</p>
               {answer.plan.coverage.map((c, i) => <p key={i}>
