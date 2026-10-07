@@ -34,6 +34,12 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
   }, []);
 
   useEffect(() => { load().catch(() => setError("경험 카드를 불러오지 못했습니다.")); }, [load]);
+  // 과거 자료의 회사·직무를 고치면 카드 출처가 바뀐다.
+  useEffect(() => {
+    const reload = () => { load().catch(() => {}); };
+    window.addEventListener("findar:experience-cards-changed", reload);
+    return () => window.removeEventListener("findar:experience-cards-changed", reload);
+  }, [load]);
 
   // 과거 자료 분석이 끝나면 카드 정리가 이어서 돈다. 둘 중 하나라도 도는 동안만 다시 읽는다.
   const polling = !!state && (state.running || state.essayRunning);

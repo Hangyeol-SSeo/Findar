@@ -1,5 +1,6 @@
 import { isSameOrigin } from "@/lib/request-origin";
-import { getEssayBankProgress, getEssaySourceStatus } from "@/lib/essay-bank";
+import { getEssayBankProgress, getEssaySourceStatus, setEssaySourceMeta } from "@/lib/essay-bank";
+import { syncCardOrigins } from "@/lib/experience-cards";
 import {
   deleteEssaySource, ESSAY_SOURCE_KIND_LABEL, isEssaySourceKind, MAX_ESSAY_SOURCES_PER_KIND, parseEssaySourceMeta, saveEssaySourceFile, saveEssaySourceText,
 } from "@/lib/essay-sources";
@@ -45,6 +46,20 @@ export async function POST(request: Request) {
     return Response.json({ ...snapshot(), error: e instanceof Error ? e.message : "업로드 요청을 읽지 못했습니다." }, { status: 400 });
   }
   return Response.json({ ...snapshot(), saved, errors }, { status: saved.length ? 200 : 400 });
+}
+
+// 이미 올린 파일의 회사·직무를 적거나 고친다({kind, name, company, role}, 둘 다 비우면 지움). AI 호출 없음:
+// 분석을 마친 항목과 경험 카드 출처를 코드로 바로 바꾼다.
+export async function PATCH(request: Request) {
+  if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
+  try {
+    const { kind, name, company, role } = await request.json();
+    if (!isEssaySourceKind(kind) || typeof name !== "string") throw new Error("파일을 찾을 수 없습니다.");
+    syncCardOrigins(() => setEssaySourceMeta(kind, name, parseEssaySourceMeta(company, role)));
+  } catch (e) {
+    return Response.json({ ...snapshot(), error: e instanceof Error ? e.message : "저장하지 못했습니다." }, { status: 400 });
+  }
+  return Response.json(snapshot());
 }
 
 export async function DELETE(request: Request) {

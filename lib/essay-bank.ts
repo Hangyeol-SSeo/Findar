@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { createHash, randomUUID } from "crypto";
 import { extname, join } from "path";
 import { parseModelJson } from "./essay-contract";
-import { essaySourceKey, getEssaySourceMeta, hashEssaySource, listEssaySources, type EssaySourceFile, type EssaySourceKind } from "./essay-sources";
+import {
+  essaySourceKey, getEssaySourceMeta, hashEssaySource, listEssaySources, updateEssaySourceMeta, type EssaySourceFile, type EssaySourceKind, type EssaySourceMeta,
+} from "./essay-sources";
 
 // 과거에 실제로 썼던 자소서와 면접 대본을 참고 자료로 축적하는 모듈. 원본은 설정 화면에서 올린
 // data/essay-sources/(lib/essay-sources.ts)에 있고, 여기서는 파일마다 문항·답변을 원문 그대로 뽑아 저장한다.
@@ -28,6 +30,8 @@ export interface EssayEntry {
   context?: string; // 지원 시기·직무·면접 단계 등 파일에 적힌 배경
   // 텍스트 파일은 답변이 원문에 그대로 있는지 코드로 확인한다. false면 모델이 고쳐 옮긴 것이라 화면에서 경고한다.
   verbatim?: boolean;
+  // 모델이 파일에서 읽은 회사·배경(사용자 입력을 덮기 전). 회사·직무를 나중에 고치면 이 값에 다시 덮어써 재분석 없이 반영한다.
+  extracted?: { company: string; context: string };
 }
 
 // 사용자가 자기소개서를 어떻게 고치는지에 대한 신호. 직접 고친 문장, 받아들인/넘긴 첨삭 제안이 쌓이고,
@@ -128,14 +132,49 @@ company는 파일에서 확인되는 회사명(모르면 빈 문자열).
       return { company: str(e.company, 100), question: str(e.question, 1000), answer: str(e.answer), context: str(e.context, 300) };
     })
     .filter((e) => e.answer)
-    // 사용자가 적은 회사·직무가 있으면 모델 추출보다 우선한다(다른 회사 이름 차단의 출처가 된다).
     .map((e) => ({
-      ...e,
-      ...(meta?.company ? { company: meta.company } : {}),
-      // 모델이 이미 직무를 적었으면 다시 붙이지 않는다.
-      ...(meta?.role && !e.context.includes(meta.role) ? { context: [`${meta.role} 직무 지원`, e.context].filter(Boolean).join(" · ") } : {}),
+      ...e, ...withMeta(e, meta), extracted: { company: e.company, context: e.context },
       kind: file.kind, sourceFile: essaySourceKey(file), ...(isPdf ? {} : { verbatim: source.includes(normalize(e.answer)) }),
     }));
+}
+
+// 사용자가 적은 회사·직무가 있으면 모델 추출보다 우선한다(다른 회사 이름 차단의 출처가 된다).
+const rolePrefix = (role: string) => `${role} 직무 지원`;
+function withMeta(base: { company: string; context: string }, meta: EssaySourceMeta | null): { company: string; context: string } {
+  return {
+    company: meta?.company || base.company,
+    // 모델이 이미 직무를 적었으면 다시 붙이지 않는다.
+    context: meta?.role && !base.context.includes(meta.role) ? [rolePrefix(meta.role), base.context].filter(Boolean).join(" · ") : base.context,
+  };
+}
+
+// extracted가 없는 예전 항목: 붙였던 직무 머리말만 떼어낸다. 회사는 모델 값을 알 수 없어, 회사를 지워도 기존 값을 둔다(가리는 쪽이 안전하다).
+function legacyBase(entry: EssayEntry, previous: EssaySourceMeta | null): { company: string; context: string } {
+  const context = entry.context ?? "";
+  if (!previous?.role) return { company: entry.company, context };
+  const prefix = rolePrefix(previous.role);
+  return { company: entry.company, context: context === prefix ? "" : context.startsWith(`${prefix} · `) ? context.slice(prefix.length + 3) : context };
+}
+
+// 이미 올린 파일의 회사·직무를 고친다. 분석을 마친 파일은 다시 분석하지 않고(비용 없음) 추출한 항목의 회사·배경만 코드로 바꾼다.
+// 분석 전이거나 다시 분석이 필요한 파일은 다음 분석이 새 값을 쓴다.
+export function setEssaySourceMeta(kind: EssaySourceKind, name: string, meta: EssaySourceMeta | null): void {
+  if (getEssayBankProgress().running) throw new Error("과거 자료를 분석하는 중에는 고칠 수 없습니다. 분석이 끝난 뒤 다시 시도해주세요.");
+  const file = listEssaySources(kind).find((f) => f.name === name);
+  if (!file) throw new Error("파일을 찾을 수 없습니다.");
+  const key = essaySourceKey(file);
+  const previous = getEssaySourceMeta(file);
+  const before = hashEssaySource(file);
+  updateEssaySourceMeta(kind, name, meta);
+  const after = hashEssaySource(file);
+  updateBank((bank) => {
+    const record = bank.files[key];
+    if (!record || record.hash !== before) return;
+    for (const entry of bank.entries) {
+      if (entry.sourceFile === key) Object.assign(entry, withMeta(entry.extracted ?? legacyBase(entry, previous), meta));
+    }
+    record.hash = after;
+  });
 }
 
 // 여러 파일에 걸친 문체와 반복 소재. 파일별 추출이 끝난 답변 텍스트만 보고 도구 없이 한 번 부른다.

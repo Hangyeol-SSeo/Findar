@@ -35,13 +35,14 @@ function formatSize(bytes: number): string {
 export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: string) => void }) {
   const [state, setState] = useState<SourceState | null>(null);
   const [kind, setKind] = useState<Kind>("cover_letter");
-  const [busy, setBusy] = useState<"" | "upload" | "paste" | "analyze" | "delete">("");
+  const [busy, setBusy] = useState<"" | "upload" | "paste" | "analyze" | "delete" | "meta">("");
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [company, setCompany] = useState("");
   const [role, setRole] = useState("");
+  const [editing, setEditing] = useState<{ key: string; company: string; role: string } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const wasRunning = useRef(false);
 
@@ -137,6 +138,29 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
     }
   }
 
+  // 이미 올린 파일의 회사·직무 고치기. 분석을 마친 파일은 다시 분석하지 않고 항목과 경험 카드 출처에 바로 반영된다.
+  async function saveMeta(file: SourceFile) {
+    if (!editing) return;
+    setBusy("meta");
+    setError("");
+    try {
+      const res = await fetch("/api/essay-sources", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: file.kind, name: file.name, company: editing.company, role: editing.role }),
+      });
+      const body = await res.json();
+      if (body.files) setState(body);
+      if (!res.ok) throw new Error(body.error);
+      setEditing(null);
+      window.dispatchEvent(new Event("findar:experience-cards-changed"));
+      showToast(file.status === "ready" ? "회사·직무를 고쳤습니다 · 추출한 항목과 경험 카드에 반영했습니다" : "회사·직무를 저장했습니다 · 다음 분석에 반영됩니다");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "저장하지 못했습니다.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function analyze(retryFailed = false) {
     setBusy("analyze");
     setError("");
@@ -182,7 +206,7 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
             className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
         </label>
         <p className="text-xs leading-5 text-gray-400 sm:col-span-2">
-          다음에 올리는 파일·붙여넣기에 적용됩니다. 적어 두면 다른 회사에 지원할 때 이 회사 이름과 맥락이 섞이지 않도록 코드가 막습니다.
+          다음에 올리는 파일·붙여넣기에 적용됩니다. 이미 올린 파일은 목록의 &apos;회사·직무&apos;에서 적거나 고칠 수 있습니다. 적어 두면 다른 회사에 지원할 때 이 회사 이름과 맥락이 섞이지 않도록 코드가 막습니다.
         </p>
       </div>
 
@@ -261,8 +285,10 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
                   {files.map((f) => {
                     const status = STATUS_TEXT[f.status];
                     const unverified = f.entries.filter((e) => e.verbatim === false).length;
+                    const key = `${f.kind}/${f.name}`;
+                    const edit = editing?.key === key ? editing : null;
                     return (
-                      <li key={`${f.kind}/${f.name}`} className="py-2">
+                      <li key={key} className="py-2">
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate text-sm text-gray-800">{f.name}</p>
@@ -273,12 +299,39 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
                               </span>
                             </p>
                             {(f.company || f.role) && <p className="text-xs text-gray-500">{[f.company, f.role].filter(Boolean).join(" · ")}</p>}
-                            {f.companyUnknown && <p className="mt-1 text-xs text-amber-700">어느 회사에 낸 글인지 알 수 없어, 다른 회사에 지원할 때 이 글의 회사 이름을 가리지 못합니다. 회사를 적고 다시 올려주세요.</p>}
+                            {f.companyUnknown && !edit && <p className="mt-1 text-xs text-amber-700">어느 회사에 낸 글인지 알 수 없어, 다른 회사에 지원할 때 이 글의 회사 이름을 가리지 못합니다. &apos;회사·직무&apos;에서 회사를 적어주세요.</p>}
                             {f.error && <p className="mt-1 text-xs text-red-600">{f.error}</p>}
                           </div>
-                          <button onClick={() => remove(f)} disabled={!!busy || progress.running}
-                            className="shrink-0 text-xs text-gray-400 hover:text-red-600 disabled:opacity-40">삭제</button>
+                          <div className="flex shrink-0 gap-3">
+                            <button onClick={() => setEditing(edit ? null : { key, company: f.company, role: f.role })} disabled={!!busy || progress.running}
+                              className="text-xs text-gray-400 hover:text-blue-600 disabled:opacity-40">회사·직무</button>
+                            <button onClick={() => remove(f)} disabled={!!busy || progress.running}
+                              className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-40">삭제</button>
+                          </div>
                         </div>
+                        {edit && (
+                          <form onSubmit={(e) => { e.preventDefault(); void saveMeta(f); }} className="mt-2 grid gap-2 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+                            <label className="text-xs text-gray-500">이 글을 낸 회사
+                              <input value={edit.company} onChange={(e) => setEditing({ ...edit, company: e.target.value })} autoFocus
+                                placeholder={f.entries.find((e) => e.company)?.company || "예: OO증권"}
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white p-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                            </label>
+                            <label className="text-xs text-gray-500">지원 직무
+                              <input value={edit.role} onChange={(e) => setEditing({ ...edit, role: e.target.value })} placeholder="예: 리스크관리"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white p-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                            </label>
+                            <p className="text-xs leading-5 text-gray-400 sm:col-span-2">
+                              {f.status === "ready" ? "다시 분석하지 않고 추출한 항목과 경험 카드의 출처에 바로 반영됩니다." : "다음 분석 때 반영됩니다."} 둘 다 비우면 적은 내용을 지웁니다.
+                            </p>
+                            <div className="flex gap-2 sm:col-span-2">
+                              <button type="submit" disabled={!!busy}
+                                className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">
+                                {busy === "meta" ? "저장 중..." : "저장"}
+                              </button>
+                              <button type="button" onClick={() => setEditing(null)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">취소</button>
+                            </div>
+                          </form>
+                        )}
                         {f.entries.length > 0 && (
                           <details className="mt-2 text-xs">
                             <summary className="cursor-pointer text-gray-500">
