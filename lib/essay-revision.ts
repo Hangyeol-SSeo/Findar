@@ -8,7 +8,13 @@ import { recordEditSignals } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
 import { logEssayEvent, logEssayEvents, newEssayThread, type EssayEventInput } from "./essay-log";
 import { locateInEssay } from "./essay-log-analysis";
-import { jasoseoStyleFindings } from "./vendor-checks";
+import { imNotAiChangeRate, imNotAiFindings, jasoseoStyleFindings } from "./vendor-checks";
+import { loadVendorSkills } from "./vendor-skills";
+import { anchorTextsFrom } from "./essay-plan";
+import {
+  assertRevisionMaterials, CONTEXT_AUDIT_UNAVAILABLE, ContextAuditError, contextIssueNotes, isExperienceSource, jobSourceText, runContextAudit,
+  type AddedMaterial, type ContextIssue,
+} from "./application-harness";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import {
   containsForbiddenName, extractNumbers, hasBanmalEnding, parseEssayRequest, parseModelJson, validateEssay, withVersion,
@@ -144,6 +150,9 @@ async function runRevision(seq: string, question: string, instruction: string, f
   const prepared = await prepare(seq, question, instruction);
   const { selection, current, baseText, request, context, model, skills } = prepared;
   const sources = [...prepared.sources, ...researchSources(current, findingIds)];
+  // 하네스: 이전 답변이 이미 쓴 경험(근거·고른 소재)은 그대로 쓸 수 있고, 새 경험은 anchor가 있어야 한다.
+  const priorIds = [...new Set([...current.evidence.map((e) => e.sourceId), ...(current.plan?.selectedMaterials.map((m) => m.sourceId) ?? [])].filter(isExperienceSource))];
+  const anchorTexts = anchorTextsFrom(sources, question, [instruction]);
   const prompt = `${WRITING_RULES}
 ${APPLICATION_ROLE_RULES}
 ${skills.review}
@@ -159,25 +168,50 @@ ${context.editPreferences}
 지금은 첨삭자다. 현재 답변을 기준으로 수정 요청과 관련된 부분만 고친다. 요청과 무관한 문장은 글자 하나 바꾸지 말고 그대로 둔다. 사용자의 문체와 어휘를 유지한다.
 새 사실은 수정 요청이나 사실 자료에 있을 때만 쓴다. research.* 자료는 웹에서 조사한 발췌이며, 사용하면 기관명·시점을 자료 그대로 쓰고 evidence에 인용한다. 요청이 자료에 없는 사실을 요구하면 status=needs_info로 두고 필요한 정보를 missingInfo에 질문으로 적는다.
 evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 원문 인용을 넣는다. 현재 답변에서 유지한 사실과 수치는 user.answer에서 연속된 원문 그대로 인용한다.
+[이전 답변이 쓴 경험 자료] ${JSON.stringify(priorIds)}
+위 목록에 없는 개인 경험 자료(card.*·resume.experience.*·profile.* 등)는 수정 요청이 그 경험을 필요로 할 때만 새로 쓰고, 그때는 addedMaterials에 그 경험이 답하는 수정 요청·문항·공고 업무의 원문 구절을 anchor로 댄다(코드가 원문 일치를 확인한다). card.*의 writtenFor가 다른 회사·직무면 그 회사·직무를 위한 해석·동기는 가져오지 않는다.
 순수 JSON 객체만 반환한다:
 {"status":"draft 또는 needs_info","intent":"문항 의도와 이번 수정 방향","answer":"수정한 전체 본문","changeSummary":["무엇을 왜 바꿨는지 한 문장씩"],
-"evidence":[{"sourceId":"자료 id","quote":"자료 text에서 정확히 연속된 원문 발췌","usedFor":"이 근거로 뒷받침한 주장"}],"missingInfo":[],"reviewNotes":["사용자가 확인할 점"]}`;
-  const check = (text: string) => {
+"evidence":[{"sourceId":"자료 id","quote":"자료 text에서 정확히 연속된 원문 발췌","usedFor":"이 근거로 뒷받침한 주장"}],"missingInfo":[],"reviewNotes":["사용자가 확인할 점"],
+"addedMaterials":[{"sourceId":"새로 쓴 경험 자료 id","anchor":{"source":"request|question|job","quote":"원문 구절 그대로"}}]}`;
+  type Checked = { value: Record<string, unknown>; essay: EssayAnswer; added: AddedMaterial[]; contextNotes: string[] };
+  // 사실 검증 → 새 경험의 근거 고정 → 독립 맥락 검증. 검증 실패는 한 번 고쳐 쓰게 하고, 맥락 지적이 고친 뒤에도 남으면
+  // 수정본은 남기되(사용자가 반영 여부를 고른다) 지적을 검토 메모 맨 앞에 둔다.
+  const check = async (text: string): Promise<Checked> => {
     const value = parseModelJson(text);
-    return { value, essay: validateEssay(value, request, sources, context.forbiddenNames, true) };
+    const essay = validateEssay(value, request, sources, context.forbiddenNames, true);
+    if (essay.status !== "draft") return { value, essay, added: [], contextNotes: [] };
+    const added = assertRevisionMaterials(essay.evidence, priorIds, value.addedMaterials, anchorTexts);
+    const issues = await runContextAudit({
+      company: context.company, role: selection.role, jobText: jobSourceText(sources), question, answer: essay.answer,
+      otherCompanies: context.otherCompanies, employers: context.employers, materialOrigins: [...new Set(essay.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
+    }, (p) => askModel(p, undefined, model));
+    if (issues?.length) throw new ContextAuditError<Checked>(issues, { value, essay, added, contextNotes: contextIssueNotes(issues) });
+    return { value, essay, added, contextNotes: issues === null ? [CONTEXT_AUDIT_UNAVAILABLE] : [] };
   };
   let raw = await askModel(prompt, undefined, model);
-  let result;
-  try { result = check(raw); }
+  let result: Checked;
+  try { result = await check(raw); }
   catch (error) {
     const reason = error instanceof Error ? error.message : "형식 오류";
     raw = await askModel(`${prompt}\n[검증 실패 결과]\n${raw}\n검증 실패: ${reason}\n지적된 문제를 해결한 최종 JSON만 반환하라.`, undefined, model);
-    result = check(raw);
+    try { result = await check(raw); }
+    catch (finalError) {
+      if (!(finalError instanceof ContextAuditError) || !finalError.answer) throw finalError;
+      result = finalError.answer as Checked;
+    }
   }
-  const { value, essay } = result;
+  const { value, essay, added, contextNotes } = result;
   if (essay.status === "draft" && essay.answer === baseText) throw new Error("수정할 부분을 찾지 못했습니다. 바꾸고 싶은 부분을 더 구체적으로 적어주세요.");
   assertApplicationRole(seq, selection.revision);
-  const externalStyle = essay.status === "draft" ? jasoseoStyleFindings(essay.answer).map((n) => `문체 점검(jasoseo): ${n}`) : [];
+  const externalStyle = essay.status === "draft" ? [
+    ...jasoseoStyleFindings(essay.answer).map((n) => `문체 점검(jasoseo): ${n}`),
+    ...imNotAiFindings(essay.answer).map((n) => `AI 문체 점검(im-not-ai): ${n}`),
+  ] : [];
+  // im-not-ai의 과윤문 기준(변경률 30% 경고). 고쳐쓰기는 요청한 부분만 고쳐야 하므로 많이 바뀌었으면 알린다.
+  const changeRate = essay.status === "draft" ? imNotAiChangeRate(baseText, essay.answer) : null;
+  if (changeRate !== null && changeRate > 0.3)
+    externalStyle.unshift(`변경률 ${Math.round(changeRate * 100)}%: 요청한 부분보다 많이 바뀌었을 수 있습니다. 바뀐 문장이 요청 범위 안인지 비교해 확인해주세요.`);
   const draft = updateEssayAnswer(seq, question, (answer) => {
     if (answer.answer !== baseText) throw new Error("첨삭하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
     if (essay.status === "needs_info")
@@ -185,7 +219,8 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
     return { ...answer, revisionNeedsInfo: undefined, pendingRevision: {
       instruction, baseText, answer: essay.answer, changeSummary: stringList(value.changeSummary),
       evidence: essay.evidence, createdAt: Date.now(), threadId,
-      reviewNotes: [...essay.reviewNotes, ...styleReviewNotes(essay.answer), ...externalStyle],
+      reviewNotes: [...contextNotes, ...essay.reviewNotes, ...styleReviewNotes(essay.answer), ...externalStyle,
+        ...added.map((m) => `새로 추가한 경험 확인: ${m.sourceId}를 “${m.anchor.quote.slice(0, 40)}”(${m.anchor.source === "request" ? "수정 요청" : m.anchor.source === "question" ? "문항" : "공고"})에 맞춰 새로 썼습니다.`)],
     } };
   });
   if (essay.status === "needs_info")
@@ -193,7 +228,7 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   else
     logEssayEvent({ seq, question, type: "revision_proposed", threadId, textBefore: baseText, textAfter: essay.answer, detail: {
       instruction, model, intent: essay.intent, changeSummary: stringList(value.changeSummary), reviewNotes: essay.reviewNotes,
-      evidenceSources: [...new Set(essay.evidence.map((e) => e.sourceId))],
+      evidenceSources: [...new Set(essay.evidence.map((e) => e.sourceId))], addedMaterials: added, contextNotes,
     } });
   return { draft, outcome: essay.status === "needs_info" ? "needs-info" : "pending-revision" };
 }
@@ -235,10 +270,12 @@ export async function reviewEssay(seq: string, question: string, focus: string):
 
 async function runReview(seq: string, question: string, focus: string, threadId: string): Promise<RevisionOutcome> {
   const { selection, current, baseText, context, sources, model, skills } = await prepare(seq, question, "");
-  const style = [...lintEssayStyle(baseText), ...jasoseoStyleFindings(baseText).map((n) => `jasoseo 문체 점검 ${n}`)];
+  const style = [...lintEssayStyle(baseText), ...jasoseoStyleFindings(baseText).map((n) => `jasoseo 문체 점검 ${n}`),
+    ...imNotAiFindings(baseText).map((n) => `im-not-ai AI 문체 점검: ${n}`)];
   const prompt = `${APPLICATION_ROLE_RULES}
 ${skills.review}
 ${STYLE_RULES}
+${loadVendorSkills().humanize}
 [지원 직무] ${selection.role}
 [문항과 조건] ${JSON.stringify({ question, maxChars: current.maxChars, countSpaces: current.countSpaces })}
 [중점적으로 봐줄 부분] ${focus || "글 전체"}
@@ -267,8 +304,14 @@ suggestions의 original은 답변에서 그대로 복사한 연속 구절(한 �
     raw = await askModel(`${prompt}\n[형식 오류 결과]\n${raw}\n오류: ${reason}\n형식을 바로잡은 JSON만 반환하라.`, undefined, model);
     value = parse(raw);
   }
+  // 하네스: 첨삭 받기도 현재 글을 작성자와 독립된 호출로 공고와 대조해, 다른 회사·직무 맥락이 섞였으면 보완할 점 맨 앞에 둔다.
+  const contextIssues: ContextIssue[] | null = await runContextAudit({
+    company: context.company, role: selection.role, jobText: jobSourceText(sources), question, answer: baseText,
+    otherCompanies: context.otherCompanies, employers: context.employers, materialOrigins: [...new Set(current.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
+  }, (p) => askModel(p, undefined, model));
   const feedback: EssayFeedback = {
-    focus, baseText, summary: value.summary as string, strengths: stringList(value.strengths), issues: stringList(value.issues),
+    focus, baseText, summary: value.summary as string, strengths: stringList(value.strengths),
+    issues: [...(contextIssues === null ? [CONTEXT_AUDIT_UNAVAILABLE] : contextIssueNotes(contextIssues)), ...stringList(value.issues)],
     suggestions: validSuggestions(value.suggestions, baseText, sources, context.forbiddenNames), createdAt: Date.now(), threadId,
   };
   assertApplicationRole(seq, selection.revision);

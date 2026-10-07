@@ -13,6 +13,7 @@ interface SourceFile {
   kind: Kind; name: string; size: number; uploadedAt: number;
   status: "not-analyzed" | "stale" | "failed" | "ready";
   entryCount: number; analyzedAt: number | null; error: string; entries: SourceEntry[];
+  company: string; role: string; companyUnknown: boolean;
 }
 interface SourceState {
   files: SourceFile[];
@@ -39,6 +40,8 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
   const [dragging, setDragging] = useState(false);
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteText, setPasteText] = useState("");
+  const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const wasRunning = useRef(false);
 
@@ -84,6 +87,8 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
     try {
       const form = new FormData();
       form.append("kind", kind);
+      form.append("company", company);
+      form.append("role", role);
       files.forEach((f) => form.append("files", f));
       const res = await fetch("/api/essay-sources", { method: "POST", body: form });
       const saved = apply(res, await res.json());
@@ -94,7 +99,7 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
       setBusy("");
       if (inputRef.current) inputRef.current.value = "";
     }
-  }, [kind, apply, showToast]);
+  }, [kind, company, role, apply, showToast]);
 
   async function savePaste() {
     setBusy("paste");
@@ -102,7 +107,7 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
     try {
       const res = await fetch("/api/essay-sources", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, title: pasteTitle, text: pasteText }),
+        body: JSON.stringify({ kind, title: pasteTitle, text: pasteText, company, role }),
       });
       if (apply(res, await res.json())) {
         setPasteTitle(""); setPasteText("");
@@ -165,6 +170,20 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
             {KIND_LABEL[k]}
           </button>
         ))}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="text-xs text-gray-500">이 글을 낸 회사
+          <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="예: OO증권"
+            className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+        </label>
+        <label className="text-xs text-gray-500">지원 직무
+          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="예: 리스크관리"
+            className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+        </label>
+        <p className="text-xs leading-5 text-gray-400 sm:col-span-2">
+          다음에 올리는 파일·붙여넣기에 적용됩니다. 적어 두면 다른 회사에 지원할 때 이 회사 이름과 맥락이 섞이지 않도록 코드가 막습니다.
+        </p>
       </div>
 
       <div
@@ -253,6 +272,8 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
                                 {status.label}{f.status === "ready" && ` · ${f.entryCount}개 항목`}
                               </span>
                             </p>
+                            {(f.company || f.role) && <p className="text-xs text-gray-500">{[f.company, f.role].filter(Boolean).join(" · ")}</p>}
+                            {f.companyUnknown && <p className="mt-1 text-xs text-amber-700">어느 회사에 낸 글인지 알 수 없어, 다른 회사에 지원할 때 이 글의 회사 이름을 가리지 못합니다. 회사를 적고 다시 올려주세요.</p>}
                             {f.error && <p className="mt-1 text-xs text-red-600">{f.error}</p>}
                           </div>
                           <button onClick={() => remove(f)} disabled={!!busy || progress.running}
