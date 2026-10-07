@@ -75,7 +75,8 @@ export default function SettingsPage() {
           번쩍이고 저장 안 한 입력도 사라진다. 모든 탭을 마운트해두고 hidden으로만 전환한다. */}
       <div hidden={tab !== "resume"}>
         <p className="text-gray-500 mb-4">
-          이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다.
+          이력서·포트폴리오 PDF를 올리면 AI 매칭, 이력 구성 평가, 자기소개서 작성에 사용됩니다. 자기소개서 작성에는 이력서의 경험 항목이
+          ‘과거 자소서·면접’ 탭의 경험 카드로 정리되어, 확인한 카드만 쓰입니다.
         </p>
         <ResumeUploadForm showToast={showToast} />
       </div>

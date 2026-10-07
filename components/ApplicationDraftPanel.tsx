@@ -47,6 +47,14 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
+  // 확인하지 않은 경험 카드는 작성에 쓰이지 않는다. 이력서까지 카드로 정리된 뒤에는 이를 모르면 경험이 빠진 답변이 나오므로 알린다.
+  const [cardGate, setCardGate] = useState<{ unconfirmed: number; coversProfile: boolean; stale: boolean } | null>(null);
+  useEffect(() => {
+    const abort = new AbortController();
+    fetch("/api/experience-cards", { cache: "no-store", signal: abort.signal }).then((r) => r.json()).then((s: { cards: { user_confirmed: boolean }[]; coversProfile: boolean; stale: boolean }) =>
+      setCardGate({ unconfirmed: s.cards.filter((c) => !c.user_confirmed).length, coversProfile: s.coversProfile, stale: s.stale })).catch(() => {});
+    return () => abort.abort();
+  }, [seq]);
   const nextRowId = useRef(1);
   const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
   // "이 문항 보완해서 다시 작성"으로 채운 입력란은 답변 목록보다 한참 위에 있어서, 렌더링 뒤 그 칸으로 이동시킨다.
@@ -373,6 +381,11 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       </div>
     </section>}
 
+    {workspace === "essay" && cardGate && (cardGate.unconfirmed > 0 || cardGate.stale) && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+      {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 자기소개서 작성에 쓰이지 않습니다{cardGate.coversProfile ? " (이력서 경험도 카드로 확인해야 쓰입니다)" : ""}. </>}
+      {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
+      <a href="/settings" className="underline">설정 → 과거 자소서·면접 → 경험 카드</a>에서 확인해주세요.
+    </p>}
     {workspace === "essay" && <><section className="space-y-3">
       <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
       {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
@@ -425,7 +438,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
                 {source?.links?.filter((link) => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}
               </div>;
             })}
-            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}</p>)}
+            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}{m.anchor && <span className="text-gray-400"> · {m.fit === "transferable" ? "간접 연결" : "직접 경험"} — “{m.anchor.quote}”({m.anchor.source === "job" ? "공고" : m.anchor.source === "question" ? "문항" : "요청"})</span>}</p>)}
             {!!answer.plan.coverage?.length && <div className="space-y-1">
               <p className="font-medium">요구별 소재 판정</p>
               {answer.plan.coverage.map((c, i) => <p key={i}>

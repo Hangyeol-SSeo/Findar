@@ -17,6 +17,10 @@ const cards = compile('lib/experience-cards.ts', (id) => ({
   './essay-contract': contract, './vendor-skills': vendor,
   './ai-model-settings': { getAIModelId: () => 'test-model' },
   './essay-bank': { getCachedEssayBank: () => ({ entries: [] }), getEssayBankProgress: () => ({ running: false }) },
+  './resume-inventory': { ensureResumeInventory: async () => null, getCachedResumeInventory: () => null },
+  './resume-files': { listResumePdfs: () => [] },
+  './applicant-profile': { readApplicantProfile: () => ({}) },
+  './resume-tailoring-contract': { buildApplicantItems: () => [] },
   '@anthropic-ai/claude-agent-sdk': { query: () => { throw new Error('no AI in tests'); } },
 }[id] ?? require(id)));
 const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
@@ -45,6 +49,20 @@ same([dup[0].questionA, dup[0].questionB], ['지원 동기', '갈등 경험']);
 assert.equal(checks.duplicateSentences([{ question: 'a', answer: 'x' }]).length, 0);
 same(checks.parseStyleCheck('문항1: 금지 ❌ 1건\n  [번역투] …에 의해…\n  [범위] 문장 길이\n\n금지 1건'), ['[번역투] …에 의해…', '[범위] 문장 길이']);
 
+// 2-1) im-not-ai(한국어 AI 문체): 규칙 원문 일부와 원본 측정 스크립트. 자소서와 충돌하는 E 범주(장문 만들기)는 넣지 않는다.
+assert.ok(skills.humanize.includes('Do-NOT') && skills.humanize.includes('C-8') && skills.humanize.includes('서법 보존'));
+assert.ok(!skills.humanize.includes('**E-1**') && !skills.humanize.includes('build_quick_rules.py가'), 'sentence-length rules and build comments stay out');
+const ai = checks.imNotAiFindings('리스크관리는 단순한 숫자가 아니라 판단입니다. 이는 실적이 아니라 구조의 문제입니다. 결론적으로 기준이 필요합니다. 따라서 분석이 중요합니다. 시장에서의 위험을 봅니다.');
+assert.ok(ai.some((n) => n.includes('C-8')), `antithesis chain must be reported: ${ai}`);
+assert.ok(ai.some((n) => n.startsWith('결론 전환 표현 반복')), 'conclusion pivots come with evidence spans');
+assert.ok(ai.some((n) => n.includes('A-19')));
+assert.equal(checks.imNotAiFindings('').length, 0);
+same(checks.parseImNotAiMetrics({ risk_band: 'low', evidence: { conclusion_pivots: ['따라서'] }, v2_metrics: { antithesis_count: 1, da_streak_rate: 9 } }), [], 'single hits and 다-streaks (always high in 합쇼체) are not reported');
+assert.ok(checks.parseImNotAiMetrics({ risk_band: 'high', risk_score: 7 })[0].startsWith('AI 문체 위험도 높음'));
+const rate = checks.imNotAiChangeRate('저는 위험을 분석했습니다.', '저는 위험을 분석했습니다.');
+assert.equal(rate, 0);
+assert.ok(checks.imNotAiChangeRate('저는 위험을 분석했습니다.', '완전히 다른 문장으로 바꿨습니다.') > 0.5);
+
 // 3) 경험 카드 검증: 근거 구절은 원문에 있어야 하고, 원문에 없는 수치가 든 항목은 뺀다.
 const entries = [
   { id: 'e1', source: 'imported', kind: 'interview', sourceFile: 'interview/a.txt', company: '', question: 'Q1', answer: '동아리에서 인터뷰 8건 중 5건을 직접 진행했습니다. 팀은 발표 평가 2위를 했습니다.', createdAt: 1 },
@@ -55,7 +73,7 @@ const { cards: valid, rejected } = cards.validateCards({ cards: [
     evidence: [{ entryId: 'e1', quote: '인터뷰 8건 중 5건을 직접 진행했습니다.' }, { entryId: 'e1', quote: '팀은 발표 평가 2위를 했습니다.' }], precision: { interview_count: 'exact', bogus: 'maybe' } },
   { event_id: 'club', context: '같은 동아리', personal_actions: ['질문지 초안 작성'], evidence: [{ entryId: 'e2', quote: '같은 동아리에서 질문지 초안을 썼습니다.' }] },
   { event_id: 'other', context: '지어낸 경험', personal_actions: ['없는 일'], evidence: [{ entryId: 'e1', quote: '원문에 없는 문장' }] },
-] }, entries);
+] }, cards.essaySources(entries));
 assert.equal(valid.length, 2);
 assert.equal(rejected, 1, 'a card whose quotes are not in the source must be rejected');
 same(valid.map((c) => [c.id, c.event_id]), [['EXP-01', 'EVT-01'], ['EXP-02', 'EVT-01']], 'same event keeps one EVT id');
@@ -71,19 +89,19 @@ assert.equal(cards.cardContentHash({ ...valid[0], user_confirmed: true, approval
 assert.notEqual(cards.cardContentHash({ ...valid[0], personal_actions: ['다른 행동'] }), hash);
 const content = cards.cardSourceContent(valid[0]);
 assert.equal('user_confirmed' in content || 'approval' in content || 'droppedItems' in content, false);
-assert.equal(content.sourceQuotes[0].kind, '과거 면접 답변');
+assert.equal(content.sourceQuotes[0].kind, '면접 대본');
 
 // 4) 소재 배치: 소재는 SUFFICIENT/WEAKLY_SUPPORTED 판정의 근거여야 하고, 판정 상태는 정해진 값만 허용한다.
-const sources = [{ id: 'card.EXP-01', text: JSON.stringify(content) }, { id: 'company.overview', text: '회사 소개' }];
+const sources = [{ id: 'card.EXP-01', text: JSON.stringify(content) }, { id: 'company.overview', text: '회사 소개' }, { id: 'job', text: JSON.stringify({ company: '테스트증권', title: '리스크관리', targetRole: '리스크관리', rawContent: '시장리스크 한도 관리와 리스크 보고서 작성', qualifications: ['데이터 분석 경험'] }) }];
 const basePlan = { question: 'Q', personalEvidence: 'required', questionTypes: ['experience'] };
 const quote = '인터뷰 8건 중 5건 직접 진행';
-const ok = plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '직접 행동', status: 'SUFFICIENT', sourceIds: ['card.EXP-01'], rationale: '직접 진행한 인터뷰가 있습니다.' }], selectedMaterials: [{ sourceId: 'card.EXP-01', quote, reason: '직접 행동' }], missingInfo: [] }] }, [basePlan], sources);
+const ok = plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '직접 행동', mandatory: true, status: 'SUFFICIENT', sourceIds: ['card.EXP-01'], rationale: '직접 진행한 인터뷰가 있습니다.' }], selectedMaterials: [{ sourceId: 'card.EXP-01', quote, reason: '직접 행동', anchor: { source: 'job', quote: '시장리스크 한도 관리' }, fit: 'transferable' }], missingInfo: [] }] }, [basePlan], sources);
 assert.equal(ok[0].coverage[0].status, 'SUFFICIENT');
-assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '리더십', status: 'MISSING', sourceIds: [], rationale: '리더 경험이 없습니다.' }], selectedMaterials: [{ sourceId: 'card.EXP-01', quote, reason: '그냥 넣음' }], missingInfo: [] }] }, [basePlan], sources), /어떤 요구를 충족하는지/, 'a material tied to no requirement must be rejected');
-assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: 'x', status: 'GOOD', sourceIds: [], rationale: 'y' }], selectedMaterials: [], missingInfo: ['경험을 알려주세요'] }] }, [basePlan], sources), /상태는/);
+assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '리더십', mandatory: true, status: 'MISSING', sourceIds: [], rationale: '리더 경험이 없습니다.' }], selectedMaterials: [{ sourceId: 'card.EXP-01', quote, reason: '그냥 넣음', anchor: { source: 'job', quote: '시장리스크 한도 관리' }, fit: 'direct' }], missingInfo: [] }] }, [basePlan], sources), /어떤 요구를 충족하는지/, 'a material tied to no requirement must be rejected');
+assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: 'x', mandatory: true, status: 'GOOD', sourceIds: [], rationale: 'y' }], selectedMaterials: [], missingInfo: ['경험을 알려주세요'] }] }, [basePlan], sources), /상태는/);
 assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', selectedMaterials: [], missingInfo: ['경험을 알려주세요'] }] }, [basePlan], sources), /coverage/);
-assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: 'x', status: 'SUFFICIENT', sourceIds: ['company.overview'], rationale: 'y' }], selectedMaterials: [], missingInfo: ['q'] }] }, [basePlan], sources), /개인 자료/);
-const none = plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '실패 경험', status: 'NO_ACTUAL_EXPERIENCE', sourceIds: [], rationale: '자료에 실패 경험이 없습니다.' }], selectedMaterials: [], missingInfo: ['실제 실패 경험을 알려주세요.'] }] }, [basePlan], sources);
+assert.throws(() => plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: 'x', mandatory: true, status: 'SUFFICIENT', sourceIds: ['company.overview'], rationale: 'y' }], selectedMaterials: [], missingInfo: ['q'] }] }, [basePlan], sources), /개인 자료/);
+const none = plan.applyMaterials({ materials: [{ question: 'Q', coverage: [{ requirement: '실패 경험', mandatory: true, status: 'NO_ACTUAL_EXPERIENCE', sourceIds: [], rationale: '자료에 실패 경험이 없습니다.' }], selectedMaterials: [], missingInfo: ['실제 실패 경험을 알려주세요.'] }] }, [basePlan], sources);
 assert.equal(none[0].selectedMaterials.length, 0, 'no fitting material → nothing forced in');
 
-console.log('PASS vendor section extraction (fence-aware), original jasoseo style_check / cover-letter-team dedup_check run as-is, card quote/number grounding and event grouping, confirmation hash, coverage-gated material selection');
+console.log('PASS vendor section extraction (fence-aware), original jasoseo style_check / cover-letter-team dedup_check / im-not-ai metrics run as-is, card quote/number grounding and event grouping, confirmation hash, coverage-gated material selection');

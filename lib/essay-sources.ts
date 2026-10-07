@@ -33,6 +33,41 @@ export interface EssaySourceFile {
 export const isEssaySourceKind = (value: unknown): value is EssaySourceKind => ESSAY_SOURCE_KINDS.includes(value as EssaySourceKind);
 export const essaySourceKey = (file: Pick<EssaySourceFile, "kind" | "name">) => `${file.kind}/${file.name}`;
 
+// 업로드할 때 사용자가 적은 "이 글을 낸 회사·직무". AI 추출보다 우선하는 출처 정보라, 다른 회사 이름 차단(application-harness)이
+// 모델이 회사명을 놓쳐도 동작한다. data/essay-sources/meta.json에 파일 키별로 둔다.
+export interface EssaySourceMeta { company: string; role: string }
+const META_PATH = join(ROOT, "meta.json");
+
+function readMetaStore(): Record<string, EssaySourceMeta> {
+  if (!existsSync(META_PATH)) return {};
+  try { return JSON.parse(readFileSync(META_PATH, "utf8")); } catch { return {}; }
+}
+
+function writeMetaStore(store: Record<string, EssaySourceMeta>): void {
+  mkdirSync(ROOT, { recursive: true });
+  const tmp = `${META_PATH}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, META_PATH);
+}
+
+export function getEssaySourceMeta(file: Pick<EssaySourceFile, "kind" | "name">): EssaySourceMeta | null {
+  return readMetaStore()[essaySourceKey(file)] ?? null;
+}
+
+export function parseEssaySourceMeta(company: unknown, role: unknown): EssaySourceMeta | null {
+  const clean = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, 100) : "");
+  const meta = { company: clean(company), role: clean(role) };
+  return meta.company || meta.role ? meta : null;
+}
+
+// 값이 있으면 기록하고, 다시 올리면서 비워 두면 이전 기록을 유지한다.
+function setMeta(kind: EssaySourceKind, name: string, meta: EssaySourceMeta | null): void {
+  if (!meta) return;
+  const store = readMetaStore();
+  store[essaySourceKey({ kind, name })] = meta;
+  writeMetaStore(store);
+}
+
 function migrateLegacyCoverLetters(): void {
   if (!existsSync(LEGACY_COVER_LETTER_DIR)) return;
   try {
@@ -63,10 +98,12 @@ export function listEssaySources(kind?: EssaySourceKind): EssaySourceFile[] {
   });
 }
 
-// 파일 이름 + 내용 기준 — 같은 파일을 다시 올려도 재분석하지 않는다.
+// 파일 이름 + 내용 + 사용자가 적은 회사·직무 기준 — 같은 파일을 다시 올려도 재분석하지 않고, 회사·직무를 고치면 다시 분석한다.
 export function hashEssaySource(file: EssaySourceFile): string {
   const content = createHash("sha256").update(readFileSync(file.path)).digest("hex");
-  return createHash("sha256").update(`${file.kind}\0${file.name}\0${content}`).digest("hex");
+  const meta = getEssaySourceMeta(file);
+  // 회사·직무를 적지 않은 파일은 이전과 같은 해시를 유지해, 기능 추가만으로 기존 파일이 다시 분석되지 않게 한다.
+  return createHash("sha256").update(`${file.kind}\0${file.name}\0${content}${meta ? `\0${JSON.stringify(meta)}` : ""}`).digest("hex");
 }
 
 // 경로 구분자·제어문자를 지우고 지정한 확장자를 붙인다. 순수 함수라 테스트에서 그대로 검증한다.
@@ -137,7 +174,13 @@ function writeSource(kind: EssaySourceKind, name: string, data: Uint8Array | str
 }
 
 // 같은 이름이면 교체한다. DOCX·HWPX는 텍스트로 바꿔 "<이름>.txt"로 저장한다.
-export function saveEssaySourceFile(kind: EssaySourceKind, rawName: string, bytes: Uint8Array): string {
+export function saveEssaySourceFile(kind: EssaySourceKind, rawName: string, bytes: Uint8Array, meta: EssaySourceMeta | null = null): string {
+  const name = writeSourceFile(kind, rawName, bytes);
+  setMeta(kind, name, meta);
+  return name;
+}
+
+function writeSourceFile(kind: EssaySourceKind, rawName: string, bytes: Uint8Array): string {
   const extension = extname(rawName).toLowerCase();
   if (bytes.length > MAX_ESSAY_SOURCE_BYTES) throw new Error(`${rawName}: 파일당 20MB까지 올릴 수 있습니다.`);
   if (extension === ".hwp") throw new Error(`${rawName}: HWP는 읽을 수 없습니다. 한글에서 PDF나 HWPX로 저장해 올려주세요.`);
@@ -162,10 +205,12 @@ export function saveEssaySourceFile(kind: EssaySourceKind, rawName: string, byte
 }
 
 // 메모장·노션 등에 적어둔 면접 대본을 그대로 붙여넣는 경우.
-export function saveEssaySourceText(kind: EssaySourceKind, title: string, text: string): string {
+export function saveEssaySourceText(kind: EssaySourceKind, title: string, text: string, meta: EssaySourceMeta | null = null): string {
   if (!text.trim()) throw new Error("붙여넣을 내용을 입력해주세요.");
   if (text.length > MAX_PASTED_CHARS) throw new Error(`붙여넣기는 ${MAX_PASTED_CHARS.toLocaleString()}자까지 가능합니다.`);
-  return writeSource(kind, sanitizeEssaySourceName(title.trim() || `붙여넣기 ${new Date().toISOString().slice(0, 10)}`, ".txt"), text.trim());
+  const name = writeSource(kind, sanitizeEssaySourceName(title.trim() || `붙여넣기 ${new Date().toISOString().slice(0, 10)}`, ".txt"), text.trim());
+  setMeta(kind, name, meta);
+  return name;
 }
 
 export function deleteEssaySource(kind: EssaySourceKind, name: string): boolean {
@@ -173,5 +218,7 @@ export function deleteEssaySource(kind: EssaySourceKind, name: string): boolean 
   const target = listEssaySources(kind).find((f) => f.name === basename(name) && f.name === name);
   if (!target) return false;
   unlinkSync(target.path);
+  const store = readMetaStore();
+  if (store[essaySourceKey(target)]) { delete store[essaySourceKey(target)]; writeMetaStore(store); }
   return true;
 }
