@@ -82,6 +82,7 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
   assert.ok(prompts.at(-1).includes('독립된 검토자'));
   assert.ok(direct.reviewNotes.some(n => n.includes('구상에서 고른 회사 근거')));
   assert.equal(queued.length, 0);
+  assert.equal(direct.status, 'draft');
   const incomplete = { ...prepared, plans: prepared.plans.map(p => ({ ...p, missingInfo: ['본인이 선택한 행동을 알려주세요.'] })) };
   const beforeMissing = prompts.length;
   const missing = await generateCustomEssayAnswer('test', requests[0], undefined, incomplete);
