@@ -8,7 +8,7 @@ const answer = { status: 'draft', intent: plan.intent, answer: '판단의 이유
 const stubs = {
   './application-role': { requireApplicationRole: () => ({ role: '리스크관리', revision: 'role-v1' }), assertApplicationRole: () => {}, APPLICATION_ROLE_RULES: '지원 직무를 기준으로 작성' },
   './ai-model-settings': { getAIModelId: () => 'fixture-model' },
-  '@anthropic-ai/claude-agent-sdk': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.' }], missingInfo: [] }] } : answer) }; } },
+  '@anthropic-ai/claude-agent-sdk': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.' }], missingInfo: [] }] } : answer) }; } },
   './db': { getJobBySeq: () => ({ company: '예시 회사', title: '분석', positions: ['분석'], qualifications: ['판단력'] }), getCompanySections: () => [{ sectionType: 'overview', content: '검증 절차를 중시합니다.', sources: [{ title: '공식 자료', url: 'https://example.com/research' }], generatedAt: 1234, status: 'ok' }], getApplicationDraftRow: () => null },
   './profile': { getCachedProfile: () => null },
   './applicant-profile': { readApplicantProfile: () => ({ education: [], projects: [], activities: [], awards: [], workExperiences: [] }) },
@@ -16,6 +16,8 @@ const stubs = {
   './essay-bank': { ensureEssayBank: async () => ({ entries: [] }), summarizeEditPreferences: () => '' },
   './company-normalize': { normalizeCompanyName: x => x },
   './essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
+  './experience-cards': { getConfirmedCards: () => [], cardSourceContent: (c) => c },
+  './vendor-checks': { jasoseoStyleFindings: () => [], duplicateSentences: () => [] },
 };
 function compile(file, req) {
   const mod = { exports: {} };
@@ -23,7 +25,8 @@ function compile(file, req) {
   new Function('require', 'module', 'exports', code)(req, mod, mod.exports);
   return mod.exports;
 }
-stubs['./application-skills'] = compile('lib/application-skills.ts', require);
+stubs['./vendor-skills'] = compile('lib/vendor-skills.ts', require);
+stubs['./application-skills'] = compile('lib/application-skills.ts', id => stubs[id] || require(id));
 stubs['./essay-plan'] = compile('lib/essay-plan.ts', require);
 stubs['./essay-contract'] = compile('lib/essay-contract.ts', require);
 stubs['./essay-diff'] = compile('lib/essay-diff.ts', require);
@@ -54,8 +57,8 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
   assert.equal(result.answer, answer.answer);
   const secondPlan = { ...plan, question: '지원동기', researchMode: 'direct' };
   queued = [{ plans: [secondPlan, plan] }, { materials: [
-    { question: plan.question, selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '변화 과정입니다.' }], missingInfo: [] },
-    { question: secondPlan.question, selectedMaterials: [{ sourceId: 'user.current.1', quote: '업무 기준을 비교했습니다.', reason: '지원 기준입니다.' }], missingInfo: [] },
+    { question: plan.question, coverage: [{ requirement: '핵심 경험', status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '변화 과정입니다.' }], missingInfo: [] },
+    { question: secondPlan.question, coverage: [{ requirement: '핵심 경험', status: 'SUFFICIENT', sourceIds: ['user.current.1'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.1', quote: '업무 기준을 비교했습니다.', reason: '지원 기준입니다.' }], missingInfo: [] },
   ] }];
   const requests = [
     { question: plan.question, countSpaces: true, guidance: answer.answer },
@@ -82,13 +85,13 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
     const required = types.includes('experience') || types.includes('motivation');
     const candidate = { ...plan, questionTypes: types, personalEvidence: required ? 'required' : 'optional', researchMode: 'none', research: [], notes: ['회사 사실을 직접 쓰지 않습니다.'] };
     const [validated] = validators.validatePlans({ plans: [candidate] }, [plan.question], [], 'test');
-    const empty = { materials: [{ question: plan.question, selectedMaterials: [], missingInfo: [] }] };
+    const empty = { materials: [{ question: plan.question, coverage: [{ requirement: '견해 논증', status: 'NOT_APPLICABLE', sourceIds: [], rationale: '경험이 필요 없는 문항입니다.' }], selectedMaterials: [], missingInfo: [] }] };
     if (required) assert.throws(() => validators.applyMaterials(empty, [validated], []), /경험/);
     else assert.equal(validators.applyMaterials(empty, [validated], [])[0].missingInfo.length, 0);
   }
   const opinion = { ...plan, question: '금융 기술 혁신에 대한 견해', questionTypes: ['opinion'], personalEvidence: 'optional', researchMode: 'none', research: [], notes: ['구체적 최신 사실 없이 논증합니다.'] };
   const reasoning = { ...answer, evidence: [], answer: '자동화 이후에도 판단의 책임을 명확히 해야 한다고 생각합니다.' };
-  queued = [{ plans: [opinion] }, { materials: [{ question: opinion.question, selectedMaterials: [], missingInfo: [] }] }, reasoning, reasoning, { verdict: 'pass', issues: ['조건부 분석이므로 허용됩니다.'], suggestions: ['다른 관점과의 비교도 검토할 수 있습니다.'] }];
+  queued = [{ plans: [opinion] }, { materials: [{ question: opinion.question, coverage: [{ requirement: '견해 논증', status: 'NOT_APPLICABLE', sourceIds: [], rationale: '경험이 필요 없는 문항입니다.' }], selectedMaterials: [], missingInfo: [] }] }, reasoning, reasoning, { verdict: 'pass', issues: ['조건부 분석이므로 허용됩니다.'], suggestions: ['다른 관점과의 비교도 검토할 수 있습니다.'] }];
   const opinionAnswer = await generateCustomEssayAnswer('test', { question: opinion.question, countSpaces: true, guidance: '' });
   assert.equal(opinionAnswer.status, 'draft');
   assert.ok(prompts.at(-1).includes('독립된 엄격한 사실·논증 검토자'));
@@ -97,7 +100,7 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
   assert.ok(opinionAnswer.reviewNotes.includes('다른 관점과의 비교도 검토할 수 있습니다.'));
   assert.equal(queued.length, 0);
   queued = [reasoning, reasoning, { verdict: 'revise', issues: ['근거 없이 현황을 단정했습니다.'] }, reasoning, { verdict: 'revise', issues: ['수정 후에도 근거가 없습니다.'] }];
-  const opinionBatch = { ...prepared, plans: [{ ...opinion, selectedMaterials: [], missingInfo: [] }], contexts: [prepared.contexts[0]] };
+  const opinionBatch = { ...prepared, plans: [{ ...opinion, coverage: [{ requirement: '견해 논증', status: 'NOT_APPLICABLE', sourceIds: [], rationale: '경험이 필요 없는 문항입니다.' }], selectedMaterials: [], missingInfo: [] }], contexts: [prepared.contexts[0]] };
   const ungrounded = await generateCustomEssayAnswer('test', { question: opinion.question, countSpaces: true, guidance: '' }, undefined, opinionBatch);
   assert.equal(ungrounded.status, 'needs_info');
   assert.equal(ungrounded.answer, '');

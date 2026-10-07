@@ -6,6 +6,7 @@ import ApplicantProfileForm from "@/components/ApplicantProfileForm";
 import NarrativeProfileForm from "@/components/NarrativeProfileForm";
 import ResumeUploadForm from "@/components/ResumeUploadForm";
 import EssaySourceUploadForm from "@/components/EssaySourceUploadForm";
+import ExperienceCardList from "@/components/ExperienceCardList";
 import AIModelSettingsForm from "@/components/AIModelSettingsForm";
 import Toast, { useToast } from "@/components/Toast";
 
@@ -83,6 +84,7 @@ export default function SettingsPage() {
           예전에 쓴 자기소개서와 면접 대본을 올리면 문항·답변을 원문 그대로 정리해 두고, 자기소개서를 쓸 때 실제 경험과 표현의 참고 자료로 씁니다.
         </p>
         <EssaySourceUploadForm showToast={showToast} />
+        <ExperienceCardList showToast={showToast} />
       </div>
       <div hidden={tab !== "matching"}>
         <p className="text-gray-500 mb-6">

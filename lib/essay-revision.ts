@@ -8,6 +8,7 @@ import { recordEditSignals } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
 import { logEssayEvent, logEssayEvents, newEssayThread, type EssayEventInput } from "./essay-log";
 import { locateInEssay } from "./essay-log-analysis";
+import { jasoseoStyleFindings } from "./vendor-checks";
 import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import {
   containsForbiddenName, extractNumbers, hasBanmalEnding, parseEssayRequest, parseModelJson, validateEssay, withVersion,
@@ -176,13 +177,15 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   const { value, essay } = result;
   if (essay.status === "draft" && essay.answer === baseText) throw new Error("수정할 부분을 찾지 못했습니다. 바꾸고 싶은 부분을 더 구체적으로 적어주세요.");
   assertApplicationRole(seq, selection.revision);
+  const externalStyle = essay.status === "draft" ? jasoseoStyleFindings(essay.answer).map((n) => `문체 점검(jasoseo): ${n}`) : [];
   const draft = updateEssayAnswer(seq, question, (answer) => {
     if (answer.answer !== baseText) throw new Error("첨삭하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
     if (essay.status === "needs_info")
       return { ...answer, revisionNeedsInfo: { instruction, questions: essay.missingInfo, createdAt: Date.now(), threadId } };
     return { ...answer, revisionNeedsInfo: undefined, pendingRevision: {
       instruction, baseText, answer: essay.answer, changeSummary: stringList(value.changeSummary),
-      evidence: essay.evidence, reviewNotes: [...essay.reviewNotes, ...styleReviewNotes(essay.answer)], createdAt: Date.now(), threadId,
+      evidence: essay.evidence, createdAt: Date.now(), threadId,
+      reviewNotes: [...essay.reviewNotes, ...styleReviewNotes(essay.answer), ...externalStyle],
     } };
   });
   if (essay.status === "needs_info")
@@ -232,7 +235,7 @@ export async function reviewEssay(seq: string, question: string, focus: string):
 
 async function runReview(seq: string, question: string, focus: string, threadId: string): Promise<RevisionOutcome> {
   const { selection, current, baseText, context, sources, model, skills } = await prepare(seq, question, "");
-  const style = lintEssayStyle(baseText);
+  const style = [...lintEssayStyle(baseText), ...jasoseoStyleFindings(baseText).map((n) => `jasoseo 문체 점검 ${n}`)];
   const prompt = `${APPLICATION_ROLE_RULES}
 ${skills.review}
 ${STYLE_RULES}

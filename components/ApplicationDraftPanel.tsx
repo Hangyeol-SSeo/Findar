@@ -27,6 +27,16 @@ function newRow(id: string): QuestionRow {
   return { id, question: "", maxChars: "", countSpaces: true, guidance: "", freeform: false };
 }
 
+// 소재 배치 단계의 요구별 판정(cover-letter-team 갭 상태). 맞는 소재가 없으면 "소재 없음"으로 남고 억지로 채우지 않는다.
+const COVERAGE_LABEL: Record<string, string> = {
+  SUFFICIENT: "충분", WEAKLY_SUPPORTED: "근거 약함", MISSING: "소재 없음", NO_ACTUAL_EXPERIENCE: "경험 없음",
+  CONTRADICTORY: "모순", NOT_APPLICABLE: "해당 없음", UNKNOWN: "미확인",
+};
+const COVERAGE_STYLE: Record<string, string> = {
+  SUFFICIENT: "bg-emerald-100 text-emerald-800", WEAKLY_SUPPORTED: "bg-amber-100 text-amber-800",
+  MISSING: "bg-red-100 text-red-700", NO_ACTUAL_EXPERIENCE: "bg-red-100 text-red-700", CONTRADICTORY: "bg-red-100 text-red-700",
+};
+
 export default function ApplicationDraftPanel({ seq, companyName, roleRevision }: { seq: string; companyName: string; roleRevision?: string | null }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
@@ -416,6 +426,13 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
               </div>;
             })}
             {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}</p>)}
+            {!!answer.plan.coverage?.length && <div className="space-y-1">
+              <p className="font-medium">요구별 소재 판정</p>
+              {answer.plan.coverage.map((c, i) => <p key={i}>
+                <span className={`mr-1 rounded px-1 ${COVERAGE_STYLE[c.status] ?? "bg-gray-100 text-gray-600"}`}>{COVERAGE_LABEL[c.status] ?? c.status}</span>
+                {c.requirement}{c.sourceIds.length ? ` (${c.sourceIds.join(", ")})` : ""} — {c.rationale}
+              </p>)}
+            </div>}
             {answer.plan.notes.map((note, i) => <p key={i}>{note}</p>)}
             <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
           </div>

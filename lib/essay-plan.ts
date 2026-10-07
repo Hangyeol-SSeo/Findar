@@ -1,12 +1,18 @@
 import type { EssaySource } from "./essay-contract";
 export interface PlanCitation { sourceId: string; quote: string; purpose: string; paragraph: number }
 export interface SelectedMaterial { sourceId: string; quote: string; reason: string }
+// 문항 요구와 근거의 대응(cover-letter-team evidence-planner·intake-and-gaps의 갭 상태). 소재는 반드시 어떤 요구를
+// 충족하는지 밝혀야 선택되고, 맞는 소재가 없으면 억지로 채우지 않고 그 상태를 그대로 기록한다.
+export const COVERAGE_STATUSES = ["SUFFICIENT", "WEAKLY_SUPPORTED", "MISSING", "NO_ACTUAL_EXPERIENCE", "CONTRADICTORY", "NOT_APPLICABLE", "UNKNOWN"] as const;
+export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
+export interface MaterialCoverage { requirement: string; status: CoverageStatus; sourceIds: string[]; rationale: string }
 export interface EssayPlan {
   questionTypes: string[]; personalEvidence: "required" | "optional";
   question: string; intent: string; message: string; outline: string[]; materialCriteria: string[];
   researchMode: "direct" | "perspective" | "none";
   research: PlanCitation[]; notes: string[];
   selectedMaterials: SelectedMaterial[]; missingInfo: string[]; skillVersion: string;
+  coverage?: MaterialCoverage[]; materialNotes?: string[];
 }
 export function planStrings(value: unknown): string[] {
   if (!Array.isArray(value) || !value.every((s) => typeof s === "string" && s.trim())) throw new Error("작성 구상의 항목이 올바르지 않습니다.");
@@ -55,6 +61,19 @@ export function applyMaterials(value: Record<string, unknown>, plans: EssayPlan[
     });
     const missingInfo = planStrings(rows[0].missingInfo);
     if (plan.personalEvidence === "required" && !selectedMaterials.length && !missingInfo.length) throw new Error("적합한 경험 또는 보완 질문이 필요합니다.");
-    return { ...plan, selectedMaterials, missingInfo };
+    const personalIds = new Set(sources.filter((s) => s.id !== "job" && !s.id.startsWith("company.")).map((s) => s.id));
+    if (!Array.isArray(rows[0].coverage) || !rows[0].coverage.length) throw new Error(`문항 “${plan.question}”의 요구별 근거 판정(coverage)이 없습니다.`);
+    const coverage: MaterialCoverage[] = rows[0].coverage.map((c: MaterialCoverage) => {
+      if (!COVERAGE_STATUSES.includes(c?.status)) throw new Error(`근거 판정 상태는 ${COVERAGE_STATUSES.join(", ")} 중 하나여야 합니다.`);
+      const sourceIds = Array.isArray(c.sourceIds) ? c.sourceIds.filter((id): id is string => typeof id === "string") : [];
+      if (sourceIds.some((id) => !personalIds.has(id))) throw new Error("근거 판정의 sourceIds는 제공된 개인 자료 id여야 합니다.");
+      if ((c.status === "SUFFICIENT" || c.status === "WEAKLY_SUPPORTED") && !sourceIds.length) throw new Error(`${c.status} 판정에는 근거 자료 id가 필요합니다.`);
+      return { requirement: field(c.requirement), status: c.status, sourceIds, rationale: field(c.rationale) };
+    });
+    // 어느 요구에도 쓰이지 않는 소재는 고르지 않는다 — "자료에 있다"는 이유만으로 끼워 넣는 것을 막는다.
+    const covering = new Set(coverage.filter((c) => c.status === "SUFFICIENT" || c.status === "WEAKLY_SUPPORTED").flatMap((c) => c.sourceIds));
+    const orphan = selectedMaterials.filter((m) => !covering.has(m.sourceId));
+    if (orphan.length) throw new Error(`문항 “${plan.question}”: 선정한 소재 ${orphan.map((m) => m.sourceId).join(", ")}가 어떤 요구를 충족하는지 coverage에 없습니다. 요구와 연결되지 않는 소재는 빼세요.`);
+    return { ...plan, selectedMaterials, missingInfo, coverage };
   });
 }
