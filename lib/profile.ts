@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
@@ -32,7 +32,7 @@ export interface Profile {
   // 비개발/비IT 금융 직군(리스크관리, 퀀트 등)에도 적용 가능한 전이 가능 강점.
   // 기존 profile.json 캐시엔 없을 수 있으므로 optional — 소비하는 쪽에서 ?? [] 처리.
   transferableStrengths?: string[];
-  // 이력서로는 추론 불가능한, 사용자가 /settings에서 직접 쓰는 지원 의도/방향.
+  // 이력서로는 추론 불가능한, 사용자가 /profile#direction에서 직접 쓰는 지원 의도/방향.
   // 이력서 재추출과 무관하게 매번 최신 값을 병합하므로 optional.
   careerGoals?: string;
 }
@@ -98,7 +98,7 @@ function migrateLegacyResumeDir(): void {
 migrateLegacyResumeDir();
 
 // careerGoals는 이력서 추출(sourcesHash)과 무관한 별도 저장소에 둔다 — 사용자가
-// /settings에서 언제든 바꿀 수 있어야 하고, 그때마다 이력서를 재분석할 필요는 없으므로.
+// /profile#direction에서 언제든 바꿀 수 있어야 하고, 그때마다 이력서를 재분석할 필요는 없으므로.
 export function readCareerGoals(): string {
   if (!existsSync(OVERRIDES_PATH)) return "";
   try {
@@ -150,6 +150,7 @@ ${fileList}
   let resultText = "";
   for await (const message of query({
     prompt,
+    inputFiles: pdfPaths,
     options: {
       model,
       maxTurns: 10,

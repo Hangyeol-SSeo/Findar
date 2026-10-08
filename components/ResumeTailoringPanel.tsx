@@ -146,8 +146,8 @@ export default function ResumeTailoringPanel({ seq }: { seq: string }) {
         </div>
         {noSources ? (
           <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-            평가할 이력이 없습니다. <Link href="/settings" className="font-medium underline">설정 → 이력서</Link>에서 이력서 PDF를 올리거나
-            지원 정보를 먼저 입력해주세요.
+            평가할 이력이 없습니다. <Link href="/profile#resume" className="font-medium underline">이력서·포트폴리오</Link>를 올리거나
+            <Link href="/profile#applicant" className="font-medium underline">지원 정보</Link>를 먼저 입력해주세요.
           </p>
         ) : (
           <div className="flex flex-wrap items-center gap-3">
@@ -173,7 +173,7 @@ export default function ResumeTailoringPanel({ seq }: { seq: string }) {
         )}
         {data && !data.hasResume && data.hasApplicantProfile && (
           <p className="text-xs text-gray-500">
-            업로드된 이력서가 없어 지원 정보 항목만 평가합니다. <Link href="/settings" className="text-blue-600 underline">이력서 올리기</Link>
+            업로드된 이력서가 없어 지원 정보 항목만 평가합니다. <Link href="/profile#resume" className="text-blue-600 underline">이력서 올리기</Link>
           </p>
         )}
       </section>

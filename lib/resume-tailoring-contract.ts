@@ -115,7 +115,7 @@ export function normalizeTailoring(
 const period = (a: string, b: string) => [a, b].filter(Boolean).join(" ~ ");
 const join = (...parts: (string | false | undefined)[]) => parts.filter(Boolean).join(" · ");
 
-// /settings의 "지원 정보"(사용자가 직접 입력한 구조화 이력)를 평가 대상 항목으로 펼친다.
+// /profile#applicant의 "지원 정보"(사용자가 직접 입력한 구조화 이력)를 평가 대상 항목으로 펼친다.
 // 인적사항 중 성별/생년월일/연락처처럼 양식이 필수로 묻는 값은 취사선택 대상이 아니므로 뺀다.
 export function buildApplicantItems(p: ApplicantProfile): ResumeItem[] {
   const items: ResumeItem[] = [];

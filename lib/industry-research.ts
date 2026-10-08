@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { query, type HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { requireApplicationRole } from "./application-role";
 import { getAIModelId } from "./ai-model-settings";
 import { parseModelJson, type IndustryResearch, type ResearchCandidate, type ResearchFinding } from "./essay-contract";
@@ -12,7 +13,8 @@ import { logEssayEvent, newEssayThread } from "./essay-log";
 //  1) 후보 찾기(scope): WebSearch만으로 후보 자료와 "어떻게 구성할지" 질문을 받는다. 페이지는 열지 않는다.
 //  2) 자료 정리(collect): 사용자가 고른 링크만 WebFetch로 읽어 사실과 원문 발췌를 뽑는다.
 // 이후 사용자가 발췌를 골라 고쳐쓰기를 요청하면 essay-revision.ts가 research.* 자료로 사용한다.
-// 회사 리서치와 같은 이유로 WebSearch/WebFetch는 Anthropic 서버 도구라 FreeRide를 거치지 않는다.
+// Claude에서는 WebSearch/WebFetch를 사용하고, Codex에서는 선택한 모델의 웹 도구로 조사한다.
+// FreeRide는 이 기능에서 제공하지 않는다.
 
 const SCOPE_SEARCH_LIMIT = 3;
 const MAX_CANDIDATES = 8;
@@ -39,6 +41,7 @@ async function runResearch(prompt: string, tools: ("WebSearch" | "WebFetch")[], 
   let resultText = "";
   for await (const message of query({
     prompt: `조사 기준일: ${new Date().toISOString().slice(0, 10)}\n${prompt}`,
+    webToolLimit: searchLimit + fetchLimit,
     options: {
       model,
       ...(model.startsWith("claude-haiku-") ? {} : { effort: "medium" as const }),

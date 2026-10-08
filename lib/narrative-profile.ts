@@ -84,7 +84,7 @@ function writeNarrativeProfile(profile: NarrativeProfile): void {
   writeFileSync(NARRATIVE_PROFILE_PATH, JSON.stringify(profile, null, 2));
 }
 
-// 설정 페이지의 "핵심 가치관" 섹션(4개 텍스트영역)이 저장 버튼 하나로 통째 PUT —
+// 내 지원 자료의 "가치관과 서사" 섹션(4개 텍스트영역)이 저장 버튼 하나로 통째 PUT —
 // applicant-profile.ts의 writeApplicantProfile()과 동일한 전체교체 방식.
 export function writeCoreNarrative(core: Omit<CoreNarrative, "updatedAt">): void {
   const profile = readNarrativeProfile();

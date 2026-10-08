@@ -1,6 +1,6 @@
 import { readNarrativeProfile, writeCoreNarrative, appendNarrativeEpisode } from "@/lib/narrative-profile";
 
-// 설정 페이지 "핵심 가치관/성장 서사" 탭 조회 — AI 호출 없음.
+// 내 지원 자료 "가치관과 서사" 조회 — AI 호출 없음.
 export async function GET() {
   return Response.json({ profile: readNarrativeProfile() });
 }

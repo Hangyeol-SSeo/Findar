@@ -1,4 +1,5 @@
-import { query, type HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import {
   getCompany,
@@ -110,6 +111,7 @@ async function runWebSearchSection(prompt: string, model: string): Promise<Secti
   try {
     for await (const message of query({
       prompt: `조사 기준일: ${new Date().toISOString().slice(0, 10)}\n${prompt}`,
+      webToolLimit: SEARCH_LIMIT + FETCH_LIMIT,
       options: {
         model,
         ...(model.startsWith("claude-haiku-") ? {} : { effort: RESEARCH_EFFORT }),

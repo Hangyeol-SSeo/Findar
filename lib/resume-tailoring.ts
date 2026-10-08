@@ -1,5 +1,5 @@
 import { requireApplicationRole, assertApplicationRole, APPLICATION_ROLE_RULES } from "./application-role";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { createHash } from "crypto";
 import { getApplicationRole, getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";
@@ -132,7 +132,7 @@ export async function evaluateResumeTailoring(
   progress?.(1);
   const items = [...(inventory?.items ?? []), ...buildApplicantItems(readApplicantProfile())];
   if (items.length === 0)
-    throw new Error("평가할 이력이 없습니다. 설정 → 이력서 탭에서 이력서를 올리거나 지원 정보를 먼저 입력해주세요.");
+    throw new Error("평가할 이력이 없습니다. 내 지원 자료 → 이력서·포트폴리오에서 이력서를 올리거나 지원 정보를 먼저 입력해주세요.");
 
   const jobBlock = JSON.stringify({
     회사: job.company,

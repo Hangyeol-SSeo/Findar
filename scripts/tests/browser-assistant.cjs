@@ -177,8 +177,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/download-ui.png', fullPage: true });
     console.log('PASS visible file picker and attachment download with Korean filename, bytes, no page navigation');
-    await page.goto((process.env.FINDAR_TEST_URL || 'http://localhost:3000') + '/settings');
-    await page.getByRole('button', { name: '지원 정보', exact: true }).click();
+    await page.goto((process.env.FINDAR_TEST_URL || 'http://localhost:3000') + '/profile#applicant');
     await page.getByLabel('한자 이름', { exact: true }).fill('洪吉童');
     await page.getByLabel('종교', { exact: true }).fill('없음');
     assert.equal(await page.getByLabel('주소', { exact: true }).inputValue(), '기존 기본주소');
@@ -191,7 +190,6 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(profilePayload.address, '서울시 예시로 1'); assert.equal(profilePayload.addressDetail, '101호');
     assert.equal(profilePayload.hobbies, '독서'); assert.equal(profilePayload.specialties, '문서 정리');
     await page.reload();
-    await page.getByRole('button', { name: '지원 정보', exact: true }).click();
     await page.getByLabel('한자 이름', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('한자 이름', { exact: true }).inputValue(), '洪吉童');
     assert.equal(await page.getByLabel('취미', { exact: true }).inputValue(), '독서');

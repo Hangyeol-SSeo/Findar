@@ -33,9 +33,9 @@ const sdk = {
 const contract = compile('lib/essay-contract.ts', require);
 const sources = compile('lib/essay-sources.ts', require);
 const models = { getAIModelId: () => 'test-model' };
-const bank = compile('lib/essay-bank.ts', (id) => ({ '@anthropic-ai/claude-agent-sdk': sdk, './ai-model-settings': models, './essay-contract': contract, './essay-sources': sources }[id] ?? require(id)));
+const bank = compile('lib/essay-bank.ts', (id) => ({ './ai-query': sdk, './ai-model-settings': models, './essay-contract': contract, './essay-sources': sources }[id] ?? require(id)));
 const cards = compile('lib/experience-cards.ts', (id) => ({
-  '@anthropic-ai/claude-agent-sdk': sdk, './ai-model-settings': models, './essay-bank': bank, './essay-contract': contract,
+  './ai-query': sdk, './ai-model-settings': models, './essay-bank': bank, './essay-contract': contract,
   './vendor-skills': { loadVendorSkills: () => ({ cards: 'skill' }) },
   './resume-inventory': { ensureResumeInventory: async () => null, getCachedResumeInventory: () => null },
   './resume-files': { listResumePdfs: () => [] },

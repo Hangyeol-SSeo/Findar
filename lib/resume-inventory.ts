@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -61,6 +61,7 @@ ${pdfPaths.map((p) => `- ${p}`).join("\n")}
   let resultText = "";
   for await (const message of query({
     prompt,
+    inputFiles: pdfPaths,
     options: { model, maxTurns: 12, allowedTools: ["Read"] },
   })) {
     if (message.type === "result") {

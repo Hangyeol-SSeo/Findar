@@ -31,7 +31,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
   const { seq } = await params;
   if (!getJobBySeq(seq)) return Response.json({ error: "공고를 찾을 수 없습니다." }, { status: 404 });
   if (listResumeFiles().length === 0 && !isApplicantProfileFilled(readApplicantProfile()))
-    return Response.json({ error: "평가할 이력이 없습니다. 설정에서 이력서를 올리거나 지원 정보를 먼저 입력해주세요." }, { status: 400 });
+    return Response.json({ error: "평가할 이력이 없습니다. 내 지원 자료에서 이력서를 올리거나 지원 정보를 먼저 입력해주세요." }, { status: 400 });
   try {
     requireApplicationRole(seq);
     const task = createApplicationTask(seq, "tailoring", 2);

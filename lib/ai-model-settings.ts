@@ -1,12 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { AI_FEATURES, AI_MODEL_IDS, CLAUDE_MODELS, DEFAULT_AI_MODEL, DEFAULT_JOB_AI_MODEL, type AIFeature, type AIModelSettings, type AIModelSettingsResponse } from "./ai-model-types";
+import { AI_FEATURES, AI_MODEL_IDS, CLAUDE_MODELS, CODEX_MODELS, isCodexModel, DEFAULT_AI_MODEL, DEFAULT_JOB_AI_MODEL, type AIFeature, type AIModelSettings, type AIModelSettingsResponse } from "./ai-model-types";
 
 function settingsPath() { return join(process.cwd(), "data", "ai-model-settings.json"); }
 function isJobFeature(feature: AIFeature) { return feature === "summarization" || feature === "matching"; }
 function freeRideModel() { return process.env.FREERIDE_MODEL || AI_MODEL_IDS.FREERIDE_CODING; }
-function currentModel(model: string) { return model === AI_MODEL_IDS.LEGACY_SONNET_5 ? AI_MODEL_IDS.SONNET : model; }
+function currentModel(model: string) {
+  if (model === AI_MODEL_IDS.LEGACY_SONNET_5) return AI_MODEL_IDS.SONNET;
+  if (model === AI_MODEL_IDS.LEGACY_GPT_6_SOL) return AI_MODEL_IDS.GPT_6_1_SOL;
+  return model;
+}
 
 function defaults(): AIModelSettings {
   return Object.fromEntries(AI_FEATURES.map(({ id }) => [id,
@@ -19,7 +23,7 @@ function defaults(): AIModelSettings {
 function modelOptions(): AIModelSettingsResponse["options"] {
   const initial = defaults();
   return Object.fromEntries(AI_FEATURES.map(({ id }) => {
-    const options = CLAUDE_MODELS.map((model) => ({ ...model }));
+    const options = [...CLAUDE_MODELS, ...CODEX_MODELS].map((model) => ({ ...model }));
     if (isJobFeature(id)) options.push({ id: freeRideModel(), label: `FreeRide (${freeRideModel()})` });
     if (!options.some((option) => option.id === initial[id])) options.push({ id: initial[id], label: initial[id] });
     return [id, options];
@@ -74,6 +78,7 @@ export function getAIModelId(feature: AIFeature): string {
 
 export function getJobAIConfiguration(feature: "summarization" | "matching") {
   const model = getAIModelId(feature);
+  if (isCodexModel(model)) return { provider: "codex" as const, model };
   if (model === freeRideModel()) {
     return { provider: "freeride" as const, model, baseURL: process.env.FREERIDE_BASE_URL || "http://localhost:11343" };
   }

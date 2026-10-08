@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getJobAIConfiguration } from "./ai-model-settings";
 
 export class FreeRideRequestError extends Error {
@@ -11,7 +11,7 @@ export class FreeRideRequestError extends Error {
 /** Text-only job analysis uses the gateway directly, avoiding Claude Code's agent messages/tools. */
 export async function queryJobAI(feature: "summarization" | "matching", prompt: string): Promise<string> {
   const configuration = getJobAIConfiguration(feature);
-  if (configuration.provider === "claude") {
+  if (configuration.provider !== "freeride") {
     let result = "";
     for await (const message of query({
       prompt,
