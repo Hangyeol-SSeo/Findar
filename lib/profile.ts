@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
@@ -150,6 +150,7 @@ ${fileList}
   let resultText = "";
   for await (const message of query({
     prompt,
+    inputFiles: pdfPaths,
     options: {
       model,
       maxTurns: 10,

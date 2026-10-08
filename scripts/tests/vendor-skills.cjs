@@ -21,7 +21,7 @@ const cards = compile('lib/experience-cards.ts', (id) => ({
   './resume-files': { listResumePdfs: () => [] },
   './applicant-profile': { readApplicantProfile: () => ({}) },
   './resume-tailoring-contract': { buildApplicantItems: () => [] },
-  '@anthropic-ai/claude-agent-sdk': { query: () => { throw new Error('no AI in tests'); } },
+  './ai-query': { query: () => { throw new Error('no AI in tests'); } },
 }[id] ?? require(id)));
 const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
 

@@ -13,7 +13,7 @@ function load(name) {
   }).outputText, {
     exports, process: { env: {} }, console: { info() {}, error() {} },
     require(id) {
-      if (id === '@anthropic-ai/claude-agent-sdk') return { query: async function* (args) {
+      if (id === './ai-query') return { query: async function* (args) {
         calls++; options = args.options;
         await new Promise(resolve => setTimeout(resolve, 5));
         yield { type: 'result', subtype: errorResult ? 'error_max_turns' : 'success', is_error: errorResult,

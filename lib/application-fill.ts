@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { readApplicantProfile } from "./applicant-profile";
 import type { ApplicantProfile } from "./applicant-profile";

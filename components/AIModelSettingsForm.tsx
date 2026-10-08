@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AI_FEATURES, type AIModelSettings, type AIModelSettingsResponse } from "@/lib/ai-model-types";
+import { AI_FEATURES, type AIModelSettings, type AIModelSettingsResponse, type CodexConnectionStatus } from "@/lib/ai-model-types";
 
 const BULK_FEATURES = AI_FEATURES.filter(({ id }) => id !== "summarization" && id !== "matching");
 
@@ -11,6 +11,8 @@ export default function AIModelSettingsForm({ showToast }: { showToast: (message
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [codex, setCodex] = useState<CodexConnectionStatus | null>(null);
+  const [checkingCodex, setCheckingCodex] = useState(false);
   const dirty = data && settings && AI_FEATURES.some(({ id }) => data.settings[id] !== settings[id]);
 
   async function load(signal?: AbortSignal) {
@@ -27,9 +29,22 @@ export default function AIModelSettingsForm({ showToast }: { showToast: (message
     } finally { if (!signal?.aborted) setLoading(false); }
   }
 
+  async function checkCodex(signal?: AbortSignal) {
+    setCheckingCodex(true);
+    try {
+      const response = await fetch("/api/settings/codex", { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Codex 연결 상태를 확인하지 못했습니다.");
+      const result: CodexConnectionStatus = await response.json();
+      if (!signal?.aborted) setCodex(result);
+    } catch {
+      if (!signal?.aborted) setCodex({ available: false, authenticated: false, message: "Codex 연결 상태를 확인하지 못했습니다. 다시 확인해주세요." });
+    } finally { if (!signal?.aborted) setCheckingCodex(false); }
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
+    void checkCodex(controller.signal);
     return () => controller.abort();
   }, []);
 
@@ -62,6 +77,14 @@ export default function AIModelSettingsForm({ showToast }: { showToast: (message
   return (
     <div className="space-y-5">
       <p className="text-sm text-gray-500">저장하면 다음 생성부터 적용됩니다. 이미 생성된 결과는 각 기능에서 다시 생성할 때 변경됩니다.</p>
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <p className="text-sm font-semibold text-gray-700">Codex · ChatGPT 구독 연결</p>
+        <p role="status" className="text-xs text-gray-500 mt-1">
+          {checkingCodex ? "Codex 연결 상태를 확인하는 중..." : codex?.message}
+        </p>
+        <button type="button" onClick={() => void checkCodex()} disabled={checkingCodex}
+          className="text-sm text-blue-600 mt-3 hover:underline disabled:opacity-50">연결 상태 다시 확인</button>
+      </div>
       <div className="bg-white rounded-xl border border-gray-100 p-5">
         <label htmlFor="ai-model-bulk" className="block text-sm font-semibold text-gray-700">모델 일괄 선택</label>
         <p id="ai-model-bulk-description" className="text-xs text-gray-400 mt-1 mb-3">

@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { createHash, randomUUID } from "crypto";
@@ -117,6 +117,7 @@ company는 파일에서 확인되는 회사명(모르면 빈 문자열).
   let resultText = "";
   for await (const message of query({
     prompt,
+    inputFiles: isPdf ? [file.path] : [],
     options: { model, maxTurns: isPdf ? 6 : 1, allowedTools: isPdf ? ["Read"] : [], tools: isPdf ? ["Read"] : [], settingSources: [], persistSession: false },
   })) {
     if (message.type === "result" && message.subtype === "success" && !message.is_error) resultText = message.result;

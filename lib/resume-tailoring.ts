@@ -1,5 +1,5 @@
 import { requireApplicationRole, assertApplicationRole, APPLICATION_ROLE_RULES } from "./application-role";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { createHash } from "crypto";
 import { getApplicationRole, getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";

@@ -27,6 +27,9 @@ export const AI_MODEL_IDS = {
   HAIKU: "claude-haiku-4-5-20251001",
   FREERIDE_CODING: "freeride/coding",
   LEGACY_SONNET_5: "claude-sonnet-5",
+  GPT_6_LUNA: "gpt-6-luna",
+  GPT_6_1_SOL: "gpt-6.1-sol",
+  LEGACY_GPT_6_SOL: "gpt-6-sol",
 } as const;
 
 export const DEFAULT_AI_MODEL = AI_MODEL_IDS.SONNET;
@@ -38,3 +41,18 @@ export const CLAUDE_MODELS: AIModelOption[] = [
   { id: AI_MODEL_IDS.SONNET_4_6, label: "Claude Sonnet 4.6" },
   { id: AI_MODEL_IDS.HAIKU, label: "Claude Haiku 4.5" },
 ];
+
+export const CODEX_MODELS: AIModelOption[] = [
+  { id: AI_MODEL_IDS.GPT_6_LUNA, label: "Codex · GPT-6-Luna (ChatGPT 구독)" },
+  { id: AI_MODEL_IDS.GPT_6_1_SOL, label: "Codex · GPT-6.1-Sol (ChatGPT 구독)" },
+];
+
+export function isCodexModel(model: string): boolean {
+  return CODEX_MODELS.some((option) => option.id === model);
+}
+
+export interface CodexConnectionStatus {
+  available: boolean;
+  authenticated: boolean;
+  message: string;
+}
