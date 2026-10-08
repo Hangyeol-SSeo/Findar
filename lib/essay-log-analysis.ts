@@ -6,6 +6,7 @@ import { ANONYMIZED_SOURCE, HEDGE, inspectEssayStyle, OPINION_ENDING, type Style
 // 어떤 문체 문제가 사라지고 생겼는지"를 남겨, 나중에 사용자가 어디에 불만을 느끼고 무엇을 고치는지 읽어낼 수 있게 한다.
 
 export const ESSAY_EVENT_ACTORS = {
+  task_cancel_requested: "user",
   draft_requested: "user", draft_generated: "ai", draft_failed: "system",
   answer_imported: "user", manual_edit: "user",
   revision_requested: "user", revision_proposed: "ai", revision_needs_info: "ai", revision_failed: "system",

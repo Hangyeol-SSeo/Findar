@@ -38,10 +38,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
         ...(repairReason ? { repairReason } : {}),
       } });
     };
-    after(() => executeApplicationTask(task.id, async (progress) => {
+    after(() => executeApplicationTask(task.id, async (progress, signal) => {
       try {
         const beforePlanning = JSON.stringify(getCachedApplicationDraft(seq));
-        const prepared = await prepareEssayBatch(seq, inputs);
+        const prepared = await prepareEssayBatch(seq, inputs, signal);
         if (JSON.stringify(getCachedApplicationDraft(seq)) !== beforePlanning)
           throw new Error("구상 중 답변이 다른 창에서 변경되어 작업을 중단했습니다.");
         let needsInfo = 0;
@@ -49,17 +49,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
         const failures: string[] = [];
         let draft = getCachedApplicationDraft(seq);
         for (let i = 0; i < inputs.length; i++) {
+          signal.throwIfAborted();
           const initial = JSON.stringify(getCachedApplicationDraft(seq));
           // Work is owned by the server, never by the request/selected tab's AbortSignal.
           let answer;
-          try { answer = await generateCustomEssayAnswer(seq, inputs[i], undefined, prepared); }
+          try { answer = await generateCustomEssayAnswer(seq, inputs[i], signal, prepared); }
           catch (error) {
+            signal.throwIfAborted();
             failures.push(`문항 ${i + 1}: ${error instanceof Error ? error.message : "작성에 실패했습니다."}`);
             fail(i, error, prepared);
             continue;
           }
           if (JSON.stringify(getCachedApplicationDraft(seq)) !== initial)
             throw new Error("작성 중 답변이 다른 창에서 변경되어 덮어쓰지 않았습니다. 완료된 문항은 저장되어 있습니다.");
+          signal.throwIfAborted();
           draft = persistEssay(seq, answer, threads[i]);
           settled.add(i);
           if (answer.status === "needs_info") needsInfo++;

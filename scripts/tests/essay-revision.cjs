@@ -20,6 +20,7 @@ const sources = [
   { id: 'card.EXP-02', text: JSON.stringify({ personal_actions: ['종목별 손실 기여도를 엑셀로 정리'] }) },
 ];
 const stubs = {
+  './ai-operation': compile('lib/ai-operation.ts', require),
   './application-role': { APPLICATION_ROLE_RULES: '', assertApplicationRole: () => {}, requireApplicationRole: () => ({ role: '리스크관리', revision: 'r1' }) },
   './ai-model-settings': { getAIModelId: () => 'test-model' },
   './db': { saveApplicationDraft: (_seq, json) => { draft = JSON.parse(json); } },

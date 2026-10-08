@@ -1,3 +1,4 @@
+import { throwIfAIAborted } from "./ai-operation";
 import { requireApplicationRole, assertApplicationRole, APPLICATION_ROLE_RULES } from "./application-role";
 import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
@@ -176,6 +177,7 @@ ${OUTPUT}`;
     generatedAt: Date.now(),
   };
   assertApplicationRole(seq, selection.revision);
+  throwIfAIAborted();
   saveResumeTailoring(seq, JSON.stringify(result), inputsHash, model);
   progress?.(2);
   return result;

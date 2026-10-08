@@ -9,6 +9,7 @@ const ANCHOR = '판단의 이유';
 let applicant = { education: [], projects: [], activities: [], awards: [], workExperiences: [], certifications: [], languageTests: [] };
 let confirmedCards = [];
 const stubs = {
+  './ai-operation': compile('lib/ai-operation.ts', require),
   './application-role': { requireApplicationRole: () => ({ role: '리스크관리', revision: 'role-v1' }), assertApplicationRole: () => {}, APPLICATION_ROLE_RULES: '지원 직무를 기준으로 작성' },
   './ai-model-settings': { getAIModelId: () => 'fixture-model' },
   './ai-query': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', mandatory: true, status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] } : answer) }; } },
