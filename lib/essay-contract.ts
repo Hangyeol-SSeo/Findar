@@ -116,11 +116,20 @@ export function parseEssayRequest(value: unknown): EssayRequest {
   };
 }
 
+export class ModelJsonSyntaxError extends Error {
+  constructor(cause: unknown) {
+    super("AI 응답의 JSON 형식이 올바르지 않습니다. 문자열 안의 큰따옴표·줄바꿈을 이스케이프하고 쉼표와 괄호를 확인해주세요.", { cause });
+    this.name = "ModelJsonSyntaxError";
+  }
+}
+
 export function parseModelJson(text: string): Record<string, unknown> {
   const clean = text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  const value = JSON.parse(clean);
+  let value: unknown;
+  try { value = JSON.parse(clean); }
+  catch (error) { throw new ModelJsonSyntaxError(error); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("작성 결과 형식이 올바르지 않습니다.");
-  return value;
+  return value as Record<string, unknown>;
 }
 
 export function validateEssay(

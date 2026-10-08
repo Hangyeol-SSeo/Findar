@@ -141,7 +141,7 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
             onChange={(e) => setInstruction(e.target.value)} placeholder="예: 2문단의 협업 경험을 더 구체적으로, 마지막 문단은 입사 후 첫 1년 계획 중심으로 바꿔주세요." />
           <div className="flex flex-wrap gap-2">
             <button type="button" className={primaryButton} disabled={disabled || !instruction.trim()}
-              onClick={async () => { if (await onRevise("rewrite", instruction)) setInstruction(""); }}>고쳐쓰기 요청</button>
+              onClick={() => void onRevise("rewrite", instruction)}>고쳐쓰기 요청</button>
             <button type="button" className={secondaryButton} disabled={disabled || !instruction.trim()} onClick={() => startResearchForm(instruction)}
               title="요청에 업계 사례나 제도 현황이 필요할 때 웹에서 먼저 찾아봅니다.">업계 사례 먼저 조사하기</button>
           </div>
@@ -165,9 +165,8 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
       <ul className="list-disc space-y-1 pl-4 text-amber-900">{needsInfo.questions.map((q, i) => <li key={i}>{q}</li>)}</ul>
       <textarea aria-label="보완 정보" className={inputStyle} rows={3} maxLength={1800} value={extraInfo} disabled={disabled} onChange={(e) => setExtraInfo(e.target.value)} placeholder="답변이나 기사·보고서 본문과 출처 링크를 붙여넣어주세요." />
       <div className="flex flex-wrap gap-2">
-        <button type="button" className={primaryButton} disabled={disabled || !extraInfo.trim()} onClick={async () => {
-          if (await onRevise("rewrite", `${needsInfo.instruction}\n[추가 정보]\n${extraInfo}`)) setExtraInfo("");
-        }}>답변 추가해서 다시 고쳐쓰기</button>
+        <button type="button" className={primaryButton} disabled={disabled || !extraInfo.trim()}
+          onClick={() => void onRevise("rewrite", `${needsInfo.instruction}\n[추가 정보]\n${extraInfo}`)}>답변 추가해서 다시 고쳐쓰기</button>
         <button type="button" className={secondaryButton} disabled={disabled} onClick={() => void onRevise("rewrite", `${needsInfo.instruction}\n${CONDITIONAL_REQUEST}`)}>자료 없이 조건부로 진행</button>
         <button type="button" className={secondaryButton} disabled={disabled} onClick={() => startResearchForm(needsInfo.instruction, needsInfo.questions)}>업계 사례 조사하기</button>
       </div>
