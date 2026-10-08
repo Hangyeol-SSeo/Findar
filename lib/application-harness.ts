@@ -35,11 +35,25 @@ export function otherCompanyNames(recorded: string[], targetCompany: string): st
 }
 
 // 작성 단계가 소재 배치에서 고르지 않은 경험을 근거로 썼으면 거부한다. 고르는 단계의 판정(요구·공고 구절 연결)을 우회하지 못하게 한다.
+export class ContainmentError extends Error {
+  constructor(readonly outside: string[], selectedIds: string[]) {
+    super(`소재 배치에서 고르지 않은 경험(${outside.join(", ")})을 근거로 썼습니다. 고른 소재(${selectedIds.join(", ") || "없음"})만 쓰고, 다른 경험이 꼭 필요하면 쓰지 말고 reviewNotes에 남기세요.`);
+  }
+}
+
 export function assertEvidenceContained(evidence: EssayEvidence[], selectedIds: string[]): void {
   const allowed = new Set(selectedIds);
   const outside = [...new Set(evidence.map((e) => e.sourceId).filter((id) => isExperienceSource(id) && !allowed.has(id)))];
-  if (outside.length)
-    throw new Error(`소재 배치에서 고르지 않은 경험(${outside.join(", ")})을 근거로 썼습니다. 고른 소재(${selectedIds.join(", ") || "없음"})만 쓰고, 다른 경험이 꼭 필요하면 쓰지 말고 reviewNotes에 남기세요.`);
+  if (outside.length) throw new ContainmentError(outside, selectedIds);
+}
+
+// 수정 호출 뒤에도 고르지 않은 경험을 쓰면 답변을 버리지 않고 이 메모를 맨 앞에 붙여 남긴다. 봉쇄는 사실 여부가 아니라
+// 소재 배치를 지켰는지의 검사이고, 쓰인 카드도 사용자가 확인한 사실이다. 다른 회사·직무 맥락은 뒤의 독립 검증이 그대로 본다.
+export function containmentNotes(outside: string[], origins: Map<string, string[]>): string[] {
+  return outside.map((id) => {
+    const from = origins.get(id) ?? [];
+    return `소재 배치에서 고르지 않은 경험 사용: ${id}${from.length ? `(출처: ${from.join(" / ")})` : ""} — 고쳐 써도 빠지지 않아 남겼습니다. 이 경험이 문항에 맞는지 확인해주세요.`;
+  });
 }
 
 // 고쳐쓰기의 봉쇄: 이전 답변에 없던 경험을 새로 근거로 쓰려면 그 경험이 답하는 수정 요청·문항·공고 업무의 원문 구절(anchor)을

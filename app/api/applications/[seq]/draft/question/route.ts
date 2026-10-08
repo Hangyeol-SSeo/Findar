@@ -2,7 +2,7 @@ import { requireApplicationRole } from "@/lib/application-role";
 import { after } from "next/server";
 import { isSameOrigin } from "@/lib/request-origin";
 import { getJobBySeq } from "@/lib/db";
-import { generateCustomEssayAnswer, prepareEssayBatch, getCachedApplicationDraft, persistEssay } from "@/lib/application-draft";
+import { draftRepairReason, generateCustomEssayAnswer, getCachedApplicationDraft, materialsLogDetail, persistEssay, prepareEssayBatch, type PreparedEssayBatch } from "@/lib/application-draft";
 import { parseEssayRequest } from "@/lib/essay-contract";
 import { createApplicationTask, executeApplicationTask } from "@/lib/application-tasks";
 import { logEssayEvent, logEssayEvents, newEssayThread } from "@/lib/essay-log";
@@ -28,9 +28,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
     logEssayEvents(inputs.map((input, i) => ({ seq, question: input.question, type: "draft_requested" as const, threadId: threads[i],
       textBefore: current?.essayAnswers.find((a) => a.source === "user_question" && a.question === input.question)?.answer || null,
       detail: { guidance: input.guidance, maxChars: input.maxChars ?? null, countSpaces: input.countSpaces, batchSize: inputs.length } })));
-    const fail = (i: number, error: unknown) => {
+    // 실패한 작성도 소재 배치가 무엇을 골랐는지와 수정 호출의 이유를 남긴다(관문이 무엇을 막았는지 기록으로 확인하기 위해).
+    const fail = (i: number, error: unknown, prepared?: PreparedEssayBatch) => {
       settled.add(i);
-      logEssayEvent({ seq, question: inputs[i].question, type: "draft_failed", threadId: threads[i], detail: { error: error instanceof Error ? error.message : String(error) } });
+      const repairReason = draftRepairReason(error);
+      logEssayEvent({ seq, question: inputs[i].question, type: "draft_failed", threadId: threads[i], detail: {
+        error: error instanceof Error ? error.message : String(error),
+        ...materialsLogDetail(prepared?.plans.find((p) => p.question === inputs[i].question)),
+        ...(repairReason ? { repairReason } : {}),
+      } });
     };
     after(() => executeApplicationTask(task.id, async (progress) => {
       try {
@@ -49,7 +55,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
           try { answer = await generateCustomEssayAnswer(seq, inputs[i], undefined, prepared); }
           catch (error) {
             failures.push(`문항 ${i + 1}: ${error instanceof Error ? error.message : "작성에 실패했습니다."}`);
-            fail(i, error);
+            fail(i, error, prepared);
             continue;
           }
           if (JSON.stringify(getCachedApplicationDraft(seq)) !== initial)

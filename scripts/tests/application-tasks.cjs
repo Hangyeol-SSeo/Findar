@@ -15,6 +15,8 @@ const stubs = {
   '@/lib/essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
   '@/lib/application-draft': {
     getCachedApplicationDraft: seq => drafts.get(seq) ?? null,
+    materialsLogDetail: () => ({}),
+    draftRepairReason: () => null,
     prepareEssayBatch: async (_seq, inputs) => ({ plans: inputs }),
     generateCustomEssayAnswer: async (_seq, input, signal) => {
       assert.equal(signal, undefined, 'work must not depend on client AbortSignal');
