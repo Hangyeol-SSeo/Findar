@@ -327,7 +327,7 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
 
 export async function planApplicationFill(targets: FillTarget[], signal?: AbortSignal, essaySources: FillSource[] = []): Promise<FillPlan> {
   const sources = [...buildFillSources(readApplicantProfile()), ...essaySources];
-  if (!sources.length) throw new Error("설정에서 지원 정보를 먼저 저장해주세요.");
+  if (!sources.length) throw new Error("내 지원 자료에서 지원 정보를 먼저 저장해주세요.");
   const deterministic = deterministicFillAssignments(targets, sources);
   const eligible = targets.filter((t) => permittedTarget(t) && !deterministic.some((a) => a.targetId === t.id));
   if (!eligible.length) return resolveFillPlan(deterministic, targets, sources);

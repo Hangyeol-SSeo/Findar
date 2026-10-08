@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { createHash } from "crypto";
 import { basename, join } from "path";
 
-// 웹(/settings → 이력서 탭)에서 올린 이력서/포트폴리오 PDF 저장소. 예전에는 repo 루트의
+// 웹(/profile#resume → 이력서·포트폴리오)에서 올린 이력서/포트폴리오 PDF 저장소. 예전에는 repo 루트의
 // resume/ 디렉터리에 직접 파일을 넣어야 했지만, 이제는 gitignore된 data/ 아래에서 앱이
 // 직접 관리한다. 옛 resume/ 파일은 lib/profile.ts가 최초 1회 이쪽으로 옮긴다.
 export const RESUME_DIR = join(process.cwd(), "data", "resume");

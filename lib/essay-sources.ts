@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from "os";
 import { basename, extname, join } from "path";
 
-// 설정 → "과거 자소서·면접" 탭에서 올린 원본 저장소. 이력서(lib/resume-files.ts)와 같은 방식으로 gitignore된
+// 내 지원 자료 → "과거 자소서·면접"에서 올린 원본 저장소. 이력서(lib/resume-files.ts)와 같은 방식으로 gitignore된
 // data/ 아래에 두고, 종류별 하위 폴더로 나눈다. 분석(문항·답변 추출)은 lib/essay-bank.ts가 파일별로 한다.
 // Read 도구가 읽을 수 있는 PDF·텍스트만 보관하고, DOCX·HWPX는 올릴 때 텍스트로 바꿔 .txt로 저장한다.
 

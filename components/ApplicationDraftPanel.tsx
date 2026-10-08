@@ -337,8 +337,8 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     </div>
     <Toast message={toastMessage} />
     {workspace === "fill" && <section className="rounded-xl border border-gray-200 p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서에 개인정보·자기소개서 입력</h3><a className="text-xs text-blue-600 underline" href="/settings">저장 정보 수정</a></div>
-      <p className="text-xs leading-5 text-gray-500">설정의 개인정보와 이 공고에 저장된 자기소개서 답변을 실제 양식에 채웁니다. 작성 중인 답변은 완료 후 다시 입력해주세요. 입력 결과를 확인한 뒤 제출해주세요.</p>
+      <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서에 개인정보·자기소개서 입력</h3><a className="text-xs text-blue-600 underline" href="/profile#applicant">지원 정보 수정</a></div>
+      <p className="text-xs leading-5 text-gray-500">내 지원 자료에 저장한 지원 정보와 이 공고에 저장된 자기소개서 답변을 실제 양식에 채웁니다. 작성 중인 답변은 완료 후 다시 입력해주세요. 입력 결과를 확인한 뒤 제출해주세요.</p>
       {!!method?.templateAttachments.length && <div className="flex flex-wrap gap-2">{method.templateAttachments.map((a) => <a key={a.url} href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">{a.name} 내려받기</a>)}</div>}
       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
         <h4 className="text-sm font-medium">Word 양식 작성</h4>
@@ -384,7 +384,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     {workspace === "essay" && cardGate && (cardGate.unconfirmed > 0 || cardGate.stale) && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
       {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 자기소개서 작성에 쓰이지 않습니다{cardGate.coversProfile ? " (이력서 경험도 카드로 확인해야 쓰입니다)" : ""}. </>}
       {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
-      <a href="/settings" className="underline">설정 → 과거 자소서·면접 → 경험 카드</a>에서 확인해주세요.
+      <a href="/profile#experience" className="underline">내 지원 자료 → 경험 카드</a>에서 확인해주세요.
     </p>}
     {workspace === "essay" && <><section className="space-y-3">
       <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>

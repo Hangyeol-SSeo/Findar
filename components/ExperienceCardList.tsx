@@ -80,8 +80,13 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
     }
   }
 
-  if (!state) return error ? <p className="text-sm text-red-600">{error}</p> : null;
-  if (!state.sourceCount && !state.cards.length) return null;
+  if (!state) return error ? <p role="alert" className="text-sm text-red-600">{error}</p> : <p role="status" className="text-sm text-gray-400">경험 카드를 불러오는 중...</p>;
+  if (!state.sourceCount && !state.cards.length) return (
+    <div className="rounded-xl border border-gray-100 bg-white p-5">
+      <p className="text-sm font-medium text-gray-700">아직 정리할 경험 자료가 없습니다.</p>
+      <p className="mt-2 text-sm leading-6 text-gray-500">이력서·포트폴리오, 지원 정보 또는 과거 자소서·면접 자료를 먼저 등록해주세요.</p>
+    </div>
+  );
 
   const confirmedCount = state.cards.filter((c) => c.user_confirmed).length;
   const working = state.running || state.essayRunning;

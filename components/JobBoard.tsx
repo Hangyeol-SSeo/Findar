@@ -618,7 +618,7 @@ export default function JobBoard() {
         className={`flex-1 flex flex-col overflow-hidden ${resizingPanel ? "" : "transition-all duration-300"} ${selectedJob ? "sm:mr-[max(0px,min(var(--panel-w),calc(100vw_-_480px)))]" : ""}`}
       >
         <div className="flex-1 overflow-y-auto px-6 py-8 mx-auto w-full" style={{ maxWidth: 1200 }}>
-          {/* Header: 브랜드 + 공고 수집(페이지 수 · 매칭 · 새로고침) + 설정 */}
+          {/* Header: 브랜드 + 공고 수집 + 지원 자료 / 설정 */}
           <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Findar</h1>
@@ -626,7 +626,7 @@ export default function JobBoard() {
                 금융투자협회 회원사 채용공고를 한눈에
               </p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div
                 className="flex items-center gap-1 rounded-xl border border-gray-200 bg-white p-1"
                 role="group"
@@ -681,6 +681,9 @@ export default function JobBoard() {
                   {loading ? "수집 중..." : "새로고침"}
                 </button>
               </div>
+              <Link href="/profile" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
+                내 지원 자료
+              </Link>
               <Link
                 href="/settings"
                 className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
@@ -693,8 +696,8 @@ export default function JobBoard() {
           {matchEnabled && !hasProfile && profileKnown && !loading && (
             <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               이력서가 없어 매칭 점수를 계산하지 않았습니다.{" "}
-              <Link href="/settings" className="font-medium underline">
-                설정 → 이력서
+              <Link href="/profile#resume" className="font-medium underline">
+                내 지원 자료 → 이력서·포트폴리오
               </Link>
               에서 이력서·포트폴리오 PDF를 올린 뒤 새로고침해주세요.
             </div>
