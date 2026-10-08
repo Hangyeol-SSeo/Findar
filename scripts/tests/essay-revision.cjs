@@ -12,6 +12,14 @@ function compile(file, req) {
 const prompts = [];
 let queued = [];
 let draft;
+const conversationTurns = [];
+async function ask(prompt, inConversation = false) {
+  prompts.push(prompt);
+  if (inConversation) conversationTurns.push(prompt);
+  assert.ok(queued.length, `unexpected model call: ${prompt.slice(0, 80)}`);
+  const value = queued.shift();
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
 const baseText = '저는 투자동아리에서 손실 원인을 분석했습니다.';
 const job = { id: 'job', text: JSON.stringify({ company: '가상은행', title: '리스크관리부 신입', targetRole: '리스크관리', rawContent: '담당 업무: 신용리스크 한도 모니터링, 여신 포트폴리오 집중도 분석', qualifications: ['금융 관련 데이터 분석 경험'] }) };
 const sources = [
@@ -27,9 +35,11 @@ const stubs = {
   './application-draft': {
     WRITING_RULES: '',
     getCachedApplicationDraft: () => draft,
-    askModel: async (prompt) => { prompts.push(prompt); assert.ok(queued.length, `unexpected model call: ${prompt.slice(0, 80)}`); const value = queued.shift(); return typeof value === 'string' ? value : JSON.stringify(value); },
-    collectContext: async () => ({ sources, forbiddenNames: ['가상방산'], otherCompanies: ['가상방산'], company: '가상은행', editPreferences: '',
-      materialOrigins: new Map([['card.EXP-01', ['다른 회사(가상방산) · 자기소개서 · 임베디드 SW 개발']]]) }),
+    askModel: async (prompt) => ask(prompt),
+    // 고쳐쓰기·첨삭 받기는 공고 작업 대화를 이어 쓴다(규칙·자료는 머리말). 독립 검증은 askModel로 대화 밖에서 부른다.
+    openEssayConversation: async () => ({ model: 'test-model', conversation: { model: 'test-model', provider: 'claude', ask: (prompt) => ask(prompt, true) },
+      context: { sources, forbiddenNames: ['가상방산'], otherCompanies: ['가상방산'], company: '가상은행', editPreferences: '', employers: [], redact: (x) => x,
+        materialOrigins: new Map([['card.EXP-01', ['다른 회사(가상방산) · 자기소개서 · 임베디드 SW 개발']]]) } }),
   },
   './application-skills': { loadApplicationSkills: () => ({ plan: '', materials: '', write: '', review: '' }) },
   './essay-bank': { recordEditSignals: () => {} },
@@ -148,8 +158,13 @@ const clean = { issues: [] };
   queued = ['[]', { summary: '총평', strengths: [], issues: [], suggestions: [] }, clean];
   await revision.reviewEssay('S', question, '');
   assert.equal(queued.length, 0);
-  assert.ok(prompts[1].includes('[형식 오류 결과]'), '유효한 JSON의 스키마 오류는 기존 검증 재시도로 처리한다');
-  assert.ok(!prompts[1].includes('[JSON 문법 오류 결과'), '스키마 오류는 문법 복구 예산을 쓰지 않는다');
+  assert.ok(prompts[1].startsWith('[형식 오류]'), '유효한 JSON의 스키마 오류는 기존 검증 재시도로 처리한다');
+  assert.ok(!prompts[1].includes('[JSON 문법 오류]'), '스키마 오류는 문법 복구 예산을 쓰지 않는다');
+  assert.ok(!prompts[1].includes('[]'), '잘못된 응답은 대화에 있어 다시 보내지 않는다');
 
+  // 대화로 이어 쓰기: 고쳐쓰기 지시에는 규칙·자료 전문이 없고(머리말에 있음), 수정 호출은 실패 이유만 덧붙인다(앞 응답은 대화에 있음).
+  assert.ok(conversationTurns.every((t) => !t.includes('[사실 자료]')), 'turns do not re-send the sources');
+  assert.ok(conversationTurns.some((t) => t.startsWith('[검증 실패]') && !t.includes(baseText)), 'repair turns do not re-send the previous prompt');
+  assert.ok(conversationTurns.some((t) => t.includes('버린 수정본')), 'revision turns tell the model to honour what the user rejected before');
   console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

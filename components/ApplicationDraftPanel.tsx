@@ -56,6 +56,14 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       setCardGate({ unconfirmed: s.cards.filter((c) => !c.user_confirmed).length, coversProfile: s.coversProfile, stale: s.stale })).catch(() => {});
     return () => abort.abort();
   }, [seq]);
+  // 이 공고 작업 대화의 실제 AI 사용량. 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
+  const [usage, setUsage] = useState<{ calls: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; cacheHitRatio: number } | null>(null);
+  useEffect(() => {
+    const abort = new AbortController();
+    fetch(`/api/ai-usage?seq=${encodeURIComponent(seq)}`, { cache: "no-store", signal: abort.signal }).then((r) => r.json())
+      .then((u: { summary: NonNullable<typeof usage> }) => setUsage(u.summary.calls ? u.summary : null)).catch(() => {});
+    return () => abort.abort();
+  }, [seq, draft?.revision]);
   const nextRowId = useRef(1);
   const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
   // "이 문항 보완해서 다시 작성"으로 채운 입력란은 답변 목록보다 한참 위에 있어서, 렌더링 뒤 그 칸으로 이동시킨다.
@@ -392,6 +400,9 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 자기소개서 작성에 쓰이지 않습니다{cardGate.coversProfile ? " (이력서 경험도 카드로 확인해야 쓰입니다)" : ""}. </>}
       {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
       <a href="/profile#experience" className="underline">내 지원 자료 → 경험 카드</a>에서 확인해주세요.
+    </p>}
+    {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="작성·첨삭은 이 공고의 작업 대화를 이어 쓰며, 앞부분은 캐시에서 읽습니다.">
+      이 공고 AI 사용: {usage.calls.toLocaleString()}회 · 새로 처리한 입력 {usage.inputTokens.toLocaleString()} · 캐시에서 읽은 입력 {usage.cacheReadTokens.toLocaleString()}({Math.round(usage.cacheHitRatio * 100)}%) · 출력 {usage.outputTokens.toLocaleString()} 토큰
     </p>}
     {workspace === "essay" && <><section className="space-y-3">
       <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
