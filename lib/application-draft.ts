@@ -182,7 +182,7 @@ export async function openEssayConversation(seq: string) {
   const model = getAIModelId("applicationDraft");
   const context = await collectJobContext(seq);
   const skills = loadApplicationSkills();
-  const conversation = openConversation({ key: seq, feature: "applicationDraft", model, header: conversationHeader(context, skills), history: essayHistory(seq) });
+  const conversation = openConversation({ key: seq, feature: "applicationDraft", model, header: conversationHeader(context, skills), history: essayHistory(seq, context.redact) });
   return { conversation, context, skills, model };
 }
 
@@ -206,7 +206,7 @@ async function askModelOnce(prompt: string, signal: AbortSignal | undefined, mod
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) controller.abort();
   try {
-    for await (const message of query({ prompt, options: {
+    for await (const message of query({ prompt, timeoutMs: MODEL_CALL_TIMEOUT_MS, options: {
       // Allow a bounded continuation when the model needs another response to finish its JSON.
       model, maxTurns: 3, tools: [], allowedTools: [], settingSources: [], persistSession: false,
       canUseTool: async () => ({ behavior: "deny", message: "문항 작성에는 외부 도구를 사용하지 않습니다." }),

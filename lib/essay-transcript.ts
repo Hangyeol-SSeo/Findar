@@ -83,25 +83,33 @@ export function renderEssayEvent(e: TranscriptEvent, omitBody = false): string |
 
 const BODY_TYPES = new Set(["draft_generated", "answer_imported", "version_restored"]);
 
-// 새 세션에 넣을 전체 기록. 길면 문항마다 가장 최근 본문만 남기고, 그 전의 본문(이후 새 글로 대체됨)은 생략한다.
-// 요청·반영·버림·제안 같은 사용자 판단은 지우지 않는다 — 무엇을 원하고 무엇을 싫어했는지가 첨삭에서 가장 필요한 기억이다.
-export function renderEssayTranscript(events: TranscriptEvent[], budget = 60_000): string {
-  const full = events.map((e) => renderEssayEvent(e)).filter((x): x is string => !!x);
+// 새 세션에 넣을 전체 기록(budget 글자 이내). 길면 먼저 문항마다 가장 최근 본문만 남기고 그 전의 본문(이후 새 글로 대체됨)을
+// 생략한다 — 요청·반영·버림·제안 같은 사용자 판단은 남긴다(무엇을 원하고 무엇을 싫어했는지가 첨삭에서 가장 필요한 기억이다).
+// 그래도 넘치면 오래된 사건부터 덜어내고 몇 건을 덜었는지 적는다. 문항별 최신 본문은 작업 지시에도 따로 들어간다.
+export function renderEssayTranscript(events: TranscriptEvent[], budget = 40_000, redact: (text: string) => string = (t) => t): string {
+  const render = (omit: (e: TranscriptEvent) => boolean) =>
+    events.map((e) => renderEssayEvent(e, omit(e))).filter((x): x is string => !!x).map(redact);
+  const full = render(() => false);
   if (full.join("\n\n").length <= budget) return full.join("\n\n");
   const latestBody = new Map<string, number>();
   for (const e of events) if (BODY_TYPES.has(e.type) && e.textAfter) latestBody.set(e.question, e.rowid);
-  return events
-    .map((e) => renderEssayEvent(e, BODY_TYPES.has(e.type) && !!e.textAfter && latestBody.get(e.question) !== e.rowid))
-    .filter((x): x is string => !!x).join("\n\n");
+  const compact = render((e) => BODY_TYPES.has(e.type) && !!e.textAfter && latestBody.get(e.question) !== e.rowid);
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = compact.length - 1; i >= 0 && size + compact[i].length + 2 <= budget; i--) { kept.unshift(compact[i]); size += compact[i].length + 2; }
+  const dropped = compact.length - kept.length;
+  return `${dropped ? `(오래된 기록 ${dropped}건은 길어서 생략)\n\n` : ""}${kept.join("\n\n")}`;
 }
 
 function parse<T>(text: string | null, fallback: T): T {
   try { return text ? JSON.parse(text) as T : fallback; } catch { return fallback; }
 }
 
-export function essayHistory(seq: string): ConversationHistory {
+// redact: 공통 자료와 같은 가림 처리(다른 지원 회사·학교·프로젝트 이름 → [비공개 명칭]). 직접 쓴 글·고친 문장·버린 수정본에
+// 남은 이름이 대화에 들어가 답변으로 새어 나오지 않게 한다.
+export function essayHistory(seq: string, redact: (text: string) => string = (t) => t): ConversationHistory {
   return {
-    render(afterRowid) {
+    render(afterRowid, budget) {
       const rows = listEssayEventRowsAfter(seq, afterRowid ?? 0);
       const events: TranscriptEvent[] = rows.map((r) => ({
         rowid: r.rowid, question: r.question, type: r.type, textBefore: r.textBefore, textAfter: r.textAfter,
@@ -109,7 +117,8 @@ export function essayHistory(seq: string): ConversationHistory {
       }));
       const lastRowid = rows.at(-1)?.rowid ?? afterRowid ?? 0;
       return {
-        text: afterRowid === null ? renderEssayTranscript(events) : events.map((e) => renderEssayEvent(e)).filter(Boolean).join("\n\n"),
+        text: afterRowid === null ? renderEssayTranscript(events, budget, redact)
+          : events.map((e) => renderEssayEvent(e)).filter((x): x is string => !!x).map(redact).join("\n\n"),
         lastRowid,
       };
     },

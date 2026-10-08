@@ -6,6 +6,8 @@ import { getAIAbortSignal, throwIfAIAborted } from "./ai-operation";
 type QueryInput = Parameters<typeof queryClaude>[0] & {
   inputFiles?: string[];
   webToolLimit?: number;
+  // Codex 호출 제한 시간. 작업 대화처럼 긴 요청은 기본값(240초)보다 길게 준다.
+  timeoutMs?: number;
 };
 
 interface CodexResult {
@@ -27,7 +29,7 @@ export async function* query(input: QueryInput): AsyncGenerator<SDKMessage | Cod
   const abort = () => controller.abort(taskSignal?.reason);
   taskSignal?.addEventListener("abort", abort, { once: true });
   try {
-    const { inputFiles, webToolLimit, ...claudeInput } = input;
+    const { inputFiles, webToolLimit, timeoutMs, ...claudeInput } = input;
     claudeInput.options = { ...claudeInput.options, abortController: controller };
     const model = input.options?.model || "";
     if (!isCodexModel(model)) {
@@ -47,6 +49,7 @@ export async function* query(input: QueryInput): AsyncGenerator<SDKMessage | Cod
       effort: input.options?.effort === "high" ? "high" : "medium",
       webSearch: tools.includes("WebSearch") || tools.includes("WebFetch"),
       webToolLimit,
+      timeoutMs,
       onUsage: (usage) => { codexUsage = usage; },
     });
     throwIfAIAborted();

@@ -30,7 +30,8 @@ const stubs = {
       const result = `응답${calls.length}`;
       if (options.model.startsWith('gpt-')) { yield { type: 'result', subtype: 'success', is_error: false, result, codexUsage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 50 } }; return; }
       yield { type: 'result', subtype: 'success', is_error: false, result, session_id: sessionId, total_cost_usd: 0.01,
-        usage: { input_tokens: options.resume ? 100 : 5000, cache_read_input_tokens: options.resume ? 9000 : 0, cache_creation_input_tokens: options.resume ? 100 : 9000, output_tokens: 40 } };
+        ...(options.model === 'claude-small' ? { modelUsage: { 'claude-small': { contextWindow: 30000, maxOutputTokens: 4000 } } } : {}),
+        usage: { input_tokens: options.model === 'claude-small' ? 15000 : options.resume ? 100 : 5000, cache_read_input_tokens: options.resume ? 9000 : 0, cache_creation_input_tokens: options.resume ? 100 : 9000, output_tokens: 40 } };
     },
   },
   './ai-model-types': { isCodexModel: (m) => m.startsWith('gpt-') },
@@ -41,11 +42,13 @@ const stubs = {
     deleteAIConversationRow: (key, provider) => rows.delete(`${key}/${provider}`),
     insertAIUsage: (row) => usage.push(row),
     listAIUsage: () => usage,
+    listEssayEventRowsAfter: (_seq, after) => dbEvents.filter((e) => e.rowid > after),
   },
 };
+const dbEvents = [];
 stubs['./ai-usage'] = compile('lib/ai-usage.ts', (id) => stubs[id] ?? require(id));
 const { openConversation } = compile('lib/ai-conversation.ts', (id) => stubs[id] ?? require(id));
-const { renderEssayEvent, renderEssayTranscript } = compile('lib/essay-transcript.ts', (id) => ({ './db': {} }[id] ?? require(id)));
+const { renderEssayEvent, renderEssayTranscript, essayHistory } = compile('lib/essay-transcript.ts', (id) => stubs[id] ?? require(id));
 
 const events = [];
 const history = {
@@ -120,10 +123,29 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   assert.equal(calls.at(-1).options.resume, 'S3');
   assert.ok(calls.at(-1).prompt.includes('Codex가 쓴 본문'));
 
-  // 7) 세션이 너무 길어지면 정리한 기록으로 새로 시작한다.
-  conv = open('claude-sonnet-5-5', `${HEADER} + 새 카드`, { maxSessionChars: 10 });
+  // 7) 문맥이 한도를 넘을 것 같으면(작업 시작 때뿐 아니라 매 턴 전에 확인) 정리한 기록으로 새로 시작한다.
+  conv = open('claude-sonnet-5-5', `${HEADER} + 새 카드`, { maxContextTokens: 10 });
   await conv.ask('[작업: 긴 세션]');
   assert.equal(calls.at(-1).options.resume, undefined);
+  // 한 작업 안에서: 첫 턴(새 세션, 문맥 14,040토큰) 뒤 다음 턴이 한도를 넘으면 이어 쓰지 않고 새로 연다(매 턴 전에 확인).
+  // 새 세션에는 이번 작업의 앞선 턴을 상한 안에서 함께 보낸다.
+  conv = open('claude-sonnet-5-5', `${HEADER} + 한도 시험`, { maxContextTokens: 14_050 });
+  await conv.ask('[작업: 문항 1 작성]');
+  assert.equal(calls.at(-1).options.resume, undefined);
+  await conv.ask('[작업: 문항 2 작성]');
+  assert.equal(calls.at(-1).options.resume, undefined, 'over the limit mid-operation it starts a new session');
+  assert.ok(calls.at(-1).prompt.includes('[이번 작업에서 이미 주고받은 내용') && calls.at(-1).prompt.includes('[작업: 문항 1 작성]'));
+  // 같은 흐름이라도 기본 한도(20만 - 3.2만 - 8천)에서는 이어 쓴다.
+  conv = open('claude-sonnet-5-5', `${HEADER} + 기본 한도`);
+  await conv.ask('[기본 1]');
+  const sid = rows.get('seq1/claude').sessionId;
+  await conv.ask('[기본 2]');
+  assert.equal(calls.at(-1).options.resume, sid);
+  // 모델이 알려 준 문맥 크기(3만 - 출력 4천 - 여유 8천 = 1.8만)로 한도를 정한다: 같은 사용량이어도 작은 모델은 새로 연다.
+  conv = open('claude-small', `${HEADER} + 작은 모델`);
+  await conv.ask('[작은 모델 1]');
+  await conv.ask('[작은 모델 2]');
+  assert.equal(calls.at(-1).options.resume, undefined, 'the learned window decides when to start over');
 
   // 8) 사용량: 새 세션/이어 쓰기/세션 없음 구분과 캐시 적중이 남는다.
   const modes = usage.map((u) => u.mode);
@@ -143,6 +165,13 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   await Promise.all([conv.ask('[동시 1]').then(() => order.push(1)), conv.ask('[동시 2]').then(() => order.push(2))]);
   assert.deepEqual(order, [1, 2]);
 
+  // 10a) 대화에 넣는 기록도 공통 자료와 같이 가린다(직접 쓴 글·버린 수정본의 학교·다른 회사 이름).
+  dbEvents.push({ rowid: 1, question: '지원동기', type: 'answer_imported', textBefore: null, textAfter: '가상대학교에서 배운 것을 가상방산에서 썼습니다.', detail: '{}', analysis: null });
+  const redacted = essayHistory('seq1', (t) => t.replaceAll('가상대학교', '[비공개 명칭]').replaceAll('가상방산', '[비공개 명칭]')).render(null, 40000).text;
+  assert.ok(redacted.includes('[비공개 명칭]에서 배운 것을 [비공개 명칭]에서') && !redacted.includes('가상방산'));
+  const delta = essayHistory('seq1', (t) => t.replaceAll('가상방산', '[비공개 명칭]')).render(0).text;
+  assert.ok(!delta.includes('가상방산'), 'resumed deltas are redacted too');
+
   // 10) 기록 표현: 사용자 판단(버림·넘김)을 남기고, 길면 문항별 최신 본문만 남긴다. 앞부분은 기록이 늘어도 바뀌지 않는다.
   const ev = (rowid, type, extra = {}) => ({ rowid, question: '지원동기', type, textBefore: null, textAfter: null, detail: {}, analysis: null, ...extra });
   const log = [
@@ -157,9 +186,11 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   assert.ok(renderEssayEvent(log[4]).includes('넘겼다(원하지 않음)') && renderEssayEvent(log[4]).includes('“열정” → “관심”'));
   const fullText = renderEssayTranscript(log);
   assert.ok(renderEssayTranscript(log.slice(0, 3)) === fullText.slice(0, renderEssayTranscript(log.slice(0, 3)).length), 'appending events keeps the earlier rendering as a prefix');
-  const compact = renderEssayTranscript(log, 100);
+  const compact = renderEssayTranscript(log, 300);
   assert.ok(compact.includes('이후 새 글로 대체되어 본문 생략') && compact.includes('새 초안 본문') && !compact.includes('첫 초안 첫 초안'));
   assert.ok(compact.includes('두 번째 문단을 줄여줘') && compact.includes('수정본을 버렸다') && compact.includes('“열정” → “관심”'), 'user decisions survive compaction');
+  const tiny = renderEssayTranscript(log, 60);
+  assert.ok(tiny.length <= 60 + 40 && tiny.startsWith('(오래된 기록') && tiny.includes('새 초안 본문'), 'over budget it drops the oldest events and says so');
 
-  console.log('PASS conversation: fresh session with header+history, resumed turns send only new history+instruction, header change/resume failure/oversize start a new session from the same history, Codex stateless with earlier turns, cross-model handoff via history, usage with cache hits, serialized turns, stable/compacted transcript');
+  console.log('PASS conversation: fresh session with header+history, resumed turns send only new history+instruction, header change/resume failure/oversize start a new session from the same history, Codex stateless with earlier turns, cross-model handoff via history, usage with cache hits, serialized turns, per-turn token limit from the model-reported window, capped earlier turns, redacted history, stable/compacted/trimmed transcript');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

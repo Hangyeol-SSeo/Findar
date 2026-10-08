@@ -127,7 +127,7 @@ db.exec(`
     lastMessageId TEXT,
     headerHash TEXT NOT NULL,
     syncedRowid INTEGER NOT NULL DEFAULT 0,
-    chars INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0,
     model TEXT NOT NULL DEFAULT '',
     updatedAt INTEGER NOT NULL,
     PRIMARY KEY (key, provider)
@@ -895,7 +895,8 @@ export interface AIConversationRow {
   lastMessageId: string | null;
   headerHash: string;
   syncedRowid: number;
-  chars: number;
+  // 마지막 턴에서 모델이 처리한 전체 문맥 토큰(새 입력 + 캐시 읽기 + 캐시 쓰기 + 출력). 이어 쓸지 새로 시작할지 판단한다.
+  contextTokens: number;
   model: string;
   updatedAt: number;
 }
@@ -906,10 +907,10 @@ export function getAIConversationRow(key: string, provider: string): AIConversat
 
 export function saveAIConversationRow(row: AIConversationRow): void {
   db.prepare(`
-    INSERT INTO ai_conversations (key, provider, sessionId, lastMessageId, headerHash, syncedRowid, chars, model, updatedAt)
-    VALUES (@key, @provider, @sessionId, @lastMessageId, @headerHash, @syncedRowid, @chars, @model, @updatedAt)
+    INSERT INTO ai_conversations (key, provider, sessionId, lastMessageId, headerHash, syncedRowid, contextTokens, model, updatedAt)
+    VALUES (@key, @provider, @sessionId, @lastMessageId, @headerHash, @syncedRowid, @contextTokens, @model, @updatedAt)
     ON CONFLICT(key, provider) DO UPDATE SET sessionId = excluded.sessionId, lastMessageId = excluded.lastMessageId,
-      headerHash = excluded.headerHash, syncedRowid = excluded.syncedRowid, chars = excluded.chars, model = excluded.model, updatedAt = excluded.updatedAt
+      headerHash = excluded.headerHash, syncedRowid = excluded.syncedRowid, contextTokens = excluded.contextTokens, model = excluded.model, updatedAt = excluded.updatedAt
   `).run(row);
 }
 
