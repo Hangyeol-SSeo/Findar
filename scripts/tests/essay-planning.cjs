@@ -6,19 +6,21 @@ let queued = [];
 const plan = { questionTypes: ['experience'], personalEvidence: 'required', question: '성장과정', researchMode: 'perspective', research: [{ sourceId: 'company.overview', quote: '검증 절차를 중시합니다.', purpose: '판단 기준을 검토합니다.', paragraph: 1 }], notes: [], intent: '선택과 변화', message: '판단 기준의 변화', outline: ['선택', '행동', '변화'], materialCriteria: ['판단의 근거'] };
 const answer = { status: 'draft', intent: plan.intent, answer: '판단의 이유를 기록했습니다.', evidence: [{ sourceId: 'user.current.0', quote: '판단의 이유를 기록했습니다.', usedFor: '행동' }], missingInfo: [], reviewNotes: [] };
 const ANCHOR = '판단의 이유';
+let applicant = { education: [], projects: [], activities: [], awards: [], workExperiences: [], certifications: [], languageTests: [] };
+let confirmedCards = [];
 const stubs = {
   './application-role': { requireApplicationRole: () => ({ role: '리스크관리', revision: 'role-v1' }), assertApplicationRole: () => {}, APPLICATION_ROLE_RULES: '지원 직무를 기준으로 작성' },
   './ai-model-settings': { getAIModelId: () => 'fixture-model' },
   './ai-query': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', mandatory: true, status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] } : answer) }; } },
   './db': { getJobBySeq: () => ({ company: '예시 회사', title: '분석', positions: ['분석'], qualifications: ['판단력'] }), getCompanySections: () => [{ sectionType: 'overview', content: '검증 절차를 중시합니다.', sources: [{ title: '공식 자료', url: 'https://example.com/research' }], generatedAt: 1234, status: 'ok' }], getApplicationDraftRow: () => null },
   './profile': { getCachedProfile: () => null },
-  './applicant-profile': { readApplicantProfile: () => ({ education: [], projects: [], activities: [], awards: [], workExperiences: [] }) },
+  './applicant-profile': { readApplicantProfile: () => applicant },
   './narrative-profile': { readNarrativeProfile: () => ({ core: '', episodes: [] }) },
   './essay-bank': { ensureEssayBank: async () => ({ entries: [] }), summarizeEditPreferences: () => '' },
   './company-normalize': { normalizeCompanyName: x => x },
   './essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
   './vendor-checks': { jasoseoStyleFindings: () => [], duplicateSentences: () => [], imNotAiFindings: () => [] },
-  './experience-cards': { getConfirmedCards: () => [], cardSourceContent: (c) => c, describeOrigins: () => [], cardsCoverProfile: () => false },
+  './experience-cards': { getConfirmedCards: () => confirmedCards, cardSourceContent: (c) => c, describeOrigins: () => ['다른 회사(가상증권) · 자기소개서'], cardsCoverProfile: () => false },
 };
 function compile(file, req) {
   const mod = { exports: {} };
@@ -33,7 +35,7 @@ stubs['./essay-contract'] = compile('lib/essay-contract.ts', require);
 stubs['./essay-diff'] = compile('lib/essay-diff.ts', require);
 stubs['./essay-style'] = compile('lib/essay-style.ts', id => stubs[id] || require(id));
 stubs['./application-harness'] = compile('lib/application-harness.ts', id => stubs[id] || require(id));
-const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/application-draft.ts', id => stubs[id] || require(id));
+const { generateCustomEssayAnswer, prepareEssayBatch, draftRepairReason, materialsLogDetail } = compile('lib/application-draft.ts', id => stubs[id] || require(id));
 (async () => {
   const result = await generateCustomEssayAnswer('test', { question: '성장과정', countSpaces: true, guidance: '판단의 이유를 기록했습니다.' });
   // 구상 → 소재 배치 → 작성 → 편집 → 직무·회사 맥락 독립 검증(작성자의 구상을 받지 않음)
@@ -128,5 +130,43 @@ const { generateCustomEssayAnswer, prepareEssayBatch } = compile('lib/applicatio
   assert.throws(() => stubs['./essay-contract'].validateEssay(reasoning, requests[0], [], []), /근거/);
   assert.throws(() => stubs['./essay-contract'].validateEssay({ ...reasoning, answer: '수익이 30% 증가했습니다.' }, requests[0], [], [], true), /수치/);
   assert.throws(() => validators.validatePlans({ plans: [{ ...plan, research: [{ ...plan.research[0], paragraph: '1' }] }] }, [plan.question], sources, 'test'), /문단 번호/);
-  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result');
+  // 자격·어학·학력은 소재 배치를 거치지 않는 사실 자료다: 고르지 않아도 인용할 수 있고, 등록번호는 넘기지 않는다.
+  applicant = { ...applicant, certifications: [{ name: '투자자산운용사', issuer: '금융투자협회', registrationNumber: 'REG-SECRET', issuedDate: '2025-06' }] };
+  const certified = { ...answer, answer: `${answer.answer} 투자자산운용사 자격을 취득했습니다.`, evidence: [...answer.evidence, { sourceId: 'profile.certification.0', quote: '투자자산운용사', usedFor: '직무 지식' }] };
+  const materialsOnlyUser = { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', mandatory: true, status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] };
+  const request = { question: plan.question, countSpaces: true, guidance: answer.answer };
+  queued = [{ plans: [plan] }, materialsOnlyUser];
+  let beforeCredential = prompts.length;
+  const credentialBatch = await prepareEssayBatch('test', [request]);
+  const materialsPrompt = prompts[beforeCredential + 1];
+  assert.ok(materialsPrompt.includes('profile.certification.0') && !materialsPrompt.includes('REG-SECRET'));
+  assert.ok(materialsPrompt.includes('보유 자격을 나열하지 마세요'), 'materials stage gets the credential rule');
+  queued = [certified, certified, { issues: [] }];
+  beforeCredential = prompts.length;
+  const citedCredential = await generateCustomEssayAnswer('test', request, undefined, credentialBatch);
+  assert.equal(prompts.length - beforeCredential, 3, 'citing an unselected credential needs no repair call');
+  assert.ok(citedCredential.evidence.some((e) => e.sourceId === 'profile.certification.0'));
+  assert.equal(draftRepairReason(citedCredential), null);
+
+  // 봉쇄: 고르지 않은 경험 카드를 쓰면 한 번 고쳐 쓰게 하고, 그래도 남으면 답변을 버리지 않고 메모를 맨 앞에 붙인다. 독립 검증은 그대로 돈다.
+  confirmedCards = [{ id: 'EXP-31', personal_actions: ['재무위험관리사를 취득하며 리스크 관리의 기초를 공부함'] }];
+  queued = [{ plans: [plan] }, materialsOnlyUser];
+  const cardBatch = await prepareEssayBatch('test', [request]);
+  assert.deepEqual(cardBatch.plans[0].selectedMaterials.map((m) => m.sourceId), ['user.current.0']);
+  const outside = { ...answer, evidence: [...answer.evidence, { sourceId: 'card.EXP-31', quote: '재무위험관리사를 취득하며', usedFor: '직무 지식' }] };
+  queued = [outside, outside, outside, { issues: [] }];
+  const beforeOutside = prompts.length;
+  const kept = await generateCustomEssayAnswer('test', request, undefined, cardBatch);
+  assert.equal(queued.length, 0);
+  assert.ok(prompts[beforeOutside + 2].includes('고르지 않은 경험(card.EXP-31)'), 'the repair call receives the containment failure');
+  assert.equal(kept.status, 'draft');
+  assert.ok(kept.reviewNotes[0].startsWith('소재 배치에서 고르지 않은 경험 사용: card.EXP-31(출처: 다른 회사(가상증권) · 자기소개서)'));
+  assert.ok(prompts.at(-1).includes('독립된 검토자') && prompts.at(-1).includes('가상증권'), 'the kept answer still goes through the context audit');
+  assert.match(draftRepairReason(kept), /고르지 않은 경험\(card\.EXP-31\)/);
+  // 작성 기록용 소재 배치 요약
+  const logged = materialsLogDetail(kept.plan);
+  assert.deepEqual(logged.selectedMaterials.map((m) => [m.sourceId, m.fit, m.anchor.quote]), [['user.current.0', 'direct', ANCHOR]]);
+  assert.equal(logged.coverage[0].status, 'SUFFICIENT');
+  assert.deepEqual(materialsLogDetail(undefined), {});
+  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result, credentials cited without material selection, containment kept with a note after one repair, materials logged');
 })().catch(error => { console.error(error); process.exitCode = 1; });
