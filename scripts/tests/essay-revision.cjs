@@ -27,7 +27,7 @@ const stubs = {
   './application-draft': {
     WRITING_RULES: '',
     getCachedApplicationDraft: () => draft,
-    askModel: async (prompt) => { prompts.push(prompt); assert.ok(queued.length, `unexpected model call: ${prompt.slice(0, 80)}`); return JSON.stringify(queued.shift()); },
+    askModel: async (prompt) => { prompts.push(prompt); assert.ok(queued.length, `unexpected model call: ${prompt.slice(0, 80)}`); const value = queued.shift(); return typeof value === 'string' ? value : JSON.stringify(value); },
     collectContext: async () => ({ sources, forbiddenNames: ['가상방산'], otherCompanies: ['가상방산'], company: '가상은행', editPreferences: '',
       materialOrigins: new Map([['card.EXP-01', ['다른 회사(가상방산) · 자기소개서 · 임베디드 SW 개발']]]) }),
   },
@@ -108,6 +108,48 @@ const clean = { issues: [] };
   await revision.reviewEssay('S', question, '');
   const issues = draft.essayAnswers[0].feedback.issues;
   assert.ok(issues[0].startsWith('직무·회사 맥락 확인(다른 회사 맥락)') && issues[1] === '구체성 부족');
+
+  // 문장 내 따옴표·줄바꿈 오류가 연속 발생해도 문법 복구 뒤 정상 검증을 거친다.
+  const malformed = '{"answer":"저는 "확인"했습니다.","intent":"수정"}';
+  reset();
+  queued = [malformed, '{"answer":"첫 줄\n둘째 줄"}', proposal(`${baseText} 기준을 확인했습니다.`, [kept]), clean];
+  await revision.reviseEssay('S', question, '행동을 보강해주세요');
+  assert.equal(queued.length, 0);
+  assert.ok(draft.essayAnswers[0].pendingRevision);
+  assert.ok(prompts[1].includes('JSON 문법만 복구'));
+
+  // 내용 검증 실패는 문법 복구와 별도로 처리된다.
+  reset();
+  queued = [malformed, proposal(`${baseText} 기준을 확인했습니다.`, [{ ...kept, quote: '원문에 없는 인용' }]), proposal(`${baseText} 기준을 확인했습니다.`, [kept]), clean];
+  await revision.reviseEssay('S', question, '행동을 보강해주세요');
+  assert.equal(queued.length, 0);
+  assert.ok(prompts[2].includes('답변 근거가 저장된 원문과 일치하지 않습니다.'));
+
+  // 첨삭 받기도 문법 복구를 적용하고, 끝내 실패하면 기존 저장 내용을 보존한다.
+  reset();
+  queued = [malformed, malformed, { summary: '총평', strengths: [], issues: [], suggestions: [] }, clean];
+  await revision.reviewEssay('S', question, '');
+  assert.ok(draft.essayAnswers[0].feedback);
+  reset();
+  const before = JSON.stringify(draft);
+  queued = [malformed, malformed, malformed];
+  await assert.rejects(revision.reviseEssay('S', question, '보강해주세요'), /JSON 형식을 자동으로 복구하지 못했습니다/);
+  assert.equal(queued.length, 0);
+  assert.equal(JSON.stringify(draft), before);
+
+  reset();
+  const unchanged = JSON.stringify(draft);
+  queued = [malformed, proposal(`${baseText} 기준을 확인했습니다.`, [{ ...kept, quote: '없는 인용' }]), malformed, malformed];
+  await assert.rejects(revision.reviseEssay('S', question, '보강해주세요'), /JSON 형식을 자동으로 복구하지 못했습니다/);
+  assert.equal(queued.length, 0, '문법 복구 예산은 내용 재시도에서도 공유해야 한다');
+  assert.equal(JSON.stringify(draft), unchanged);
+
+  reset();
+  queued = ['[]', { summary: '총평', strengths: [], issues: [], suggestions: [] }, clean];
+  await revision.reviewEssay('S', question, '');
+  assert.equal(queued.length, 0);
+  assert.ok(prompts[1].includes('[형식 오류 결과]'), '유효한 JSON의 스키마 오류는 기존 검증 재시도로 처리한다');
+  assert.ok(!prompts[1].includes('[JSON 문법 오류 결과'), '스키마 오류는 문법 복구 예산을 쓰지 않는다');
 
   console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

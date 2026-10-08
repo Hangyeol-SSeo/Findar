@@ -8,7 +8,7 @@ import { createApplicationTask, executeApplicationTask } from "@/lib/application
 export const runtime = "nodejs";
 export const maxDuration = 1800;
 
-// 첨삭 시작 — 고쳐쓰기(rewrite) 또는 첨삭 받기(review). Sonnet 1회(형식 오류 시 1회 재시도)로
+// 첨삭 시작 — 고쳐쓰기(rewrite) 또는 첨삭 받기(review). 내용 검증 재시도와 별도로 JSON 문법을 최대 2회 복구한다.
 // 백그라운드 작업으로 돌고, 결과는 답변의 pendingRevision/feedback에 저장된다.
 export async function POST(request: Request, { params }: { params: Promise<{ seq: string }> }) {
   if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
