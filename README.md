@@ -78,3 +78,5 @@ npx tsc --noEmit
 ```
 
 브라우저 회귀 검증은 별도 테스트 프로필과 가상 데이터만 사용합니다. 실행 중인 개발 서버와 테스트용 Playwright 경로를 `FINDAR_TEST_URL`, `FINDAR_PLAYWRIGHT`로, 브라우저 실행 파일을 `FINDAR_BROWSER`로 지정한 뒤 `node scripts/tests/browser-assistant.cjs` 및 `node scripts/tests/browser-extension.cjs`를 실행합니다. 앱의 런타임에는 Playwright를 사용하지 않습니다.
+
+지원 도우미의 **작업 현황 → 작업 취소**로 자기소개서 작성, 첨삭, 업계 사례 조사와 Word 입력을 중단할 수 있습니다. 이력 구성의 평가에도 취소 버튼이 있습니다. 취소 중에는 정리가 끝날 때까지 재실행을 막으며, 이미 저장한 답변과 이전 결과는 유지합니다. 탭 이동이나 창을 닫는 동작은 작업을 취소하지 않습니다.

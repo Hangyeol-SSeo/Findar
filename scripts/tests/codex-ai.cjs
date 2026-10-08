@@ -10,6 +10,7 @@ const original = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 const oldCwd = process.cwd();
 const cache = new Map();
 let claudeCalls = 0;
+let claudeReady;
 function load(relative) {
   const file = path.resolve(root, relative);
   if (cache.has(file)) return cache.get(file).exports;
@@ -19,6 +20,10 @@ function load(relative) {
   } }).outputText;
   const req = id => id === '@anthropic-ai/claude-agent-sdk' ? { async *query(input) {
     claudeCalls++;
+    if (input.prompt === 'cancel-fixture') {
+      claudeReady(input.options.abortController.signal);
+      await new Promise((_, reject) => input.options.abortController.signal.addEventListener('abort', () => reject(input.options.abortController.signal.reason), { once: true }));
+    }
     assert.ok(!Object.hasOwn(input, 'inputFiles'), 'provider-specific inputs must not reach Claude');
     yield { type: 'result', subtype: 'success', is_error: false, result: 'claude-result' };
   } } : id.startsWith('@/') ? load(id.slice(2) + '.ts')
@@ -115,6 +120,29 @@ function pdfFile(name, text) {
     assert.equal(messages.at(-1).result, model === AI_MODEL_IDS.SONNET ? 'claude-result' : '{"ok":true}');
   }
   assert.equal(claudeCalls, 1, 'Codex requests must bypass the Claude SDK');
+  const { withAIAbortSignal } = load('lib/ai-operation.ts');
+  const claudeAbort = new AbortController();
+  const ready = new Promise(resolve => claudeReady = resolve);
+  const claudeWork = withAIAbortSignal(claudeAbort.signal, async () => {
+    for await (const _message of query({ prompt: 'cancel-fixture', options: { model: AI_MODEL_IDS.SONNET } })) assert.fail('cancelled Claude query must not return output');
+  });
+  const claudeRejected = assert.rejects(claudeWork, { name: 'AbortError' });
+  const modelSignal = await ready;
+  claudeAbort.abort(); await claudeRejected;
+  assert.equal(modelSignal.aborted, true);
+  process.env.FINDAR_CODEX_TEST_MODE = 'hang';
+  const codexAbort = new AbortController();
+  const codexWork = withAIAbortSignal(codexAbort.signal, async () => {
+    for await (const _message of query({ prompt: 'cancel-codex-fixture', options: { model: AI_MODEL_IDS.GPT_6_LUNA } })) assert.fail('cancelled Codex query must not return output');
+  });
+  const codexRejected = assert.rejects(codexWork, { name: 'AbortError' });
+  const deadline = Date.now() + 5000;
+  while (!fs.readFileSync(tracePath, 'utf8').includes('cancel-codex-fixture')) {
+    assert.ok(Date.now() < deadline, 'Codex subprocess must start');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  codexAbort.abort(); await codexRejected;
+  delete process.env.FINDAR_CODEX_TEST_MODE;
   process.chdir(scratch);
   const { readAIModelSettings, writeAIModelSettings, getJobAIConfiguration } = load('lib/ai-model-settings.ts');
   const initial = readAIModelSettings();

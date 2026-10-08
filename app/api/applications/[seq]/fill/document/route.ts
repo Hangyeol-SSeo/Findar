@@ -21,12 +21,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ seq
     const essays = buildEssayFillSources(getCachedApplicationDraft(seq)?.essayAnswers ?? []);
     const filename = file.name.replace(/\.docx$/i, "-작성본.docx");
     const task = createApplicationTask(seq, "document");
-    after(() => executeApplicationTask(task.id, async () => {
+    after(() => executeApplicationTask(task.id, async (_progress, signal) => {
       const inspected = await processDocx(document);
       if (!inspected.targets.length) throw new Error(`작성할 입력칸을 찾지 못했습니다. ${inspected.unsupported}`);
+      signal.throwIfAborted();
       const plan = await planApplicationFill(validateFillTargets(inspected.targets), undefined, essays);
       const result = await processDocx(document, plan.assignments);
       if (!result.document) throw new Error("작성본 파일을 만들지 못했습니다.");
+      signal.throwIfAborted();
       const downloadUrl = storeDocumentDownload(seq, filename, result.document);
       return { document: { downloadUrl, filename, filled: result.filled ?? 0, total: inspected.targets.length, skipped: plan.skipped, note: result.unsupported } };
     }));

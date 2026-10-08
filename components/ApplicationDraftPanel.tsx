@@ -8,6 +8,7 @@ import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
 import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest } from "./EssayRevisionTools";
+import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
 import Toast, { useToast } from "./Toast";
 
 // 첨삭·조사 작업이 끝났을 때 알릴 문구(작업 결과 종류별).
@@ -133,6 +134,11 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
           if (handledTasks.current.has(task.id)) continue;
           handledTasks.current.add(task.id);
           const watched = watchedTasks.current.has(task.id);
+          if (task.status === "cancelled") {
+            if (task.kind !== "document") reloadDraft = true;
+            if (watched) showToast(task.kind === "writing" ? `자기소개서 작성을 취소했습니다. 이미 저장한 문항 ${task.done}개는 유지됩니다.` : "작업을 취소했습니다. 기존 결과는 유지됩니다.");
+            continue;
+          }
           if (task.kind === "revision" || task.kind === "research") {
             reloadDraft = true;
             if (!watched) continue;
@@ -326,7 +332,8 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
       <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
-        <span>{task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "research" ? "업계 사례 조사" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "completed" ? "완료" : "실패"}</span>
+        <span>{task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "research" ? "업계 사례 조사" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
+        <ApplicationTaskCancelButton task={task} onUpdate={acceptTask} onError={setError} />
         {task.error && <span className="text-red-600">{task.error}</span>}
         {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.result.document.filled}/{task.result.document.total}칸 입력 · 다운로드</a>}
       </div>)}

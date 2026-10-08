@@ -1,3 +1,4 @@
+import { createSharedAIWork, waitForAIWork, throwIfAIAborted, type SharedAIWork } from "./ai-operation";
 import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
@@ -199,7 +200,7 @@ recurringThemes: 여러 답변에 반복해서 나오는 경험·에피소드 �
 }
 
 export interface EssayBankProgress { running: boolean; done: number; total: number; current: string }
-const state = globalThis as typeof globalThis & { findarEssayBankRun?: Promise<EssayBank>; findarEssayBankProgress?: EssayBankProgress };
+const state = globalThis as typeof globalThis & { findarEssayBankRun?: SharedAIWork<EssayBank>; findarEssayBankProgress?: EssayBankProgress };
 
 export function getEssayBankProgress(): EssayBankProgress {
   return state.findarEssayBankProgress ?? { running: false, done: 0, total: 0, current: "" };
@@ -234,12 +235,14 @@ async function runEssayBank(retryFailed: boolean, onProgress?: (msg: string) => 
       onProgress?.(`과거 자료 분석 중: ${file.name} (${progress.done + 1}/${pending.length})`);
       try {
         const extracted = await extractSource(file, model);
+        throwIfAIAborted();
         const now = Date.now();
         bank = updateBank((b) => {
           b.entries = [...b.entries.filter((e) => e.sourceFile !== key), ...extracted.map((e) => ({ ...e, id: randomUUID(), source: "imported" as const, createdAt: now }))];
           b.files[key] = { hash, model, analyzedAt: now, status: "ok", entryCount: extracted.length };
         });
       } catch (error) {
+        throwIfAIAborted();
         console.error(`[essay-bank] ${key} 분석 실패:`, error);
         // 이전에 추출한 항목은 남겨둔다(내용이 바뀌었어도 없는 것보다 낫다). 화면에 실패를 보여준다.
         bank = updateBank((b) => {
@@ -257,8 +260,9 @@ async function runEssayBank(retryFailed: boolean, onProgress?: (msg: string) => 
         progress.current = "문체·반복 소재 정리";
         try {
           const style = await summarizeStyle(imported, model);
+          throwIfAIAborted();
           bank = updateBank((b) => { Object.assign(b, style, { sourcesHash, model, generatedAt: Date.now() }); });
-        } catch (error) { console.error("[essay-bank] 문체 정리 실패:", error); }
+        } catch (error) { throwIfAIAborted(); console.error("[essay-bank] 문체 정리 실패:", error); }
       }
     }
     return bank;
@@ -270,14 +274,25 @@ async function runEssayBank(retryFailed: boolean, onProgress?: (msg: string) => 
 
 // 작성 직전(collectContext)과 설정 화면의 "지금 분석"이 함께 부른다. 실행 중이면 같은 작업을 기다린다.
 export async function ensureEssayBank(opts?: { onProgress?: (msg: string) => void; retryFailed?: boolean }): Promise<EssayBank> {
-  if (state.findarEssayBankRun) return state.findarEssayBankRun;
+  throwIfAIAborted();
+  const running = state.findarEssayBankRun;
+  if (running) {
+    try { return await waitForAIWork(running); }
+    catch (error) {
+      throwIfAIAborted();
+      if (!running.controller.signal.aborted) throw error;
+      return ensureEssayBank(opts);
+    }
+  }
   const bank = readBank();
   const model = getAIModelId("essayBank");
   const keys = new Set(listEssaySources().map(essaySourceKey));
   const stale = Object.keys(bank.files).some((k) => !keys.has(k)) || bank.entries.some((e) => e.source === "imported" && (!e.sourceFile || !keys.has(e.sourceFile)));
   if (!stale && !pendingSources(bank, model, !!opts?.retryFailed).length) return bank;
-  state.findarEssayBankRun = runEssayBank(!!opts?.retryFailed, opts?.onProgress).finally(() => { state.findarEssayBankRun = undefined; });
-  return state.findarEssayBankRun;
+  const work = createSharedAIWork(() => runEssayBank(!!opts?.retryFailed, opts?.onProgress));
+  state.findarEssayBankRun = work;
+  void work.promise.finally(() => { if (state.findarEssayBankRun === work) state.findarEssayBankRun = undefined; }).catch(() => {});
+  return waitForAIWork(work);
 }
 
 export function getCachedEssayBank(): EssayBank {

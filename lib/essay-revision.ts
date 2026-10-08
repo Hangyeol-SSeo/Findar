@@ -1,3 +1,4 @@
+import { throwIfAIAborted } from "./ai-operation";
 import { randomUUID } from "node:crypto";
 import { APPLICATION_ROLE_RULES, assertApplicationRole, requireApplicationRole } from "./application-role";
 import { getAIModelId } from "./ai-model-settings";
@@ -47,6 +48,7 @@ export function findEssayAnswer(seq: string, question: string): EssayAnswer {
 
 // 답변 하나를 읽고-고쳐-저장한다. 화면에서 온 요청은 expectedRevision으로 다른 창의 변경을 덮어쓰지 않는다.
 export function updateEssayAnswer(seq: string, question: string, update: (answer: EssayAnswer) => EssayAnswer, expectedRevision?: string | null): ApplicationDraft {
+  throwIfAIAborted();
   const draft = getCachedApplicationDraft(seq);
   const index = draft?.essayAnswers.findIndex((a) => isUserAnswer(a, question)) ?? -1;
   if (!draft || index < 0) throw new Error("해당 문항의 답변을 찾을 수 없습니다.");

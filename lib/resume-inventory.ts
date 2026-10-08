@@ -1,3 +1,4 @@
+import { createSharedAIWork, waitForAIWork, throwIfAIAborted, type SharedAIWork } from "./ai-operation";
 import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -85,11 +86,12 @@ ${pdfPaths.map((p) => `- ${p}`).join("\n")}
   return { sourcesHash, generatedAt: Date.now(), model, items };
 }
 
-const state = globalThis as typeof globalThis & { findarInventoryInflight?: Map<string, Promise<ResumeInventory>> };
-const inflight = (state.findarInventoryInflight ??= new Map<string, Promise<ResumeInventory>>());
+const state = globalThis as typeof globalThis & { findarInventoryInflight?: Map<string, SharedAIWork<ResumeInventory>> };
+const inflight = (state.findarInventoryInflight ??= new Map<string, SharedAIWork<ResumeInventory>>());
 
 // 이력서가 하나도 없으면 null — 평가는 "지원 정보" 항목만으로도 진행할 수 있다.
 export async function ensureResumeInventory(): Promise<ResumeInventory | null> {
+  throwIfAIAborted();
   const pdfs = listResumePdfs();
   if (pdfs.length === 0) return null;
   const hash = hashResumeSources(pdfs);
@@ -98,17 +100,23 @@ export async function ensureResumeInventory(): Promise<ResumeInventory | null> {
   const cached = readCached();
   if (cached?.sourcesHash === hash && cached.model === model) return cached;
   const running = inflight.get(key);
-  if (running) return running;
-  const task = extractInventory(pdfs, hash, model).then((inv) => {
+  if (running) {
+    try { return await waitForAIWork(running); }
+    catch (error) {
+      throwIfAIAborted();
+      if (!running.controller.signal.aborted) throw error;
+      return ensureResumeInventory();
+    }
+  }
+  const work = createSharedAIWork(async () => {
+    const inv = await extractInventory(pdfs, hash, model);
+    throwIfAIAborted();
     writeFileSync(INVENTORY_PATH, JSON.stringify(inv, null, 2));
     return inv;
   });
-  inflight.set(key, task);
-  try {
-    return await task;
-  } finally {
-    inflight.delete(key);
-  }
+  inflight.set(key, work);
+  void work.promise.finally(() => { if (inflight.get(key) === work) inflight.delete(key); }).catch(() => {});
+  return waitForAIWork(work);
 }
 
 // AI 호출 없이, 현재 이력서·모델과 맞는 캐시가 있으면 돌려준다(경험 카드 상태 표시용).

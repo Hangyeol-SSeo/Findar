@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
 import Link from "next/link";
 import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
 import {
@@ -158,6 +159,7 @@ export default function ResumeTailoringPanel({ seq }: { seq: string }) {
             >
               {running ? "평가 중..." : result ? "다시 평가" : "이력 평가하기"}
             </button>
+            {task && <ApplicationTaskCancelButton task={task} onUpdate={setTask} onError={setError} />}
             {running && task && (
               <span className="text-xs text-gray-500" role="status">
                 {task.done === 0 ? "이력서 항목 정리 중 (처음 한 번은 몇 분 걸릴 수 있어요)" : "공고와 비교 중"} · {task.done}/{task.total}
@@ -169,6 +171,7 @@ export default function ResumeTailoringPanel({ seq }: { seq: string }) {
                 {result.targetRole ? `${result.targetRole} · ` : ""}{formatDate(result.generatedAt)} 평가 · 항목 {result.items.length}개
               </span>
             )}
+            {task?.status === "cancelled" && <p role="status" className="text-xs text-gray-500">평가를 취소했습니다. 기존 평가 결과는 유지됩니다.</p>}
           </div>
         )}
         {data && !data.hasResume && data.hasApplicantProfile && (

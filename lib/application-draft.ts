@@ -1,3 +1,4 @@
+import { throwIfAIAborted } from "./ai-operation";
 import { requireApplicationRole, assertApplicationRole, APPLICATION_ROLE_RULES } from "./application-role";
 import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
@@ -190,6 +191,7 @@ export async function askModel(prompt: string, signal: AbortSignal | undefined, 
     try {
       return await askModelOnce(prompt, signal, model);
     } catch (e) {
+      throwIfAIAborted();
       lastError = e;
       if (signal?.aborted) throw e; // 사용자가 직접 취소한 거면 재시도하지 않는다.
       console.error(`[application-draft] 모델 호출 실패 (시도 ${attempt}/${MODEL_CALL_MAX_ATTEMPTS}):`, e);
@@ -473,6 +475,7 @@ ${OUTPUT}` : plannedBackground;
 }
 
 export function persistEssay(seq: string, generated: EssayAnswer, threadId?: string) {
+  throwIfAIAborted();
   if (generated.roleRevision !== undefined) assertApplicationRole(seq, generated.roleRevision);
   const existing = getCachedApplicationDraft(seq);
   // 새로 쓰기도 이전 글을 버전 기록에 남긴다. 보완 질문만 돌아온 경우(본문 없음)엔 이전 기록을 그대로 둔다.

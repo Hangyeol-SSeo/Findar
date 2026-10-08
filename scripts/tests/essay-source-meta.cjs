@@ -18,9 +18,15 @@ function compile(file, req) {
 
 const answer = '투자동아리에서 손실이 한도를 넘자 매매를 멈추고 종목별 손실 기여도를 정리했습니다.';
 let calls = 0;
+let blockSource = false, sourceReady;
 const sdk = {
   query: async function* ({ prompt }) {
     calls++;
+    if (blockSource && prompt.includes('{"entries"')) {
+      const signal = aiOperation.getAIAbortSignal();
+      sourceReady();
+      await new Promise((_, reject) => signal.addEventListener('abort', () => setTimeout(() => reject(signal.reason), 20), { once: true }));
+    }
     let result;
     if (prompt.includes('{"entries"')) result = { entries: [{ company: '', question: '지원 동기', answer, context: '2024 하반기' }] };
     else if (prompt.includes('{"cards"')) {
@@ -32,10 +38,11 @@ const sdk = {
 };
 const contract = compile('lib/essay-contract.ts', require);
 const sources = compile('lib/essay-sources.ts', require);
+const aiOperation = compile('lib/ai-operation.ts', require);
 const models = { getAIModelId: () => 'test-model' };
-const bank = compile('lib/essay-bank.ts', (id) => ({ './ai-query': sdk, './ai-model-settings': models, './essay-contract': contract, './essay-sources': sources }[id] ?? require(id)));
+const bank = compile('lib/essay-bank.ts', (id) => ({ './ai-operation': aiOperation, './ai-query': sdk, './ai-model-settings': models, './essay-contract': contract, './essay-sources': sources }[id] ?? require(id)));
 const cards = compile('lib/experience-cards.ts', (id) => ({
-  './ai-query': sdk, './ai-model-settings': models, './essay-bank': bank, './essay-contract': contract,
+  './ai-operation': aiOperation, './ai-query': sdk, './ai-model-settings': models, './essay-bank': bank, './essay-contract': contract,
   './vendor-skills': { loadVendorSkills: () => ({ cards: 'skill' }) },
   './resume-inventory': { ensureResumeInventory: async () => null, getCachedResumeInventory: () => null },
   './resume-files': { listResumePdfs: () => [] },
@@ -94,6 +101,21 @@ const entryOf = () => bank.getCachedEssayBank().entries.find((e) => e.answer ===
     bank.setEssaySourceMeta('interview', fresh, sources.parseEssaySourceMeta('가상은행', ''));
     assert.equal(status(fresh).status, 'not-analyzed');
     assert.throws(() => bank.setEssaySourceMeta('interview', '없는 파일.txt', null), /찾을 수 없습니다/);
+
+    // Cancelling source extraction must leave it retryable; a new caller arriving during cleanup starts fresh.
+    const cancelController = new AbortController();
+    blockSource = true;
+    const startedSource = new Promise(resolve => sourceReady = resolve);
+    const extraction = aiOperation.withAIAbortSignal(cancelController.signal, () => bank.ensureEssayBank());
+    const cancelledExtraction = assert.rejects(extraction, { name: 'AbortError' });
+    await startedSource;
+    cancelController.abort();
+    blockSource = false;
+    assert.equal(status(fresh).status, 'not-analyzed', 'cancellation must not poison the file as a failed analysis');
+    const replacementExtraction = bank.ensureEssayBank();
+    await cancelledExtraction;
+    await replacementExtraction;
+    assert.equal(status(fresh).status, 'ready', 'new work recovers from cancelled shared extraction');
 
     console.log('PASS editing company/role of already-uploaded sources: no re-analysis or card rebuild, entries and card origins updated in place, confirmation kept, role prefix replaced, clearing restores model values, entries analyzed before this feature');
   } catch (error) { console.error(error); process.exitCode = 1; }
