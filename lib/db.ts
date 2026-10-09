@@ -117,6 +117,39 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_essay_events_answer ON essay_events(seq, question, createdAt);
   CREATE INDEX IF NOT EXISTS idx_essay_events_type ON essay_events(type, createdAt);
   CREATE INDEX IF NOT EXISTS idx_essay_events_thread ON essay_events(threadId);
+
+  -- 하나의 공고(key=seq)에서 이어지는 AI 작업 대화의 모델별 세션 위치(lib/ai-conversation.ts). 대화의 원본 기억은
+  -- essay_events이고, 이 표는 모델의 네이티브 세션을 이어 쓰기 위한 위치(세션 id, 어디까지 기록을 넘겼는지)만 담는다.
+  CREATE TABLE IF NOT EXISTS ai_conversations (
+    key TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    sessionId TEXT,
+    lastMessageId TEXT,
+    headerHash TEXT NOT NULL,
+    syncedRowid INTEGER NOT NULL DEFAULT 0,
+    contextTokens INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL DEFAULT '',
+    updatedAt INTEGER NOT NULL,
+    PRIMARY KEY (key, provider)
+  );
+
+  -- AI 호출마다 실제 토큰·캐시 적중·비용(모델이 알려 주는 값). 비용을 줄이는 변경의 효과를 숫자로 확인하는 기록이다.
+  CREATE TABLE IF NOT EXISTS ai_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL DEFAULT '',
+    feature TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    promptChars INTEGER NOT NULL DEFAULT 0,
+    inputTokens INTEGER,
+    cacheReadTokens INTEGER,
+    cacheCreationTokens INTEGER,
+    outputTokens INTEGER,
+    costUsd REAL,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_key ON ai_usage(key, createdAt);
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -852,4 +885,73 @@ export function saveApplicationRole(seq: string, role: string, expectedRevision:
     db.prepare("INSERT INTO application_roles (seq, role, revision) VALUES (?, ?, ?) ON CONFLICT(seq) DO UPDATE SET role = excluded.role, revision = excluded.revision").run(seq, role, revision);
     return { role, revision };
   })();
+}
+
+// ---- AI 작업 대화(lib/ai-conversation.ts) ----
+export interface AIConversationRow {
+  key: string;
+  provider: string;
+  sessionId: string | null;
+  lastMessageId: string | null;
+  headerHash: string;
+  syncedRowid: number;
+  // 마지막 턴에서 모델이 처리한 전체 문맥 토큰(새 입력 + 캐시 읽기 + 캐시 쓰기 + 출력). 이어 쓸지 새로 시작할지 판단한다.
+  contextTokens: number;
+  model: string;
+  updatedAt: number;
+}
+
+export function getAIConversationRow(key: string, provider: string): AIConversationRow | undefined {
+  return db.prepare(`SELECT * FROM ai_conversations WHERE key = ? AND provider = ?`).get(key, provider) as AIConversationRow | undefined;
+}
+
+export function saveAIConversationRow(row: AIConversationRow): void {
+  db.prepare(`
+    INSERT INTO ai_conversations (key, provider, sessionId, lastMessageId, headerHash, syncedRowid, contextTokens, model, updatedAt)
+    VALUES (@key, @provider, @sessionId, @lastMessageId, @headerHash, @syncedRowid, @contextTokens, @model, @updatedAt)
+    ON CONFLICT(key, provider) DO UPDATE SET sessionId = excluded.sessionId, lastMessageId = excluded.lastMessageId,
+      headerHash = excluded.headerHash, syncedRowid = excluded.syncedRowid, contextTokens = excluded.contextTokens, model = excluded.model, updatedAt = excluded.updatedAt
+  `).run(row);
+}
+
+export function deleteAIConversationRow(key: string, provider: string): void {
+  db.prepare(`DELETE FROM ai_conversations WHERE key = ? AND provider = ?`).run(key, provider);
+}
+
+// 한 공고의 작성 기록 중 rowid가 afterRowid보다 큰 것(기록에 들어간 순서). 대화에 아직 넘기지 않은 사건을 고른다.
+export function listEssayEventRowsAfter(seq: string, afterRowid: number): (EssayEventRow & { rowid: number })[] {
+  return db.prepare(`SELECT rowid, id, seq, question, type, actor, threadId, textBefore, textAfter, detail, analysis, createdAt
+    FROM essay_events WHERE seq = ? AND rowid > ? ORDER BY rowid`).all(seq, afterRowid) as (EssayEventRow & { rowid: number })[];
+}
+
+export interface AIUsageRow {
+  key: string;
+  feature: string;
+  provider: string;
+  model: string;
+  mode: string;
+  promptChars: number;
+  inputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  createdAt: number;
+}
+
+export function insertAIUsage(row: AIUsageRow): void {
+  db.prepare(`
+    INSERT INTO ai_usage (key, feature, provider, model, mode, promptChars, inputTokens, cacheReadTokens, cacheCreationTokens, outputTokens, costUsd, createdAt)
+    VALUES (@key, @feature, @provider, @model, @mode, @promptChars, @inputTokens, @cacheReadTokens, @cacheCreationTokens, @outputTokens, @costUsd, @createdAt)
+  `).run(row);
+}
+
+export function listAIUsage(filter: { key?: string; since?: number; limit?: number } = {}): AIUsageRow[] {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (filter.key !== undefined) { where.push("key = ?"); params.push(filter.key); }
+  if (filter.since !== undefined) { where.push("createdAt >= ?"); params.push(filter.since); }
+  params.push(Math.min(Math.max(filter.limit ?? 200, 1), 2000));
+  return db.prepare(`SELECT key, feature, provider, model, mode, promptChars, inputTokens, cacheReadTokens, cacheCreationTokens, outputTokens, costUsd, createdAt
+    FROM ai_usage ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...params) as AIUsageRow[];
 }

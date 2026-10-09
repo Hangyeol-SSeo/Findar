@@ -69,7 +69,11 @@ export interface CodexRequest {
   webSearch?: boolean;
   webToolLimit?: number;
   timeoutMs?: number;
+  // 턴이 끝날 때 Codex가 알려 주는 토큰 사용량(캐시 적중 포함). 사용량 기록용.
+  onUsage?: (usage: CodexUsage) => void;
 }
+
+export interface CodexUsage { inputTokens: number | null; cachedInputTokens: number | null; outputTokens: number | null }
 
 /** Run a fresh, non-persisted subscription-backed request with no local execution tools. */
 export async function runCodex(request: CodexRequest): Promise<string> {
@@ -123,6 +127,9 @@ export async function runCodex(request: CodexRequest): Promise<string> {
             stop(new Error("Codex 요청에 실패했습니다. 구독 사용 한도와 선택한 모델의 이용 가능 여부를 확인해주세요."));
           } else if (event.type === "turn.completed") {
             completed = true;
+            const usage = event.usage ?? {};
+            const num = (v: unknown) => (typeof v === "number" ? v : null);
+            request.onUsage?.({ inputTokens: num(usage.input_tokens), cachedInputTokens: num(usage.cached_input_tokens), outputTokens: num(usage.output_tokens) });
           } else if (event.type === "item.started" || event.type === "item.completed") {
             const item = event.item;
             if (!item || typeof item.type !== "string") throw new Error("invalid event");
