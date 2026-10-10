@@ -314,7 +314,7 @@ export interface PreparedEssayBatch {
 const STRUCTURE_ERROR = "AI가 작성 방향과 근거를 구성하는 중 오류가 발생했습니다. 입력하신 문항의 문제는 아닙니다. 다시 작성을 요청해주세요.";
 
 // 형식·근거 검증에 실패하면 한 번만 고쳐 달라고 한다. ask가 작업 대화면 실패한 응답은 이미 대화에 있어 다시 보내지 않는다.
-async function structuredStep(ask: (prompt: string) => Promise<string>, prompt: string, validate: (value: Record<string, unknown>) => EssayPlan[], inConversation: boolean) {
+async function structuredStep(ask: (prompt: string, followUp?: boolean) => Promise<string>, prompt: string, validate: (value: Record<string, unknown>) => EssayPlan[], inConversation: boolean) {
   const result = await ask(prompt);
   try { return validate(parseModelJson(result)); }
   catch (error) {
@@ -322,7 +322,7 @@ async function structuredStep(ask: (prompt: string) => Promise<string>, prompt: 
     try {
       return validate(parseModelJson(await ask(inConversation
         ? `[검증 실패] ${reason}\n방금 응답에서 모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`
-        : `${prompt}\n[검증 실패 결과]\n${result}\n검증 실패: ${reason}\n모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`)));
+        : `${prompt}\n[검증 실패 결과]\n${result}\n검증 실패: ${reason}\n모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`, true)));
     } catch (repairError) {
       console.error("[application-draft] 구상 검증 실패:", repairError);
       throw new Error(STRUCTURE_ERROR);
@@ -368,7 +368,7 @@ ${APPLICATION_ROLE_RULES}
 순수 JSON만 반환하세요: {"plans":[{"question":"입력 문항 원문", "questionTypes":["experience|motivation|opinion|freeform 중 해당하는 유형 모두"], "personalEvidence":"required 또는 optional", "intent":"평가 의도와 직무 요구", "message":"핵심 주장", "outline":["문단별 역할"], "materialCriteria":["소재 선정 기준"], "researchMode":"direct 또는 perspective 또는 none", "research":[{"sourceId":"company 자료 id", "quote":"본문의 연속된 원문", "purpose":"활용 목적과 직무 해석", "paragraph":1}], "notes":["자료의 한계 또는 미활용 이유"]}]}
 입력한 모든 문항에 대해 하나씩 반환하세요. 자료가 없거나 무관하면 researchMode=none, research=[]로 두고 notes에 이유를 설명하세요.`,
     (value) => validatePlans(value, questions, requirements, skills.version), false);
-  plans = await structuredStep((prompt) => conversation.ask(prompt, signal), `[작업: 소재 배치 — 위 [외부 스킬: 소재 배치] 기준]
+  plans = await structuredStep((prompt, followUp) => conversation.ask(prompt, signal, { followUp }), `[작업: 소재 배치 — 위 [외부 스킬: 소재 배치] 기준]
 [전체 문항 구상]\n${JSON.stringify(plans)}
 [문항별 추가 요청: 인용할 때 sourceId는 각 항목의 sourceId]\n${JSON.stringify(requests.map((r, i) => ({ question: r.question, guidance: r.guidance, sourceId: `user.current.${i}` })))}
 개인 경험 자료는 위 [사실 자료]의 job·company.*를 제외한 항목이다. 이미 저장된 다른 문항의 답변은 [작업 기록]에 있으며 사실 근거가 아니다.
@@ -420,7 +420,7 @@ ${editPreferences ? `${editPreferences}\n` : ""}구상에 부합하는 소재를
   })();
   const styleBlock = draftStyle.length ? `\n[초안 자동 문체 점검: 편집하며 함께 바로잡을 것]\n${draftStyle.map((n) => `- ${n}`).join("\n")}` : "";
   let edited = await conversation.ask(`[작업: 편집 — 위 [외부 스킬: 편집·첨삭]과 [외부 스킬: 한국어 AI 문체] 기준. 검토할 초안은 방금 응답이다]${styleBlock}\n지금은 채용 담당자 관점의 편집자다. 구상과 소재의 적합성, 문항의 누락된 요구, 반말 종결과 교훈형 도입, 사실/수치의 과장, 이름 나열, 창업 과시, 어색한 인과, 추상적 표현을 원문과 대조하라. 쓸모없는 문장을 덜어내고 문항 유형에 맞는 논증 또는 실제 판단과 행동으로 재작성하라. 개인 경험이 여러 문단에 흩어져 있으면 한 흐름으로 모으고, 주장마다 덧붙인 확인용 경험·단서 문장은 지운다. 조건에 맞는 최종 JSON을 반환하라.
-최종 JSON에 "contentReview":{"rating":"STRONG|ADEQUATE|THIN|NOT_READY","assessment":"고친 최종 답변의 문장을 근거로 한 내용 완성도 판정 이유","gaps":["평가에 필요한데 자료에 없는 핵심 정보(사용자에게 확인할 것)"]}를 함께 넣어라. 판정 기준은 위 외부 스킬 원문의 문항별 판정이며, 작성자 입장에서 후하게 매기지 않는다.\n${OUTPUT}`, signal);
+최종 JSON에 "contentReview":{"rating":"STRONG|ADEQUATE|THIN|NOT_READY","assessment":"고친 최종 답변의 문장을 근거로 한 내용 완성도 판정 이유","gaps":["평가에 필요한데 자료에 없는 핵심 정보(사용자에게 확인할 것)"]}를 함께 넣어라. 판정 기준은 위 외부 스킬 원문의 문항별 판정이며, 작성자 입장에서 후하게 매기지 않는다.\n${OUTPUT}`, signal, { followUp: true });
   // 마지막 검증에서 evidence에 빠진 회사 근거. 다른 이유로 수정 호출을 할 때 함께 바로잡도록 알려준다.
   let missingResearch: PlanCitation[] = [];
   const validate = async (text: string, final = false) => {
@@ -505,7 +505,7 @@ issues는 원문과 모순되는 사실, 근거 없는 구체적 사실 단정, 
       : "";
     const withRepair = <T extends object>(value: T): T => { repairReasons.set(value, reason); return value; };
     // 수정할 결과(방금 응답)는 이미 대화에 있어 다시 보내지 않는다.
-    edited = await conversation.ask(`[검증 실패 — 문항: ${request.question}]\n${repairGuide}검증 실패: ${reason}${researchFix}\n방금 응답에서 지적된 문제를 모두 해결한 최종 JSON만 반환하라.\n${OUTPUT}`, signal);
+    edited = await conversation.ask(`[검증 실패 — 문항: ${request.question}]\n${repairGuide}검증 실패: ${reason}${researchFix}\n방금 응답에서 지적된 문제를 모두 해결한 최종 JSON만 반환하라.\n${OUTPUT}`, signal, { followUp: true });
     try { return withRepair(await validate(edited, true)); }
     catch (finalError) {
       // 수정 뒤에도 독립 검증의 지적이 남으면 답변은 남기되, 지적 문장을 검토 메모 맨 앞에 둔다.

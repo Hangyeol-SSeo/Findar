@@ -34,20 +34,22 @@ const MAX_SUGGESTIONS = 12;
 const SUGGESTION_CATEGORIES = ["문항 적합성", "구체성", "논리 흐름", "표현·문체", "사실·근거", "분량"];
 
 // JSON 문법 복구는 내용 검증 재시도와 분리한다. 한 작업 전체에서 최대 두 번만 복구한다.
-// 작업 대화라 잘못된 응답은 이미 대화에 있어, 복구 지시에 다시 붙이지 않는다.
+// 작업 대화라 잘못된 응답은 이미 대화에 있어, 복구 지시에 다시 붙이지 않는다. 복구·수정 지시는 followUp으로 보내
+// 세션이 새로 열려도 원래 지시(요구 형식)와 고칠 응답이 함께 가게 한다.
 function revisionJsonRequester(conversation: AIConversation) {
   let repairsLeft = 2;
-  return async (prompt: string): Promise<string> => {
+  return async (prompt: string, followUp = false): Promise<string> => {
     let request = `${prompt}\nJSON 문자열 안의 큰따옴표, 역슬래시, 줄바꿈은 반드시 이스케이프하라. 설명 없이 유효한 JSON 객체만 반환하라.`;
     for (;;) {
       throwIfAIAborted();
-      const raw = await conversation.ask(request);
+      const raw = await conversation.ask(request, undefined, { followUp });
       try { parseModelJson(raw); return raw; }
       catch (error) {
         // 유효한 JSON의 스키마 오류는 기존 내용 검증 재시도로 넘긴다.
         if (!(error instanceof ModelJsonSyntaxError)) return raw;
         if (repairsLeft-- <= 0)
           throw new Error("AI 첨삭 응답의 JSON 형식을 자동으로 복구하지 못했습니다. 기존 자기소개서는 보존되어 있습니다. 다시 첨삭을 요청해주세요.", { cause: error });
+        followUp = true;
         request = "[JSON 문법 오류] 방금 응답의 본문, 근거 인용문, 분량과 수정 내용은 그대로 유지하고 JSON 문법만 복구하라. 문자열 안의 큰따옴표, 역슬래시, 줄바꿈을 이스케이프하고 쉼표와 괄호를 확인하라. 유효한 JSON 객체만 반환하라.";
       }
     }
@@ -206,7 +208,7 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   try { result = await check(raw); }
   catch (error) {
     const reason = error instanceof Error ? error.message : "형식 오류";
-    raw = await askJson(`[검증 실패] ${reason}\n방금 응답에서 지적된 문제를 해결한 최종 JSON만 반환하라.`);
+    raw = await askJson(`[검증 실패] ${reason}\n방금 응답에서 지적된 문제를 해결한 최종 JSON만 반환하라.`, true);
     try { result = await check(raw); }
     catch (finalError) {
       if (!(finalError instanceof ContextAuditError) || !finalError.answer) throw finalError;
@@ -309,7 +311,7 @@ suggestions의 original은 답변에서 그대로 복사한 연속 구절(한 �
   try { value = parse(raw); }
   catch (error) {
     const reason = error instanceof Error ? error.message : "형식 오류";
-    raw = await askJson(`[형식 오류] ${reason}\n방금 응답의 형식을 바로잡은 JSON만 반환하라.`);
+    raw = await askJson(`[형식 오류] ${reason}\n방금 응답의 형식을 바로잡은 JSON만 반환하라.`, true);
     value = parse(raw);
   }
   // 하네스: 첨삭 받기도 현재 글을 작성자와 독립된 호출로 공고와 대조해, 다른 회사·직무 맥락이 섞였으면 보완할 점 맨 앞에 둔다.
