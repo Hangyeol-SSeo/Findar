@@ -519,13 +519,29 @@ export function getCompany(normalizedName: string): CompanyRow | undefined {
 }
 
 const selectJobSiteUrlsStmt = db.prepare(`
-  SELECT company, siteUrl FROM jobs WHERE siteUrl != '' ORDER BY CAST(seq AS INTEGER) DESC
+  SELECT company, siteUrl FROM jobs WHERE siteUrl != '' AND instr(replace(company, ' ', ''), ?) > 0 ORDER BY CAST(seq AS INTEGER) DESC
 `);
 
 // 회사의 공고에 적힌 "사이트바로가기" 주소들(최신 공고 순, 중복 제거). 회사 리서치가 홈페이지를 먼저 읽는 데 쓴다.
 export function getCompanySiteUrls(normalizedName: string): string[] {
-  const rows = selectJobSiteUrlsStmt.all() as { company: string; siteUrl: string }[];
+  const rows = selectJobSiteUrlsStmt.all(normalizedName) as { company: string; siteUrl: string }[];
   return [...new Set(rows.filter((r) => normalizeCompanyName(r.company) === normalizedName).map((r) => r.siteUrl.trim()).filter(Boolean))];
+}
+
+const selectCompanyJobsStmt = db.prepare(`
+  SELECT seq, company, title, date, applicationPeriod, rawContent FROM jobs
+  WHERE instr(replace(company, ' ', ''), ?) > 0 ORDER BY CAST(seq AS INTEGER) DESC
+`);
+
+export interface CompanyJobPosting { seq: string; title: string; date: string; applicationPeriod: string; rawContent: string }
+
+// 회사의 최근 KOFIA 공고(최신순). 회사 리서치가 날짜가 분명한 1차 자료(근무지·회사 소개 문단·채용 부서)이자
+// 홈페이지 주소 후보(지원 이메일 도메인)로 쓴다.
+export function getCompanyRecentJobs(normalizedName: string, limit: number): CompanyJobPosting[] {
+  // SQL은 후보만 좁히고(공백 제거 후 포함), 정확한 일치는 normalizeCompanyName으로 본다.
+  const rows = selectCompanyJobsStmt.all(normalizedName) as (CompanyJobPosting & { company: string })[];
+  return rows.filter((r) => normalizeCompanyName(r.company) === normalizedName).slice(0, limit)
+    .map(({ seq, title, date, applicationPeriod, rawContent }) => ({ seq, title, date, applicationPeriod, rawContent }));
 }
 
 const setCompanyDartMatchStmt = db.prepare(`
