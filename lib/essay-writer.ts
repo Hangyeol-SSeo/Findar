@@ -5,7 +5,7 @@ import { getAIModelId } from "./ai-model-settings";
 import { recordAIUsage } from "./ai-usage";
 import { assertApplicationRole, requireApplicationRole } from "./application-role";
 import { getCachedApplicationDraft, persistEssay, updateApplicationDraft, type ApplicationDraft } from "./application-draft";
-import { getCompanySections, getJobBySeq, listEssayEventRows } from "./db";
+import { getApplicationRole, getCompanySections, getJobBySeq, listEssayEventRows } from "./db";
 import { getCachedProfile } from "./profile";
 import { readApplicantProfile } from "./applicant-profile";
 import { readNarrativeProfile } from "./narrative-profile";
@@ -45,10 +45,11 @@ const lines = (items: unknown[]) => items.filter((x): x is string => typeof x ==
 export interface EssayMaterial { id: string; label: string; kind: "card" | "episode" | "resume" | "activity"; text: string }
 
 // 작성에 쓰는 자료. AI 호출 없음 — 과거 자소서 분석·경험 카드 생성은 각자 화면에서 따로 돌고, 여기서는 저장된 결과만 읽는다.
-export function buildEssayContext(seq: string) {
+// requireRole=false는 화면의 경험 목록용이다 — 지원 직무를 고르기 전에도 목록은 보여야 한다(직무는 서사 정렬에만 쓴다).
+export function buildEssayContext(seq: string, { requireRole = true } = {}) {
   const job = getJobBySeq(seq);
   if (!job) throw new Error("공고를 찾을 수 없습니다.");
-  const selection = requireApplicationRole(seq);
+  const selection = requireRole ? requireApplicationRole(seq) : getApplicationRole(seq);
   const profile = getCachedProfile();
   const applicant = readApplicantProfile();
   const narrative = readNarrativeProfile();
@@ -121,7 +122,7 @@ export type EssayContext = ReturnType<typeof buildEssayContext>;
 
 // 화면의 "쓸 경험" 선택 목록.
 export function listEssayMaterials(seq: string): { id: string; label: string; kind: EssayMaterial["kind"] }[] {
-  try { return buildEssayContext(seq).materials.map(({ id, label, kind }) => ({ id, label, kind })); } catch { return []; }
+  try { return buildEssayContext(seq, { requireRole: false }).materials.map(({ id, label, kind }) => ({ id, label, kind })); } catch { return []; }
 }
 
 function baseBlocks(ctx: EssayContext, materials: EssayMaterial[]): string {

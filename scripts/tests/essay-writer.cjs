@@ -15,6 +15,7 @@ let queued = [];
 let draftRow = null;
 const events = [];
 let historyRows = [];
+let noRole = false;
 const job = { company: '가상증권', title: '[가상증권] 리스크관리팀 신입', rawContent: '담당업무: 시장리스크 한도 모니터링, 리스크 보고서 작성', positions: [], qualifications: [] };
 const card = { id: 'EXP-01', context: '창업팀에서 결제 오류를 추적한 일', personal_actions: ['결제 기록과 지급 기록을 대조함'], decision: [], observed_details: [],
   team_result: ['미지급 건 0건'], result_limitations: [], evidence: [{ quote: '결제 기록과 지급 기록을 하나씩 대조했습니다' }], origins: [{ company: '다른증권', context: '', question: '', kind: 'cover_letter' }] };
@@ -28,13 +29,14 @@ const stubs = {
   } },
   './ai-model-settings': { getAIModelId: () => 'test-model' },
   './ai-usage': { recordAIUsage: () => {} },
-  './application-role': { requireApplicationRole: () => ({ role: '리스크관리팀 신입', revision: 'r1' }), assertApplicationRole: () => {} },
+  './application-role': { requireApplicationRole: () => { if (noRole) throw new Error('지원 직무를 선택해주세요'); return { role: '리스크관리팀 신입', revision: 'r1' }; }, assertApplicationRole: () => {} },
   './db': {
     getJobBySeq: () => job,
     getCompanySections: () => [{ sectionType: 'overview', status: 'ok', content: `IPO 투자자문과 펀드운용을 합니다. ${'회사 설명 '.repeat(600)}` }, { sectionType: 'news', status: 'ok', content: '뉴스' }],
     listEssayEventRows: () => historyRows,
     getApplicationDraftRow: () => (draftRow ? { draftJson: draftRow } : undefined),
     saveApplicationDraft: (_seq, json) => { draftRow = json; },
+    getApplicationRole: () => ({ role: '', revision: '' }),
   },
   './profile': { getCachedProfile: () => ({ projects: [{ name: '북블라', role: '개발', summary: '매칭 앱' }], careerGoals: '' }) },
   './applicant-profile': { readApplicantProfile: () => ({ workExperiences: [], education: [{ schoolName: '가상대학교', schoolLevel: '대학교', major: '소프트웨어', status: '졸업', endDate: '2026-02' }],
@@ -68,6 +70,11 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
   assert.ok(!ctx.facts.includes('가상대학교') && ctx.facts.includes('투자자산운용사(2026-05-21 취득)'));
   assert.ok(ctx.companyText.length < 2700 && !ctx.companyText.includes('뉴스'), 'company text is capped and limited to overview/culture');
   assert.deepEqual(plain(writer.listEssayMaterials('S').map((m) => m.kind)), ['card', 'card', 'episode']);
+  // 지원 직무를 고르기 전에도 경험 목록은 보인다(구성 제안·작성은 직무가 있어야 한다).
+  noRole = true;
+  assert.equal(writer.listEssayMaterials('S').length, 3);
+  assert.throws(() => writer.buildEssayContext('S'), /지원 직무/);
+  noRole = false;
 
   // 2) 구성 제안: 문항 전체를 한 번에. JSON 문법만 깨지면 한 번 더 묻고, 모르는 경험 id는 빼고, 빠진 문항은 빈 구성으로 둔다.
   const requests = [{ question: '지원동기', countSpaces: true, guidance: '' }, { question: '성장과정', maxChars: 500, countSpaces: true, guidance: '투자 이야기는 짧게' }];
