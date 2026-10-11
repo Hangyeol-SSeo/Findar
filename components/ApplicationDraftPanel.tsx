@@ -67,6 +67,9 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   }, [seq, draft?.revision]);
   const nextRowId = useRef(1);
   const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
+  // 보낸 문항을 작업별로 기억해 두었다가, 작업이 실패·취소되면 저장되지 않은 문항을 입력란에 되돌린다.
+  // 실패할 때마다 4문항을 처음부터 다시 입력해야 했다.
+  const submittedRows = useRef(new Map<string, { rows: QuestionRow[]; at: number }>());
   // "이 문항 보완해서 다시 작성"으로 채운 입력란은 답변 목록보다 한참 위에 있어서, 렌더링 뒤 그 칸으로 이동시킨다.
   const focusGuidanceRowId = useRef<string | null>(null);
   useEffect(() => {
@@ -138,11 +141,14 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         active = data.tasks.some(taskActive);
         setTasks(data.tasks);
         let reloadDraft = false;
+        const restore: { rows: QuestionRow[]; at: number }[] = [];
         for (const task of data.tasks) {
           if (taskActive(task)) { watchedTasks.current.add(task.id); continue; }
           if (handledTasks.current.has(task.id)) continue;
           handledTasks.current.add(task.id);
           const watched = watchedTasks.current.has(task.id);
+          const submitted = task.kind === "writing" && task.status !== "completed" ? submittedRows.current.get(task.id) : undefined;
+          if (submitted) { restore.push(submitted); submittedRows.current.delete(task.id); }
           if (task.status === "cancelled") {
             if (task.kind !== "document") reloadDraft = true;
             if (watched) showToast(task.kind === "writing" ? `자기소개서 작성을 취소했습니다. 이미 저장한 문항 ${task.done}개는 유지됩니다.` : "작업을 취소했습니다. 기존 결과는 유지됩니다.");
@@ -180,7 +186,8 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
           if (!draftResponse.ok) throw new Error("완성된 답변을 불러오지 못했습니다. 지원 도우미를 다시 열어주세요.");
           const current = await draftResponse.json();
           if (!stopped && !dirtyRef.current) setDraft(current.draft);
-        }
+          if (!stopped) restoreUnsaved(restore, current.draft);
+        } else if (!stopped) restoreUnsaved(restore, null);
       } catch (e) {
         failures++;
         if (!stopped) setError(e instanceof Error ? e.message : "작업 상태 확인 실패");
@@ -218,6 +225,19 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   const essayBusy = writingBusy || revisionBusy || ["save", "bank", "answer-action", "import"].includes(busy);
   const documentBusy = busy === "document";
   const progress = writingTask ? { done: writingTask.done, total: writingTask.total } : null;
+  // 실패·취소된 작성 작업에서 이번에 저장되지 않은 문항만 입력란에 되돌린다(이미 입력 중인 문항은 그대로 둔다).
+  function restoreUnsaved(entries: { rows: QuestionRow[]; at: number }[], saved: ApplicationDraft | null) {
+    const back = entries.flatMap(({ rows: sent, at }) => sent.filter((row) => !saved?.essayAnswers.some((a) =>
+      a.question === row.question.trim() && "generatedAt" in a && typeof a.generatedAt === "number" && a.generatedAt >= at)));
+    if (!back.length) return;
+    setRows((prev) => {
+      const typing = prev.filter((r) => r.question.trim());
+      const fresh = back.filter((r) => !typing.some((t) => t.question.trim() === r.question.trim()))
+        .map((r) => ({ ...r, id: `q${nextRowId.current++}` }));
+      return [...typing, ...fresh].length ? [...typing, ...fresh] : prev;
+    });
+    setNotice(`저장되지 않은 문항 ${back.length}개를 입력란에 그대로 되돌려 두었습니다. 다시 작성을 누르면 됩니다.`);
+  }
   function acceptTask(task: ApplicationTask) {
     watchedTasks.current.add(task.id);
     setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]);
@@ -261,10 +281,12 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     if (!filled.length || writingBusy) return;
     await run("writing", async () => {
       await save();
+      const sentAt = Date.now();
       const data = await api("draft/question", { questions: filled.map((row) => ({
         question: row.question, ...(row.maxChars ? { maxChars: Number(row.maxChars) } : {}),
         countSpaces: row.countSpaces, guidance: row.guidance,
       })) });
+      submittedRows.current.set(data.task.id, { rows: filled, at: sentAt });
       acceptTask(data.task);
       setRows([newRow(`q${nextRowId.current++}`)]);
       setNotice("백그라운드에서 문항을 작성합니다. 탭을 바꾸거나 다른 공고의 작업을 시작할 수 있습니다.");
