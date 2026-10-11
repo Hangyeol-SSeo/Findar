@@ -47,7 +47,7 @@ function load(name) {
 (async () => {
   const { AI_MODEL_IDS } = load('ai-model-types');
   selectedModel = AI_MODEL_IDS.SONNET;
-  const { researchSection, listStaleSections } = load('company-research');
+  const { researchSection, listStaleSections, companyResearchNotice } = load('company-research');
   await Promise.all([researchSection('fixture', 'Fixture', 'overview'), researchSection('fixture', 'Fixture', 'overview')]);
   assert.equal(calls, 1); assert.equal(saved.length, 1);
   assert.equal(options.effort, 'medium'); assert.equal(options.maxTurns, 18);
@@ -61,8 +61,13 @@ function load(name) {
     assert.match(result.hookSpecificOutput.updatedInput.prompt, /1500자/);
   }
   assert.equal((await hook({ hook_event_name: 'PreToolUse', tool_name: 'WebFetch' })).hookSpecificOutput.permissionDecision, 'deny');
-  existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '기존 분석' }];
+  const grounded = { basis: { homepage: 'https://example.com/', dart: false, postings: 1 } };
+  existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '기존 분석', contentJson: grounded }];
   assert.equal(listStaleSections('fixture', ['overview']).length, 0);
+  // 홈페이지·공시·공고 없이 만든 이전 방식의 개요·인재상은 TTL과 상관없이 다시 만든다. 다른 섹션은 그대로다.
+  existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '옛 분석' }, { sectionType: 'news', status: 'ok', generatedAt: Date.now(), content: '뉴스' }];
+  assert.equal(listStaleSections('fixture', ['overview', 'news']).join(), 'overview');
+  existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '기존 분석', contentJson: grounded }];
   assert.equal(listStaleSections('fixture', ['overview', 'overview'], true).length, 1);
   errorResult = true;
   await assert.rejects(researchSection('fixture', 'Fixture', 'overview'), /기존 분석/);
@@ -123,11 +128,33 @@ function load(name) {
   const unverified = await researchSection('unverified-fixture', 'Fixture', 'culture');
   assert.match(prompt, /회사 홈페이지 미확인.*HTTP 503/);
   assert.equal(unverified.status, 'partial');
+  assert.equal(JSON.parse(JSON.stringify(unverified.contentJson)).basis.homepage, null);
+  // 이전 방식의 분석은 홈페이지만 못 읽은 새 분석(partial)으로도 바꾼다. 실패(failed)로는 바꾸지 않는다.
+  existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '옛 분석' }];
+  const replaced = await researchSection('ungrounded-fixture', 'Fixture', 'overview');
+  assert.equal(replaced.status, 'partial');
+  assert.equal(saved.at(-1)[0], 'ungrounded-fixture');
+  // 지원 도우미 안내: 없음 / 이전 방식 / 홈페이지 미확인 / 정상
+  existing = [];
+  assert.match(companyResearchNotice('n'), /아직 없습니다/);
+  existing = [{ sectionType: 'overview', status: 'ok', content: '옛 분석' }];
+  assert.match(companyResearchNotice('n'), /이전 방식/);
+  existing = [{ sectionType: 'overview', status: 'partial', content: '분석', contentJson: { basis: { homepage: null, dart: true, postings: 2 } } }];
+  assert.match(companyResearchNotice('n'), /홈페이지를 확인하지 못한/);
+  existing = [{ sectionType: 'overview', status: 'ok', content: '분석', contentJson: grounded }, { sectionType: 'news', status: 'ok', content: '뉴스' }];
+  assert.equal(companyResearchNotice('n'), null);
+  // basis를 남기기 전에 같은 방식으로 만든 분석은 코드가 붙인 출처로 알아본다. 모델이 단 "공식 홈페이지" 출처만으로는 인정하지 않는다.
+  existing = [{ sectionType: 'overview', status: 'ok', content: '분석', sources: [{ title: '예시 | 소개 홈페이지', url: 'https://ex.co.kr/' }, { title: 'DART 기업개황', url: 'https://dart.fss.or.kr' }] }];
+  assert.equal(companyResearchNotice('n'), null);
+  assert.equal(listStaleSections('n', ['overview']).length, 0);
+  existing = [{ sectionType: 'overview', status: 'ok', content: '분석', sources: [{ title: '예시증권 공식 홈페이지', url: 'https://ex.co.kr/' }, { title: '딜사이트', url: 'https://d.co.kr' }] }];
+  assert.match(companyResearchNotice('n'), /이전 방식/);
+  existing = [];
   // 뉴스 섹션은 홈페이지·공고 기본 자료를 쓰지 않는다.
   const fetchesBefore = homepageFetches;
   resultText = '뉴스 분석 [기사](https://example.com/news)';
   await researchSection('news-fixture', 'Fixture', 'news');
   assert.equal(homepageFetches, fetchesBefore);
   assert.ok(!prompt.includes('회사 홈페이지') && !prompt.includes('채용공고 —'), 'news research must not include the basics block');
-  console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility, homepage/DART/posting grounding');
+  console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility, homepage/DART/posting grounding, old-method sections refreshed, research notice');
 })().catch(error => { console.error(error); process.exitCode = 1; });

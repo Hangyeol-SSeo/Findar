@@ -42,6 +42,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
   const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
+  const [researchNotice, setResearchNotice] = useState<string | null>(null);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -100,7 +101,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     fetch(`/api/applications/${seq}/draft`, { signal: abort.signal }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || "");
+      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
     }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
@@ -403,6 +404,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
       <a href="/profile#experience" className="underline">내 지원 자료 → 경험 카드</a>에서 확인해주세요.
     </p>}
+    {workspace === "essay" && researchNotice && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">{researchNotice}</p>}
     {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="작성·첨삭은 이 공고의 작업 대화를 이어 쓰며, 앞부분은 캐시에서 읽습니다.">
       이 공고 AI 사용: {usage.calls.toLocaleString()}회 · 새로 처리한 입력 {usage.inputTokens.toLocaleString()} · 캐시에서 읽은 입력 {usage.cacheReadTokens.toLocaleString()}({Math.round(usage.cacheHitRatio * 100)}%) · 출력 {usage.outputTokens.toLocaleString()} 토큰
     </p>}

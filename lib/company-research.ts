@@ -40,8 +40,23 @@ interface SectionResult {
   status: "ok" | "partial" | "failed";
 }
 
+// 개요·인재상은 기본 자료(홈페이지·DART·최근 공고)로 만들었는지를 contentJson.basis에 남긴다. 그 전 방식으로 만든 분석은
+// 홈페이지를 읽지 않은 채 추정한 것이라(마스터자산운용: IPO 하우스를 "국내 주식 롱쇼트"로 씀) TTL과 상관없이 다시 만든다.
+const GROUNDED_SECTIONS: readonly string[] = ["overview", "culture"];
+export interface ResearchBasis { homepage: string | null; dart: boolean; postings: number }
+function researchBasis(section: CompanySection): ResearchBasis | null {
+  const basis = (section.contentJson as { basis?: ResearchBasis } | null)?.basis;
+  if (basis && typeof basis === "object") return basis;
+  // basis를 남기기 전(같은 기본 자료 방식)에 만든 분석은 코드가 붙인 출처(DART 기업개황, "홈페이지 — 하위 페이지")로 알아본다.
+  const sources = Array.isArray(section.sources) ? section.sources : [];
+  const dart = sources.some((s) => s.title === "DART 기업개황");
+  const homepage = sources.find((s, i) => s.title.startsWith("홈페이지 — ") || (i === 0 && dart && s.title.endsWith(" 홈페이지")));
+  return dart || homepage ? { homepage: homepage?.url ?? null, dart, postings: 0 } : null;
+}
+
 function isStale(section: CompanySection | undefined, sectionType: CompanySectionType): boolean {
   if (!section || section.status !== "ok") return true;
+  if (GROUNDED_SECTIONS.includes(sectionType) && !researchBasis(section)) return true;
   const ttlDays = COMPANY_SECTION_TTL_DAYS[sectionType] ?? 30;
   return Date.now() - section.generatedAt > ttlDays * 24 * 60 * 60 * 1000;
 }
@@ -197,7 +212,8 @@ ${homepage.title ? `제목: ${homepage.title}\n` : ""}${homepage.text}
 }
 
 // 읽은 홈페이지 페이지들과 DART를 출처 맨 앞에 두고, 끝내 홈페이지를 확인하지 못한 분석은 partial로 낮춰 새로고침 대상에 남긴다.
-function withBasics(result: SectionResult, { homepage, dart }: CompanyBasics): SectionResult {
+function withBasics(result: SectionResult, basics: CompanyBasics): SectionResult {
+  const { homepage, dart } = basics;
   if (result.status === "failed") return result;
   const fixed = [
     ...(homepage?.status === "ok" ? homepage.pages.map((p, i) => ({ title: i === 0 ? `${p.title || "회사"} 홈페이지` : `홈페이지 — ${p.title}`, url: p.url })) : []),
@@ -205,7 +221,18 @@ function withBasics(result: SectionResult, { homepage, dart }: CompanyBasics): S
   ];
   const sources = [...fixed, ...result.sources.filter((s) => !fixed.some((f) => f.url === s.url))];
   const unverified = homepage?.status !== "ok" && result.content.includes(HOMEPAGE_UNVERIFIED) && result.status === "ok";
-  return { ...result, sources, ...(unverified ? { status: "partial" as const } : {}) };
+  const basis: ResearchBasis = { homepage: homepage?.status === "ok" ? homepage.url : null, dart: !!dart, postings: basics.postings.length };
+  return { ...result, sources, contentJson: { basis }, ...(unverified ? { status: "partial" as const } : {}) };
+}
+
+// 자소서 작업이 쓰는 회사 리서치(개요·인재상)의 상태. 없거나, 이전 방식으로 만들었거나, 홈페이지를 확인하지 못했으면
+// 지원 도우미에 안내한다 — 첨삭이 틀린 회사 자료로 "IPO 내용은 자료에서 확인되지 않는다"고 지적한 일이 있었다. AI 호출 없음.
+export function companyResearchNotice(normalizedName: string): string | null {
+  const sections = getCompanySections(normalizedName).filter((s) => GROUNDED_SECTIONS.includes(s.sectionType) && s.status !== "failed" && s.content);
+  if (!sections.length) return "이 회사의 리서치(개요·인재상)가 아직 없습니다. 회사 리서치 탭에서 만들면 자기소개서가 회사 내용을 근거로 쓸 수 있습니다.";
+  if (sections.some((s) => !researchBasis(s))) return "이전 방식(홈페이지 미확인)으로 만든 회사 리서치를 쓰고 있어 회사 내용이 틀렸을 수 있습니다. 회사 리서치 탭에서 개요·인재상을 새로고침해주세요.";
+  if (sections.some((s) => !researchBasis(s)?.homepage || s.status !== "ok")) return "회사 홈페이지를 확인하지 못한 회사 리서치입니다. 사업 내용 중 추정이 섞여 있을 수 있으니 확인해주세요.";
+  return null;
 }
 
 async function researchOverview(displayName: string, model: string, basics: CompanyBasics): Promise<SectionResult> {
@@ -383,7 +410,9 @@ async function generateResearchSection(
   }
   // 실패한 새로고침으로 기존의 유효한 분석을 덮어쓰지 않는다.
   const previous = getCompanySections(normalizedName).find((s) => s.sectionType === sectionType);
-  if (result.status !== "ok" && previous?.status === "ok") {
+  // 단, 이전 방식으로 만든 개요·인재상은 기본 자료로 새로 만든 partial(홈페이지만 미확인)로 바꾼다 — 옛 분석이 계속 남지 않게.
+  const replacesUngrounded = result.status === "partial" && GROUNDED_SECTIONS.includes(sectionType) && !!previous && !researchBasis(previous);
+  if (result.status !== "ok" && previous?.status === "ok" && !replacesUngrounded) {
     throw new Error("리서치를 완료하지 못해 기존 분석을 유지했습니다.");
   }
   saveCompanySection(normalizedName, sectionType, { ...result, model });
