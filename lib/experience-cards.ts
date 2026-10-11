@@ -95,7 +95,6 @@ const str = (value: unknown, limit = 300) => (typeof value === "string" ? value.
 const KIND_LABEL: Record<CardSourceKind, string> = {
   cover_letter: "자기소개서", interview: "면접 대본", final: "Findar에서 확정한 답변", resume: "이력서", applicant: "지원 정보", "": "자료",
 };
-const PROFILE_KINDS: CardSourceKind[] = ["resume", "applicant"];
 
 export function essaySources(entries: EssayEntry[]): CardSource[] {
   return entries.filter((e) => e.answer.trim()).map((e) => ({
@@ -301,28 +300,12 @@ export function setCardConfirmed(id: string, confirmed: boolean): ExperienceCard
   return updated;
 }
 
-// 작성에 쓰는 카드: 확인했고, 확인 이후 내용이 바뀌지 않은 카드만.
+// 자기소개서 구성 확인에서 고를 수 있는 카드 전체. 확인 전 카드도 사용자가 구성에서 직접 보고 고르면 쓴다(lib/essay-writer.ts).
+export function getAllCards(): ExperienceCard[] {
+  return readStore().cards;
+}
+
+// 확인했고, 확인 이후 내용이 바뀌지 않은 카드.
 export function getConfirmedCards(): ExperienceCard[] {
   return readStore().cards.filter((c) => c.user_confirmed && c.approval?.content_hash === cardContentHash(c));
-}
-
-// 출처를 사람이 읽는 한 줄로. 같은 회사인지는 지원 회사와 정규화 이름으로 비교해 코드가 정한다.
-export function describeOrigins(card: ExperienceCard, sameCompany: (company: string) => boolean): string[] {
-  return (card.origins ?? []).map((o) => PROFILE_KINDS.includes(o.kind) ? [KIND_LABEL[o.kind], o.context].filter(Boolean).join(" · ") : [
-    o.company ? `${sameCompany(o.company) ? "같은 회사" : "다른 회사"}(${o.company})` : "회사 미상",
-    KIND_LABEL[o.kind], o.context, o.question && `문항: ${o.question}`,
-  ].filter(Boolean).join(" · "));
-}
-
-// 작성 프롬프트의 사실 자료로 넣을 카드 내용(확인 기록·코드 검사 결과는 뺀다). 출처에 다른 회사 이름이 있으면
-// collectContext가 가린다(lib/application-harness.ts).
-export function cardSourceContent(card: ExperienceCard, sameCompany: (company: string) => boolean = () => false) {
-  return {
-    event_id: card.event_id, period: card.period, context: card.context,
-    writtenFor: describeOrigins(card, sameCompany),
-    ...Object.fromEntries(LIST_FIELDS.filter((k) => card[k].length).map((k) => [k, card[k]])),
-    precision: card.precision,
-    ...(card.sensitive ? { sensitive: true } : {}),
-    sourceQuotes: card.evidence.map((e) => ({ kind: KIND_LABEL[e.kind], quote: e.quote })),
-  };
 }

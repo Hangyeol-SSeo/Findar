@@ -2,7 +2,7 @@ import { isSameOrigin } from "@/lib/request-origin";
 import { getJobBySeq } from "@/lib/db";
 import { applyEssayAnswerAction, EssayConflictError, type EssayAnswerAction } from "@/lib/essay-revision";
 
-const ACTIONS = ["accept-revision", "discard-revision", "apply-suggestion", "dismiss-suggestion", "close-feedback", "restore-version", "dismiss-needs-info", "close-research"];
+const ACTIONS = ["accept-revision", "discard-revision", "apply-suggestion", "dismiss-suggestion", "close-feedback", "restore-version", "dismiss-needs-info"];
 
 // 첨삭 결과 반영/버리기, 제안 반영/넘기기, 버전 복원 — 저장된 결과만 다루며 AI 호출 없음.
 export async function POST(request: Request, { params }: { params: Promise<{ seq: string }> }) {

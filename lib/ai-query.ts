@@ -6,7 +6,7 @@ import { getAIAbortSignal, throwIfAIAborted } from "./ai-operation";
 type QueryInput = Parameters<typeof queryClaude>[0] & {
   inputFiles?: string[];
   webToolLimit?: number;
-  // Codex 호출 제한 시간. 작업 대화처럼 긴 요청은 기본값(240초)보다 길게 준다.
+  // Codex 호출 제한 시간. 자기소개서 작성처럼 긴 요청은 기본값(240초)보다 길게 준다.
   timeoutMs?: number;
 };
 

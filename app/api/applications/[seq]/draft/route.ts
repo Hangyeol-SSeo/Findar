@@ -5,6 +5,7 @@ import { detectSubmissionMethod } from "@/lib/application-method";
 import { recordManualEdit } from "@/lib/essay-revision";
 import { companyResearchNotice } from "@/lib/company-research";
 import { normalizeCompanyName } from "@/lib/company-normalize";
+import { listEssayMaterials } from "@/lib/essay-writer";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ seq: string }> }) {
   const { seq } = await params;
@@ -12,7 +13,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ seq
   if (!job) return Response.json({ error: "공고를 찾을 수 없습니다." }, { status: 404 });
   return Response.json({ draft: getCachedApplicationDraft(seq), siteUrl: job.siteUrl,
     submissionMethod: detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl),
-    companyResearchNotice: companyResearchNotice(normalizeCompanyName(job.company)) });
+    companyResearchNotice: companyResearchNotice(normalizeCompanyName(job.company)),
+    // 구성 확인 화면의 "쓸 경험" 선택 목록(AI 호출 없음).
+    materials: listEssayMaterials(seq) });
 }
 
 export async function POST() {

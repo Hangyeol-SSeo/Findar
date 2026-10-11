@@ -21,27 +21,18 @@ function load(relative) {
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('PASS', name); }
 try {
-  const { parseEssayRequest, validateEssay, characterCount } = load('lib/essay-contract.ts');
+  const { parseEssayRequest, hasBanmalEnding, characterCount } = load('lib/essay-contract.ts');
   const request = parseEssayRequest({ question: '협업 경험을 설명해주세요. 500자 이내, 공백 제외' });
-  const sources = [{ id: 'episode.1', text: '팀의 문의 처리 시간이 20분에서 12분으로 줄었습니다. 저는 재현 절차를 기록했습니다.' }];
-  const good = { status: 'draft', intent: '협업에서 판단과 기여', answer: '문의 재현 절차를 기록해 팀이 같은 순서로 확인하도록 했습니다. 처리 시간은 20분에서 12분으로 줄었습니다.', evidence: [{ sourceId: 'episode.1', quote: sources[0].text, usedFor: '행동과 결과' }], missingInfo: [], reviewNotes: [] };
   test('pasted question limit and whitespace convention', () => { assert.equal(request.maxChars, 500); assert.equal(request.countSpaces, false); assert.equal(characterCount('한 글😀', false), 3); });
   test('no generic essay request', () => assert.throws(() => parseEssayRequest({ question: '  ' })));
   test('explicit limit overrides pasted limit', () => assert.equal(parseEssayRequest({ question: '500자 이내', maxChars: 300 }).maxChars, 300));
   test('reject invalid constraints', () => assert.throws(() => parseEssayRequest({ question: '경험', maxChars: -1 })));
-  test('valid grounded answer', () => assert.equal(validateEssay(good, request, sources, []).source, 'user_question'));
-  test('reject informal opening and mixed speech levels', () => {
+  test('detect informal endings and mixed speech levels', () => {
     for (const answer of ['손실을 보고 나서야 이해했다. 이후 공부했습니다.', '확인 절차를 바꿨다.', '원인을 기록했다.\n결과를 확인했습니다.'])
-      assert.throws(() => validateEssay({ ...good, answer }, request, sources, []), /존댓말/);
+      assert.equal(hasBanmalEnding(answer), true);
+    assert.equal(hasBanmalEnding('문의 재현 절차를 기록했습니다.'), false);
   });
-  test('quoted informal speech does not reject polite narration', () => {
-    assert.equal(validateEssay({ ...good, answer: '“문제가 있다.”라는 의견을 듣고 확인했습니다.' }, request, sources, []).status, 'draft');
-  });
-  test('reject hallucinated evidence quote', () => assert.throws(() => validateEssay({ ...good, evidence: [{ ...good.evidence[0], quote: '없는 원문' }] }, request, sources, [])));
-  test('reject unsupported metrics', () => assert.throws(() => validateEssay({ ...good, answer: '90% 개선했습니다.' }, request, sources, [])));
-  test('reject excluded names', () => assert.throws(() => validateEssay({ ...good, answer: '테스트대학교에서 배웠습니다.' }, request, sources, ['테스트대학교'])));
-  test('reject overflow instead of truncating', () => assert.throws(() => validateEssay({ ...good, answer: '가'.repeat(501) }, request, sources, [])));
-  test('insufficient memory produces question, not fabricated draft', () => { const a = validateEssay({ ...good, status: 'needs_info', missingInfo: ['본인이 선택한 행동은 무엇인가요?'] }, request, sources, []); assert.equal(a.answer, ''); });
+  test('quoted informal speech does not count as informal narration', () => assert.equal(hasBanmalEnding('“문제가 있다.”라는 의견을 듣고 확인했습니다.'), false));
   const { resolveFillPlan, buildFillSources, permittedTarget, buildEssayFillSources, deterministicFillAssignments } = load('lib/application-fill.ts');
   const { emptyApplicantProfile } = load('lib/applicant-profile.ts');
   const profile = { ...emptyApplicantProfile(), name: '홍길동', phone: '010-1234-5678', updatedAt: 1 };

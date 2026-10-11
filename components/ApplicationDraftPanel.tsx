@@ -2,22 +2,21 @@
 
 import { useState, useEffect, useRef } from "react";
 import { detectBrowserExtension } from "@/lib/browser-extension-client";
-import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
+import { characterCount, type EssayAnswer, type EssayOutline } from "@/lib/essay-contract";
 import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
 import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
-import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest, type RevisionMode } from "./EssayRevisionTools";
+import { EssayImportForm, EssayRevisionTools, type AnswerAction, type RevisionRequest } from "./EssayRevisionTools";
+import { EssayOutlineEditor, type MaterialOption } from "./EssayOutlineEditor";
 import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
 import Toast, { useToast } from "./Toast";
 
-// 첨삭·조사 작업이 끝났을 때 알릴 문구(작업 결과 종류별).
+// 작업이 끝났을 때 알릴 문구(작업 결과 종류별).
 const OUTCOME_MESSAGES: Record<string, string> = {
-  "pending-revision": "고쳐쓰기 결과가 도착했습니다. 바뀐 부분을 비교하고 반영 여부를 골라주세요.",
+  "pending-revision": "다시 쓴 결과가 도착했습니다. 바뀐 부분을 비교하고 반영 여부를 골라주세요.",
   feedback: "첨삭 결과가 도착했습니다. 제안을 하나씩 반영하거나 넘길 수 있습니다.",
-  "needs-info": "고쳐쓰기에 정보가 더 필요합니다. 답변 아래의 질문을 확인해주세요.",
-  candidates: "업계 사례 후보를 찾았습니다. 읽을 자료와 구성 방향을 골라주세요.",
-  findings: "자료 정리를 마쳤습니다. 쓸 자료를 골라 고쳐쓰기를 요청해주세요.",
+  "needs-info": "다시 쓰려면 정보가 더 필요합니다. 답변 아래의 질문을 확인해주세요.",
 };
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
@@ -28,28 +27,21 @@ function newRow(id: string): QuestionRow {
   return { id, question: "", maxChars: "", countSpaces: true, guidance: "", freeform: false };
 }
 
-// 소재 배치 단계의 요구별 판정(cover-letter-team 갭 상태). 맞는 소재가 없으면 "소재 없음"으로 남고 억지로 채우지 않는다.
-const COVERAGE_LABEL: Record<string, string> = {
-  SUFFICIENT: "충분", WEAKLY_SUPPORTED: "근거 약함", MISSING: "소재 없음", NO_ACTUAL_EXPERIENCE: "경험 없음",
-  CONTRADICTORY: "모순", NOT_APPLICABLE: "해당 없음", UNKNOWN: "미확인",
-};
-const COVERAGE_STYLE: Record<string, string> = {
-  SUFFICIENT: "bg-emerald-100 text-emerald-800", WEAKLY_SUPPORTED: "bg-amber-100 text-amber-800",
-  MISSING: "bg-red-100 text-red-700", NO_ACTUAL_EXPERIENCE: "bg-red-100 text-red-700", CONTRADICTORY: "bg-red-100 text-red-700",
-};
-
 export default function ApplicationDraftPanel({ seq, companyName, roleRevision }: { seq: string; companyName: string; roleRevision?: string | null }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
   const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
   const [researchNotice, setResearchNotice] = useState<string | null>(null);
+  // 구성 확인 화면의 "쓸 경험" 목록과, 화면에서 고치는 중인 구성(작성할 때 서버로 보낸다).
+  const [materials, setMaterials] = useState<MaterialOption[]>([]);
+  const [outlineEdits, setOutlineEdits] = useState<EssayOutline[]>([]);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
-  // 확인하지 않은 경험 카드는 작성에 쓰이지 않는다. 이력서까지 카드로 정리된 뒤에는 이를 모르면 경험이 빠진 답변이 나오므로 알린다.
+  // 확인하지 않은 경험 카드는 구성 확인에서 (미확인)으로 표시된다. 카드를 다시 만들면 확인 표시가 사라지므로 알린다.
   const [cardGate, setCardGate] = useState<{ unconfirmed: number; coversProfile: boolean; stale: boolean } | null>(null);
   useEffect(() => {
     const abort = new AbortController();
@@ -57,7 +49,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       setCardGate({ unconfirmed: s.cards.filter((c) => !c.user_confirmed).length, coversProfile: s.coversProfile, stale: s.stale })).catch(() => {});
     return () => abort.abort();
   }, [seq]);
-  // 이 공고 작업 대화의 실제 AI 사용량. 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
+  // 이 공고에서 쓴 실제 AI 사용량. 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
   const [usage, setUsage] = useState<{ calls: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; cacheHitRatio: number } | null>(null);
   useEffect(() => {
     const abort = new AbortController();
@@ -81,6 +73,11 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     field?.focus({ preventScroll: true });
   }, [rows]);
   const [pollRevision, setPollRevision] = useState(0);
+  // 저장된 구성이 바뀌면(새 제안, 작성 후 정리) 화면의 고친 구성과 맞춘다. 같은 제안을 고치는 중이면 고친 내용을 유지한다.
+  useEffect(() => {
+    const saved = draft?.outlines ?? [];
+    setOutlineEdits((prev) => saved.map((o) => prev.find((p) => p.question === o.question && p.createdAt === o.createdAt) ?? o));
+  }, [draft?.outlines]);
   const { message: toastMessage, showToast } = useToast(6000);
   // 문항별 첨삭·조사 오류는 그 답변 아래에 보여준다(위쪽 알림만으로는 놓치기 쉬움).
   const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
@@ -104,7 +101,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     fetch(`/api/applications/${seq}/draft`, { signal: abort.signal }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
+      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null); setMaterials(data.materials ?? []);
     }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
@@ -154,29 +151,31 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
             if (watched) showToast(task.kind === "writing" ? `자기소개서 작성을 취소했습니다. 이미 저장한 문항 ${task.done}개는 유지됩니다.` : "작업을 취소했습니다. 기존 결과는 유지됩니다.");
             continue;
           }
-          if (task.kind === "revision" || task.kind === "research") {
+          if (task.kind === "revision") {
             reloadDraft = true;
             if (!watched) continue;
             const question = task.question ?? "";
             if (task.status === "failed") {
               setAnswerErrors((prev) => ({ ...prev, [question]: task.error ?? "작업에 실패했습니다." }));
-              showToast(`${task.kind === "research" ? "업계 사례 조사" : "첨삭"}에 실패했습니다. 답변 아래에서 이유를 확인해주세요.`);
+              showToast("고치기에 실패했습니다. 답변 아래에서 이유를 확인해주세요.");
             } else {
               showToast(OUTCOME_MESSAGES[task.result?.outcome ?? ""] ?? "작업을 마쳤습니다.");
             }
-            const outcome = task.result?.outcome;
-            attention.current = { question, block: task.status === "failed" ? "error" : outcome === "candidates" || outcome === "findings" ? "research" : outcome };
+            attention.current = { question, block: task.status === "failed" ? "error" : task.result?.outcome };
             continue;
           }
           if (task.status === "failed") setError(task.error ?? "작업에 실패했습니다.");
+          const outline = task.result?.outcome === "outline";
           if (watched && task.kind === "writing") {
-            showToast(task.status === "failed" ? "자기소개서 작성에 실패했습니다. 위쪽 알림을 확인해주세요." : "자기소개서 작성을 마쳤습니다.");
+            showToast(task.status === "failed" ? `${outline ? "구성 제안" : "자기소개서 작성"}에 실패했습니다. 위쪽 알림을 확인해주세요.`
+              : outline ? "구성 제안이 도착했습니다. 확인하고 고친 뒤 작성해주세요." : "자기소개서 작성을 마쳤습니다.");
             attention.current = {};
           }
           if (task.kind === "writing") {
             // 실패한 묶음 작업도 앞 문항까지 저장됐을 수 있다. 조회는 전체에서 한 번만 한다.
             reloadDraft = true;
-            if (task.status === "completed") setNotice(`문항 ${task.done}개 처리를 마쳤습니다.${task.result?.needsInfo ? ` ${task.result.needsInfo}개는 자료·정보 보완이 필요합니다.` : " 답변을 저장했습니다."} 작성된 답변은 자동 입력 탭에서 지원서에 넣을 수 있습니다.`);
+            if (task.status === "completed") setNotice(outline ? "구성 제안이 도착했습니다. 아래 구성 확인에서 핵심 메시지·문단·쓸 경험을 고친 뒤 ‘이 구성으로 작성’을 눌러주세요."
+              : `문항 ${task.done}개를 작성했습니다. 답변 아래의 ‘확인’ 항목을 살펴보고, 고칠 곳은 ‘고치기’로 다듬을 수 있습니다. 작성된 답변은 자동 입력 탭에서 지원서에 넣을 수 있습니다.`);
           }
           const document = task.result?.document;
           if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
@@ -220,7 +219,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
 
   const writingTask = tasks.find((t) => t.kind === "writing" && taskActive(t));
   const writingBusy = busy === "writing" || !!writingTask;
-  const revisionTask = tasks.find((t) => (t.kind === "revision" || t.kind === "research") && taskActive(t));
+  const revisionTask = tasks.find((t) => t.kind === "revision" && taskActive(t));
   const revisionBusy = busy === "revision" || !!revisionTask;
   const essayBusy = writingBusy || revisionBusy || ["save", "bank", "answer-action", "import"].includes(busy);
   const documentBusy = busy === "document";
@@ -276,45 +275,51 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     updateRow(id, { freeform: checked, question: checked ? FREEFORM_ESSAY_QUESTION : "" });
   }
 
-  async function generateAll() {
+  // 구성 제안: 문항 전체를 한 번에 보내 핵심 메시지·문단 구성·쓸 경험·확인 질문을 받는다.
+  async function requestOutlines() {
     const filled = rows.filter((r) => r.question.trim());
     if (!filled.length || writingBusy) return;
     await run("writing", async () => {
       await save();
       const sentAt = Date.now();
-      const data = await api("draft/question", { questions: filled.map((row) => ({
+      const data = await api("draft/outline", { questions: filled.map((row) => ({
         question: row.question, ...(row.maxChars ? { maxChars: Number(row.maxChars) } : {}),
         countSpaces: row.countSpaces, guidance: row.guidance,
       })) });
       submittedRows.current.set(data.task.id, { rows: filled, at: sentAt });
       acceptTask(data.task);
       setRows([newRow(`q${nextRowId.current++}`)]);
-      setNotice("백그라운드에서 문항을 작성합니다. 탭을 바꾸거나 다른 공고의 작업을 시작할 수 있습니다.");
+      setNotice("구성을 제안받고 있습니다. 끝나면 아래에 구성 확인 카드가 나타납니다.");
     });
   }
-  async function startRevision(question: string, mode: RevisionMode, text: string, findingIds?: string[]) {
+  // 확인·수정한 구성대로 작성한다. 여러 개면 한 번의 AI 호출로 함께 쓴다.
+  async function writeOutlines(list: EssayOutline[]) {
+    if (!list.length || writingBusy) return;
+    await run("writing", async () => {
+      await save();
+      const data = await api("draft/question", { outlines: list });
+      acceptTask(data.task);
+      setNotice("확정한 구성대로 작성하고 있습니다. 끝나면 아래에 답변이 나타납니다.");
+    });
+  }
+  async function removeOutline(question: string) {
+    await run("outline-remove", async () => {
+      const response = await fetch(`/api/applications/${seq}/draft/outline?question=${encodeURIComponent(question)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "구성을 지우지 못했습니다.");
+      setDraft(data.draft);
+    });
+  }
+  async function startRevision(question: string, request: RevisionRequest) {
     let started = false;
     setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
     await run("revision", async () => {
       await save();
-      const data = await api("draft/revision", { question, mode, ...(mode === "review" ? { focus: text } : { instruction: text, findingIds }) });
+      const data = await api("draft/revision", { question, mode: request.mode,
+        ...(request.mode === "review" ? { focus: request.text } : { instruction: request.text, paragraphs: request.paragraphs ?? [] }) });
       acceptTask(data.task);
       started = true;
-      setNotice(mode === "rewrite" ? "고쳐쓰기를 시작했습니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
-        : mode === "restructure" ? "다시 구성을 시작했습니다. 구상부터 다시 하므로 몇 분 걸립니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
-        : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
-    });
-    return started;
-  }
-  async function startResearch(question: string, request: ResearchRequest) {
-    let started = false;
-    setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
-    await run("revision", async () => {
-      await save();
-      const data = await api("draft/research", { question, ...request });
-      acceptTask(data.task);
-      started = true;
-      setNotice(request.step === "scope" ? "업계 사례 후보를 찾고 있습니다. 끝나면 알려드립니다." : "고른 자료를 읽고 정리하고 있습니다. 끝나면 알려드립니다.");
+      setNotice(request.mode === "rewrite" ? "다시 쓰고 있습니다. 끝나면 답변 아래에 비교 화면이 나타납니다." : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
     });
     return started;
   }
@@ -365,7 +370,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
       <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
-        <span>{task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "research" ? "업계 사례 조사" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
+        <span>{task.kind === "writing" ? (task.result?.outcome === "outline" ? "구성 제안" : "자기소개서") : task.kind === "revision" ? "고치기" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
         <ApplicationTaskCancelButton task={task} onUpdate={acceptTask} onError={setError} />
         {task.error && <span className="text-red-600">{task.error}</span>}
         {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.result.document.filled}/{task.result.document.total}칸 입력 · 다운로드</a>}
@@ -422,16 +427,16 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     </section>}
 
     {workspace === "essay" && cardGate && (cardGate.unconfirmed > 0 || cardGate.stale) && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-      {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 자기소개서 작성에 쓰이지 않습니다{cardGate.coversProfile ? " (이력서 경험도 카드로 확인해야 쓰입니다)" : ""}. </>}
+      {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 구성 확인에서 ‘(미확인)’으로 표시됩니다. 내용이 맞는지 한 번 확인해 두면 좋습니다. </>}
       {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
       <a href="/profile#experience" className="underline">내 지원 자료 → 경험 카드</a>에서 확인해주세요.
     </p>}
     {workspace === "essay" && researchNotice && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">{researchNotice}</p>}
-    {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="작성·첨삭은 이 공고의 작업 대화를 이어 쓰며, 앞부분은 캐시에서 읽습니다.">
+    {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="이 공고에서 구성 제안·작성·고치기에 쓴 AI 사용량입니다.">
       이 공고 AI 사용: {usage.calls.toLocaleString()}회 · 새로 처리한 입력 {usage.inputTokens.toLocaleString()} · 캐시에서 읽은 입력 {usage.cacheReadTokens.toLocaleString()}({Math.round(usage.cacheHitRatio * 100)}%) · 출력 {usage.outputTokens.toLocaleString()} 토큰
     </p>}
     {workspace === "essay" && <><section className="space-y-3">
-      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
+      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">① 문항을 넣고 구성 제안을 받으면 ② 문항마다 핵심 메시지·문단 구성·쓸 경험·확인 질문이 나옵니다. 고친 뒤 ③ 그 구성대로 작성합니다. 문항이 여러 개면 한꺼번에 제안받고 한꺼번에 작성할 수 있습니다.</p></div>
       {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
         <div className="flex items-center justify-between">
           <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={row.freeform} disabled={essayBusy} onChange={(e) => toggleFreeform(row.id, e.target.checked)} />자유 문항</label>
@@ -445,15 +450,22 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       </div>)}
       <div className="flex items-center gap-2">
         <button type="button" disabled={essayBusy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
-        <button className={buttonStyle} disabled={essayBusy || !rows.some((r) => r.question.trim())} onClick={generateAll}>
-          {writingBusy
-            ? (progress ? `문항 ${progress.done + 1}/${progress.total} 작성 중...` : "문항 분석 · 구상 · 작성 · 편집 검토 중...")
-            : rows.filter((r) => r.question.trim()).length > 1 ? "문항 전체 답변 작성" : "이 문항 답변 작성"}
+        <button className={buttonStyle} disabled={essayBusy || !rows.some((r) => r.question.trim())} onClick={requestOutlines}>
+          {writingBusy ? (progress && progress.total > 1 ? `작성 중 ${progress.done}/${progress.total}...` : "AI가 작업 중...") : "구성 제안 받기"}
         </button>
       </div>
-      {writingBusy && <p className="text-xs text-gray-500" role="status">전체 문항의 구상과 경험 배치를 정한 뒤 리서치 근거를 연결해 작성하고 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
+      {writingBusy && <p className="text-xs text-gray-500" role="status">AI 호출 1번으로 처리합니다. 보통 1~2분 걸립니다.</p>}
       <EssayImportForm disabled={essayBusy} onImport={importAnswer} />
     </section>
+    {!!outlineEdits.length && <section aria-label="구성 확인" className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-semibold text-gray-800">구성 확인 {outlineEdits.length}개</h3>
+        {outlineEdits.length > 1 && <button type="button" className={buttonStyle} disabled={essayBusy} onClick={() => void writeOutlines(outlineEdits)}>구성 {outlineEdits.length}개 모두 작성</button>}
+      </div>
+      {outlineEdits.map((o) => <EssayOutlineEditor key={`${o.question}-${o.createdAt}`} outline={o} materials={materials} disabled={essayBusy}
+        onChange={(next) => setOutlineEdits((prev) => prev.map((x) => (x.question === o.question ? next : x)))}
+        onWrite={() => void writeOutlines([o])} onRemove={() => void removeOutline(o.question)} />)}
+    </section>}
     {currentAnswers.map(({ a, index }) => {
       const answer = a as EssayAnswer;
       const count = characterCount(answer.answer, answer.countSpaces);
@@ -466,42 +478,24 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
           <textarea aria-label={`${answer.question} 답변`} className={inputStyle} rows={12} value={answer.answer} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} />
           <p className={`text-xs ${answer.maxChars && count > answer.maxChars ? "text-red-600" : "text-gray-400"}`}>{count.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""} · 공백 {answer.countSpaces ? "포함" : "제외"}{dirty ? " · 수정 내용 저장 필요" : ""}</p>
         </>}
-        {answer.plan && <details className="text-xs text-gray-600">
-          <summary className="cursor-pointer">작성 구상과 회사 리서치 활용</summary>
-          <div className="mt-2 space-y-3">
-            <p className="font-medium">핵심 주장: {answer.plan.message}</p>
-            <ol className="list-decimal pl-4 space-y-1">{answer.plan.outline.map((step, i) => <li key={i}>{step}</li>)}</ol>
-            <p>리서치 활용: {answer.plan.researchMode === "direct" ? "본문의 논거로 사용" : answer.plan.researchMode === "perspective" ? "소재 선정 관점으로 사용" : "직접 활용하지 않음"}</p>
-            {answer.plan.research.map((r, i) => {
-              const source = answer.researchSources?.find((s) => s.id === r.sourceId);
-              return <div key={i} className="space-y-1">
-                <p>{r.paragraph}번 문단 · {r.purpose}</p>
-                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">{r.quote}</blockquote>
-                {source?.generatedAt && <p>조사 시각: {new Date(source.generatedAt).toLocaleString("ko-KR")}{source.status === "partial" ? " · 일부 확인되지 않은 조사" : ""}</p>}
-                {!!source?.links?.length && <p>해당 조사 항목의 출처</p>}
-                {source?.links?.filter((link) => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}
-              </div>;
-            })}
-            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}{m.anchor && <span className="text-gray-400"> · {m.fit === "transferable" ? "간접 연결" : "직접 경험"} — “{m.anchor.quote}”({m.anchor.source === "job" ? "공고" : m.anchor.source === "question" ? "문항" : "요청"})</span>}</p>)}
-            {!!answer.plan.coverage?.length && <div className="space-y-1">
-              <p className="font-medium">요구별 소재 판정</p>
-              {answer.plan.coverage.map((c, i) => <p key={i}>
-                <span className={`mr-1 rounded px-1 ${COVERAGE_STYLE[c.status] ?? "bg-gray-100 text-gray-600"}`}>{COVERAGE_LABEL[c.status] ?? c.status}</span>
-                {c.requirement}{c.sourceIds.length ? ` (${c.sourceIds.join(", ")})` : ""} — {c.rationale}
-              </p>)}
-            </div>}
-            {answer.plan.notes.map((note, i) => <p key={i}>{note}</p>)}
-            <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
+        {answer.reviewNotes.some((n) => n.startsWith("확인:")) && <ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+          {answer.reviewNotes.filter((n) => n.startsWith("확인:")).map((n, i) => <li key={i}>{n}</li>)}
+        </ul>}
+        {answer.outline && <details className="text-xs text-gray-600">
+          <summary className="cursor-pointer">작성 구성</summary>
+          <div className="mt-2 space-y-1">
+            <p className="font-medium">핵심 메시지: {answer.outline.message || "(없음)"}</p>
+            <ol className="list-decimal pl-4 space-y-1">{answer.outline.paragraphs.map((p, i) => <li key={i}>{p.role || "(역할 없음)"}{p.materials.length ? ` — ${p.materials.map((id) => materials.find((m) => m.id === id)?.label ?? id).join(", ")}` : ""}</li>)}</ol>
           </div>
         </details>}
-        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">직접 수정·제안 반영·버전 복원 이후의 본문이라 위 근거 검토가 현재 글과 다를 수 있습니다.</p>}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
+        {answer.reviewNotes.some((n) => !n.startsWith("확인:")) && <details className="text-xs text-gray-500"><summary className="cursor-pointer">문체 점검과 검토 메모</summary><div className="mt-2 space-y-1">{answer.reviewNotes.filter((n) => !n.startsWith("확인:")).map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">직접 수정·제안 반영·버전 복원 이후의 본문이라 위 메모가 현재 글과 다를 수 있습니다.</p>}</div></details>}
         <div className="flex flex-wrap gap-3 text-xs">
           <button type="button" disabled={essayBusy} className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700 transition hover:bg-blue-100 active:scale-95 active:bg-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:pointer-events-none disabled:opacity-40" onClick={() => {
             const id = `q${nextRowId.current++}`;
             focusGuidanceRowId.current = id;
             setRows([{ id, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: answer.question === FREEFORM_ESSAY_QUESTION }]);
-            setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요. 지금 글을 다듬으려면 ‘첨삭하기’를 이용해주세요.");
-          }} title="구상부터 처음부터 다시 작성합니다. 지금 글은 버전 기록에 남습니다.">새로 쓰기</button>
+            setNotice("위 문항 입력란에서 필요한 요청을 보완한 뒤 ‘구성 제안 받기’를 눌러주세요. 지금 글을 다듬으려면 ‘고치기’를 이용해주세요.");
+          }} title="구성 제안부터 다시 받습니다. 지금 글은 버전 기록에 남습니다.">구성부터 다시</button>
           {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
             await save();
             const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seq, company: companyName, question: answer.question, answer: answer.answer }) });
@@ -511,8 +505,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         </div>
         <EssayRevisionTools answer={answer} disabled={essayBusy} revising={revisionBusy} error={answerErrors[answer.question] || undefined}
           highlight={highlightQuestion === answer.question}
-          onRevise={(mode, text, findingIds) => startRevision(answer.question, mode, text, findingIds)}
-          onResearch={(request) => startResearch(answer.question, request)}
+          onRevise={(request) => startRevision(answer.question, request)}
           onAction={(action) => void answerAction(answer.question, action)} />
       </section>;
     })}

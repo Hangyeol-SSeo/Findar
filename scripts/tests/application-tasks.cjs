@@ -13,21 +13,28 @@ const stubs = {
   'next/server': { after: fn => scheduled.push(fn) },
   '@/lib/db': { getJobBySeq: seq => ({ seq }) },
   '@/lib/essay-log': { logEssayEvent: () => {}, logEssayEvents: () => {}, newEssayThread: () => 'thread' },
-  '@/lib/application-draft': {
-    getCachedApplicationDraft: seq => drafts.get(seq) ?? null,
-    materialsLogDetail: () => ({}),
-    draftRepairReason: () => null,
-    prepareEssayBatch: async (_seq, inputs) => ({ plans: inputs }),
-    generateCustomEssayAnswer: async (_seq, input, signal) => {
+  // 작성 작업: 확정한 구성(outlines)을 받아 서버가 소유한 작업으로 쓴다. 문항별 저장·실패 보존·취소 의미는 작업 저장소가 보장한다.
+  '@/lib/essay-writer': {
+    listEssayMaterials: () => [],
+    parseOutlineInput: (value) => ({ question: String(value.question ?? '').trim(), countSpaces: true, guidance: '', message: '', paragraphs: [], companyFacts: [], questions: [], createdAt: 1 }),
+    writeFromOutlines: async (seq, outlines, signal, progress) => {
       assert.ok(signal instanceof AbortSignal, 'work has a server-owned AbortSignal');
       assert.equal(signal.aborted, false, 'client disconnect does not cancel server work');
-      await gate;
-      if (input.question === 'hold') await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
-      signal.throwIfAborted();
-      if (input.question === 'fail') throw new Error('fixture failure');
-      return { ...input, answer: 'stored answer', status: 'draft' };
+      let done = 0, draft;
+      const failures = [];
+      for (const [i, input] of outlines.entries()) {
+        signal.throwIfAborted();
+        await gate;
+        if (input.question === 'hold') await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+        signal.throwIfAborted();
+        if (input.question === 'fail') { failures.push(`문항 ${i + 1}: fixture failure`); continue; }
+        draft = { essayAnswers: [...(drafts.get(seq)?.essayAnswers ?? []), { ...input, answer: 'stored answer', status: 'draft' }] };
+        drafts.set(seq, draft);
+        progress(++done);
+      }
+      if (failures.length) throw new Error(`${outlines.length}개 중 ${done}개를 저장했습니다. ${failures.join(' / ')}`);
+      return { draft, needsInfo: 0 };
     },
-    persistEssay: (seq, answer) => { const draft = { essayAnswers: [...(drafts.get(seq)?.essayAnswers ?? []), answer] }; drafts.set(seq, draft); return draft; },
   },
 };
 function load(relative) {
@@ -43,7 +50,7 @@ function load(relative) {
   const tasks = load('lib/application-tasks.ts');
   const route = load('app/api/applications/[seq]/draft/question/route.ts');
   const abort = new AbortController();
-  const post = (seq, questions, signal) => route.POST(new Request('http://localhost:3000/api/test', { method: 'POST', headers: { origin: 'http://localhost:3000', 'content-type': 'application/json' }, body: JSON.stringify({ questions: questions.map(question => ({ question })) }), signal }), { params: Promise.resolve({ seq }) });
+  const post = (seq, questions, signal) => route.POST(new Request('http://localhost:3000/api/test', { method: 'POST', headers: { origin: 'http://localhost:3000', 'content-type': 'application/json' }, body: JSON.stringify({ outlines: questions.map(question => ({ question })) }), signal }), { params: Promise.resolve({ seq }) });
   const response = await post('a', ['first', 'second'], abort.signal);
   assert.equal(response.status, 202);
   const first = (await response.json()).task;
