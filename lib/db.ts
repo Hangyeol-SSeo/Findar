@@ -518,6 +518,16 @@ export function getCompany(normalizedName: string): CompanyRow | undefined {
   return selectCompanyStmt.get(normalizedName) as CompanyRow | undefined;
 }
 
+const selectJobSiteUrlsStmt = db.prepare(`
+  SELECT company, siteUrl FROM jobs WHERE siteUrl != '' ORDER BY CAST(seq AS INTEGER) DESC
+`);
+
+// 회사의 공고에 적힌 "사이트바로가기" 주소들(최신 공고 순, 중복 제거). 회사 리서치가 홈페이지를 먼저 읽는 데 쓴다.
+export function getCompanySiteUrls(normalizedName: string): string[] {
+  const rows = selectJobSiteUrlsStmt.all() as { company: string; siteUrl: string }[];
+  return [...new Set(rows.filter((r) => normalizeCompanyName(r.company) === normalizedName).map((r) => r.siteUrl.trim()).filter(Boolean))];
+}
+
 const setCompanyDartMatchStmt = db.prepare(`
   UPDATE companies SET dartCorpCode = ?, dartMatchConfidence = ?, updatedAt = ? WHERE normalizedName = ?
 `);

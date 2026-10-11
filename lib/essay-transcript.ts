@@ -47,10 +47,10 @@ export function renderEssayEvent(e: TranscriptEvent, omitBody = false): string |
     case "draft_failed": return `${q} AI 작성 실패: ${str(d.error)}`;
     case "answer_imported": return `${q} 사용자가 직접 쓴 글을 가져왔다:\n${body(e.textAfter)}`;
     case "manual_edit": return `${q} 사용자가 직접 고쳤다:\n${changes(e)}`;
-    case "revision_requested": return `${q} 사용자 고쳐쓰기 요청: ${str(d.instruction)}`;
+    case "revision_requested": return `${q} 사용자 ${d.scope === "restructure" ? "다시 구성" : "고쳐쓰기"} 요청: ${str(d.instruction)}`;
     case "revision_proposed": return `${q} AI 수정본 제안${list(d.changeSummary).length ? ` — ${list(d.changeSummary).join("; ")}` : ""}:\n${changes(e)}`;
     case "revision_needs_info": return `${q} AI가 고쳐쓰기에 필요한 정보를 물었다: ${list(d.questions).join(" / ")}`;
-    case "revision_failed": return `${q} 고쳐쓰기 실패: ${str(d.error)}`;
+    case "revision_failed": return `${q} ${d.scope === "restructure" ? "다시 구성" : "고쳐쓰기"} 실패: ${str(d.error)}`;
     case "revision_accepted": return `${q} 사용자가 수정본을 반영했다.`;
     case "revision_discarded": return `${q} 사용자가 수정본을 버렸다(원하지 않음).`;
     case "needs_info_dismissed": return `${q} 사용자가 보완 질문을 닫았다.`;

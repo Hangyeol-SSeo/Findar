@@ -7,7 +7,7 @@ import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
 import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
-import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest } from "./EssayRevisionTools";
+import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest, type RevisionMode } from "./EssayRevisionTools";
 import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
 import Toast, { useToast } from "./Toast";
 
@@ -269,15 +269,17 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       setNotice("백그라운드에서 문항을 작성합니다. 탭을 바꾸거나 다른 공고의 작업을 시작할 수 있습니다.");
     });
   }
-  async function startRevision(question: string, mode: "rewrite" | "review", text: string, findingIds?: string[]) {
+  async function startRevision(question: string, mode: RevisionMode, text: string, findingIds?: string[]) {
     let started = false;
     setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
     await run("revision", async () => {
       await save();
-      const data = await api("draft/revision", { question, mode, ...(mode === "rewrite" ? { instruction: text, findingIds } : { focus: text }) });
+      const data = await api("draft/revision", { question, mode, ...(mode === "review" ? { focus: text } : { instruction: text, findingIds }) });
       acceptTask(data.task);
       started = true;
-      setNotice(mode === "rewrite" ? "고쳐쓰기를 시작했습니다. 끝나면 답변 아래에 비교 화면이 나타납니다." : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
+      setNotice(mode === "rewrite" ? "고쳐쓰기를 시작했습니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
+        : mode === "restructure" ? "다시 구성을 시작했습니다. 구상부터 다시 하므로 몇 분 걸립니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
+        : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
     });
     return started;
   }

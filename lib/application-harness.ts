@@ -83,7 +83,9 @@ const ISSUE_LABEL: Record<ContextIssueType, string> = {
 // 독립 검증이 끝까지 해결되지 않으면 이 오류로 답변과 함께 올린다. 마지막에는 답변을 버리지 않고 검토 메모로 남긴다.
 export class ContextAuditError<T = unknown> extends Error {
   constructor(readonly issues: ContextIssue[], readonly answer?: T) {
-    super(`직무·회사 맥락 검증: ${issues.map((i) => `[${ISSUE_LABEL[i.type]}] “${i.sentence.slice(0, 60)}” — ${i.reason}`).join(" / ")}`);
+    // 억지 연결 지적을 받은 모델이 소재를 빼지 않고 "실무와는 다르지만" 같은 변명을 붙여 통과한 기록이 있어, 고치는 방법을 함께 준다.
+    super(`직무·회사 맥락 검증: ${issues.map((i) => `[${ISSUE_LABEL[i.type]}] “${i.sentence.slice(0, 60)}” — ${i.reason}`).join(" / ")}${
+      issues.some((i) => i.type === "stretched_link") ? " / 억지 연결로 지적된 경험은 변명이나 단서 문장을 덧붙이지 말고, 그 경험 서술을 빼거나 공고 업무와 실제로 닿는 내용만 남기세요." : ""}`);
   }
 }
 

@@ -14,11 +14,23 @@ export type EssayVersionKind = "ai_draft" | "user_import" | "user_edit" | "ai_re
 export interface EssayVersion { id: string; answer: string; kind: EssayVersionKind; note: string; createdAt: number }
 export const MAX_ESSAY_VERSIONS = 10;
 
-// 첨삭 A(요청대로 고쳐쓰기)의 결과. 바로 적용하지 않고 사용자가 비교 화면에서 반영/버리기를 고른다.
+// 첨삭 A(요청대로 고쳐쓰기)와 다시 구성의 결과. 바로 적용하지 않고 사용자가 비교 화면에서 반영/버리기를 고른다.
+// 다시 구성(scope=restructure)은 구상·소재를 새로 정하므로, 반영할 때 plan·intent도 함께 바꾼다.
+export type RevisionScope = "partial" | "restructure";
 export interface PendingRevision {
   instruction: string; baseText: string; answer: string; changeSummary: string[];
   evidence: EssayEvidence[]; reviewNotes: string[]; createdAt: number;
   threadId?: string; // 작성 기록(essay-log)에서 요청·결과·반영을 잇는 id
+  scope?: RevisionScope;
+  plan?: EssayPlan;
+  intent?: string;
+}
+
+// 고쳐쓰기 요청이 글의 구성·소재·지원동기 전반을 문제 삼는지 보는 간단한 단서. 화면이 "다시 구성"을 권할 때만 쓰고,
+// 어느 쪽으로 보낼지는 사용자가 고른다. 실제 기록: "기본적인게 하나도 되어있지 않아 … 지원동기가 없고 … 기승전결부터".
+const STRUCTURAL_REQUEST = /구성|구조|흐름|기승전결|뼈대|소재|지원\s?동기(?:가|를|도)?\s?(?:없|부족|약)|처음부터|새로\s?(?:써|작성)|다시\s?(?:써|작성|구성)|전체적으로|전반적으로|문단\s?(?:순서|배치|구성)/;
+export function isStructuralRequest(text: string): boolean {
+  return STRUCTURAL_REQUEST.test(text);
 }
 // 첨삭 B(첨삭 받기)의 결과. 제안은 원문 구절을 바꾸는 단순 치환이라 반영할 때 AI를 다시 부르지 않는다.
 export interface EssaySuggestion {
@@ -32,7 +44,7 @@ export interface EssayFeedback {
 }
 
 // 고쳐쓰기 요청이 자료에 없는 사실을 필요로 할 때 모델이 돌려준 질문. 오류가 아니라 사용자가 답할 보완 요청이다.
-export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string }
+export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string; scope?: RevisionScope }
 
 // 버튼을 눌렀을 때만 도는 업계 사례 조사. 후보 찾기(scoped) → 사용자가 자료와 구성 방향 선택 → 자료 정리(collected)
 // → 그 자료로 고쳐쓰기의 단계를 거쳐, 조사 중간에 사용자가 방향을 정할 수 있다.
@@ -135,6 +147,12 @@ export function parseModelJson(text: string): Record<string, unknown> {
 export function validateEssay(
   value: Record<string, unknown>, request: EssayRequest, sources: EssaySource[], forbiddenNames: string[], allowReasoningOnly = false
 ): EssayAnswer {
+  // 보완 질문(needs_info)에는 본문이 없으므로, 모델이 answer·intent를 아예 빼고 보내도 받아준다. 실제로 길고 강한 고쳐쓰기
+  // 요청에서 질문만 돌려준 응답이 "본문 또는 문항 해석이 없습니다"로 두 번 연속 실패했다.
+  if (value.status === "needs_info") {
+    for (const key of ["answer", "intent"]) value[key] ??= "";
+    for (const key of ["evidence", "reviewNotes"]) value[key] ??= [];
+  }
   for (const key of ["answer", "intent"])
     if (typeof value[key] !== "string") throw new Error("작성 결과에 본문 또는 문항 해석이 없습니다.");
   const strings = (key: string): string[] => {

@@ -10,6 +10,8 @@ function compile(file, req) {
   return mod.exports;
 }
 const prompts = [];
+const restructureCalls = [];
+let restructureResult;
 let queued = [];
 let draft;
 const conversationTurns = [];
@@ -36,6 +38,11 @@ const stubs = {
     WRITING_RULES: '',
     getCachedApplicationDraft: () => draft,
     askModel: async (prompt) => ask(prompt),
+    draftRepairReason: () => null,
+    materialsLogDetail: (plan) => (plan ? { selectedMaterials: plan.selectedMaterials } : {}),
+    // 다시 구성은 새로 쓰기와 같은 구상·소재 배치·작성 단계를 거친다. 여기서는 그 입력과 결과 처리만 본다.
+    prepareEssayBatch: async (seq, requests, signal, options) => { restructureCalls.push({ requests, options }); return { model: 'test-model' }; },
+    generateCustomEssayAnswer: async (seq, request, signal, batch, taskNote) => { restructureCalls.push({ request, taskNote }); return restructureResult; },
     // 고쳐쓰기·첨삭 받기는 공고 작업 대화를 이어 쓴다(규칙·자료는 머리말). 독립 검증은 askModel로 대화 밖에서 부른다.
     openEssayConversation: async () => ({ model: 'test-model', conversation: { model: 'test-model', provider: 'claude', ask: (prompt) => ask(prompt, true) },
       context: { sources, forbiddenNames: ['가상방산'], otherCompanies: ['가상방산'], company: '가상은행', editPreferences: '', employers: [], redact: (x) => x,
@@ -162,9 +169,73 @@ const clean = { issues: [] };
   assert.ok(!prompts[1].includes('[JSON 문법 오류]'), '스키마 오류는 문법 복구 예산을 쓰지 않는다');
   assert.ok(!prompts[1].includes('[]'), '잘못된 응답은 대화에 있어 다시 보내지 않는다');
 
+  // 출처 언급·변명 표현: 새로 생기면 수정 호출로 넘기고, 고친 뒤에도 남으면 수정본은 남기되 메모 맨 앞에 둔다.
+  reset();
+  const metaAnswer = `${baseText} 공고상 리스크관리 업무는 한도 모니터링입니다.`;
+  queued = [proposal(metaAnswer, [kept]), proposal(`${baseText} 한도를 매일 확인했습니다.`, [kept]), clean];
+  await revision.reviseEssay('S', question, '업무 이해를 보여주세요');
+  assert.equal(queued.length, 0);
+  assert.ok(prompts[1].includes('“공고상”') && prompts[1].includes('evidence에만'), 'the repair call must receive the meta-phrase failure');
+  assert.ok(!draft.essayAnswers[0].pendingRevision.answer.includes('공고상'));
+  reset();
+  queued = [proposal(metaAnswer, [kept]), proposal(metaAnswer, [kept]), clean];
+  await revision.reviseEssay('S', question, '업무 이해를 보여주세요');
+  assert.ok(draft.essayAnswers[0].pendingRevision.reviewNotes[0].startsWith('표현 확인: “공고상”'));
+  // 사용자가 쓴 현재 글에 이미 있던 표현은 요청 범위 밖이면 그대로 둘 수 있다.
+  reset();
+  draft.essayAnswers[0].answer = metaAnswer;
+  draft.essayAnswers[0].evidence = [];
+  queued = [proposal(`${metaAnswer} 한도를 매일 확인했습니다.`, [{ sourceId: 'user.answer', quote: metaAnswer, usedFor: '기존' }]), clean];
+  await revision.reviseEssay('S', question, '마지막에 한 문장 더해주세요');
+  assert.equal(queued.length, 0);
+  assert.ok(!draft.essayAnswers[0].pendingRevision.reviewNotes.some((n) => n.startsWith('표현 확인')));
+  // 첨삭 받기 제안이 새 출처 언급을 넣으면 버린다.
+  reset();
+  queued = [{ summary: '총평', strengths: [], issues: [], suggestions: [
+    { original: '손실 원인을 분석했습니다', replacement: '공고에서 강조한 분석 역량을 길렀습니다', category: '표현·문체', reason: '' },
+    { original: '투자동아리에서', replacement: '투자 동아리에서', category: '표현·문체', reason: '' }] }, clean];
+  await revision.reviewEssay('S', question, '');
+  assert.equal(draft.essayAnswers[0].feedback.suggestions.length, 1);
+  assert.equal(draft.essayAnswers[0].feedback.suggestions[0].replacement, '투자 동아리에서');
+
+  // 보완 질문만 돌려준 응답(answer·intent 없음)도 받아준다 — 길고 강한 요청에서 두 번 연속 실패했던 형태.
+  reset();
+  queued = [{ status: 'needs_info', missingInfo: ['어느 회사의 사례인가요?'] }];
+  await revision.reviseEssay('S', question, '업계 사례를 넣어주세요');
+  assert.equal(draft.essayAnswers[0].revisionNeedsInfo.questions[0], '어느 회사의 사례인가요?');
+
+  // 다시 구성: 요청을 구상 단계에도 넘기고, 결과는 비교 후 반영하도록 pendingRevision(scope=restructure)에 둔다.
+  reset();
+  draft.essayAnswers[0].guidance = '3000자 정도로';
+  restructureCalls.length = 0;
+  const newPlan = { message: '운용지원을 고른 이유', outline: ['지원동기', '기여', '자세'], selectedMaterials: [{ sourceId: 'card.EXP-02' }] };
+  restructureResult = { question, answer: '새로 구성한 글입니다.', intent: '새 방향', evidence: [kept], missingInfo: [], reviewNotes: ['메모'], status: 'draft', plan: newPlan };
+  const outcome = await revision.restructureEssay('S', question, '지원동기가 없어요. 처음부터 다시 구성해주세요');
+  assert.equal(outcome.outcome, 'pending-revision');
+  assert.equal(restructureCalls[0].options.directionInPlan, true);
+  assert.ok(restructureCalls[0].requests[0].guidance.startsWith('지원동기가 없어요') && restructureCalls[0].requests[0].guidance.includes('3000자 정도로'));
+  assert.ok(restructureCalls[1].taskNote.startsWith('[다시 구성]'));
+  pending = draft.essayAnswers[0].pendingRevision;
+  assert.equal(pending.scope, 'restructure');
+  assert.equal(pending.baseText, baseText);
+  assert.ok(pending.changeSummary[1].includes('지원동기 → 기여 → 자세'));
+  revision.applyEssayAnswerAction('S', question, { action: 'accept-revision' }, draft.revision);
+  assert.equal(draft.essayAnswers[0].answer, '새로 구성한 글입니다.');
+  assert.equal(draft.essayAnswers[0].plan.message, '운용지원을 고른 이유', 'accepting a restructure must carry its new plan');
+  assert.equal(draft.essayAnswers[0].intent, '새 방향');
+  assert.ok(draft.essayAnswers[0].versions.at(-1).note.startsWith('다시 구성: '));
+  reset();
+  restructureResult = { question, answer: '', intent: '', evidence: [], missingInfo: ['왜 이 회사인가요?'], reviewNotes: [], status: 'needs_info' };
+  await revision.restructureEssay('S', question, '다시 구성해주세요');
+  assert.equal(draft.essayAnswers[0].revisionNeedsInfo.scope, 'restructure');
+  assert.equal(draft.essayAnswers[0].answer, baseText, 'a restructure that needs info must not touch the answer');
+  const { isStructuralRequest } = stubs['./essay-contract'];
+  assert.ok(isStructuralRequest('왜 이 직무에 지원하는지 지원동기가 없고, 기승전결을 어떻게 가져갈지부터'));
+  assert.ok(!isStructuralRequest('글자 수 제한에 맞게 줄여주세요.'));
+
   // 대화로 이어 쓰기: 고쳐쓰기 지시에는 규칙·자료 전문이 없고(머리말에 있음), 수정 호출은 실패 이유만 덧붙인다(앞 응답은 대화에 있음).
   assert.ok(conversationTurns.every((t) => !t.includes('[사실 자료]')), 'turns do not re-send the sources');
   assert.ok(conversationTurns.some((t) => t.startsWith('[검증 실패]') && !t.includes(baseText)), 'repair turns do not re-send the previous prompt');
   assert.ok(conversationTurns.some((t) => t.includes('버린 수정본')), 'revision turns tell the model to honour what the user rejected before');
-  console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text');
+  console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text, meta-phrase blocking, needs_info without body, restructure');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

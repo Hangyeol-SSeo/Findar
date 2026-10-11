@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { characterCount, type EssayAnswer, type EssayVersionKind, type IndustryResearch } from "@/lib/essay-contract";
+import { characterCount, isStructuralRequest, type EssayAnswer, type EssayVersionKind, type IndustryResearch } from "@/lib/essay-contract";
 import { diffSentences } from "@/lib/essay-diff";
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
@@ -25,6 +25,8 @@ function DiffView({ before, after }: { before: string; after: string }) {
       : <ins key={i} className="bg-green-50 text-green-800 no-underline">{part.text}</ins>)}
   </p>;
 }
+
+export type RevisionMode = "rewrite" | "restructure" | "review";
 
 export type ResearchRequest =
   | { step: "scope"; instruction: string; topic: string }
@@ -100,7 +102,7 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
   revising: boolean;
   error?: string;
   highlight: boolean;
-  onRevise: (mode: "rewrite" | "review", text: string, findingIds?: string[]) => Promise<boolean>;
+  onRevise: (mode: RevisionMode, text: string, findingIds?: string[]) => Promise<boolean>;
   onResearch: (request: ResearchRequest) => Promise<boolean>;
   onAction: (action: AnswerAction) => void;
 }) {
@@ -111,7 +113,7 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
   const research = answer.industryResearch;
   const startResearchForm = (instruction: string, questions: string[] = []) =>
     setResearchForm({ instruction, topic: [instruction, ...questions].filter(Boolean).join("\n") });
-  const [mode, setMode] = useState<"rewrite" | "review">("rewrite");
+  const [mode, setMode] = useState<RevisionMode>("rewrite");
   const [instruction, setInstruction] = useState("");
   const [focus, setFocus] = useState("");
   const pending = answer.pendingRevision;
@@ -129,7 +131,7 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
       </button>
       {open && <div className="space-y-3 rounded-lg border border-violet-100 bg-violet-50/40 p-3">
         <div className="flex gap-1 rounded-md bg-white p-1 text-xs">
-          {([["rewrite", "요청대로 고쳐쓰기"], ["review", "첨삭 받기"]] as const).map(([value, label]) =>
+          {([["rewrite", "요청대로 고쳐쓰기"], ["restructure", "다시 구성"], ["review", "첨삭 받기"]] as const).map(([value, label]) =>
             <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}
               className={`flex-1 rounded px-2 py-1.5 ${mode === value ? "bg-violet-100 font-semibold text-violet-800" : "text-gray-500 hover:bg-gray-50"}`}>{label}</button>)}
         </div>
@@ -139,25 +141,35 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
             <button key={text} type="button" disabled={disabled} className={secondaryButton} onClick={() => setInstruction((v) => (v ? `${v}\n${text}` : text))}>{text.replace(/주세요\.$/, "")}</button>)}</div>
           <textarea aria-label="수정 요청" className={inputStyle} rows={3} maxLength={2000} value={instruction} disabled={disabled}
             onChange={(e) => setInstruction(e.target.value)} placeholder="예: 2문단의 협업 경험을 더 구체적으로, 마지막 문단은 입사 후 첫 1년 계획 중심으로 바꿔주세요." />
+          {isStructuralRequest(instruction) && <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+            <span>글의 구성·소재·지원동기를 바꾸는 요청으로 보입니다. 고쳐쓰기는 요청한 부분만 고치므로, 뼈대를 바꾸려면 다시 구성이 맞습니다.</span>
+            <button type="button" className={secondaryButton} disabled={disabled} onClick={() => setMode("restructure")}>다시 구성으로 바꾸기</button>
+          </div>}
           <div className="flex flex-wrap gap-2">
             <button type="button" className={primaryButton} disabled={disabled || !instruction.trim()}
               onClick={() => void onRevise("rewrite", instruction)}>고쳐쓰기 요청</button>
             <button type="button" className={secondaryButton} disabled={disabled || !instruction.trim()} onClick={() => startResearchForm(instruction)}
               title="요청에 업계 사례나 제도 현황이 필요할 때 웹에서 먼저 찾아봅니다.">업계 사례 먼저 조사하기</button>
           </div>
+        </> : mode === "restructure" ? <>
+          <p className="text-xs leading-5 text-gray-500">요청을 구성 방향으로 삼아 작성 구상과 소재 선택부터 다시 해서 새 글을 만듭니다. 현재 글에서 살릴 만한 문장은 유지합니다. 바뀐 부분을 비교한 뒤 반영 여부를 고를 수 있습니다.</p>
+          <textarea aria-label="다시 구성 요청" className={inputStyle} rows={4} maxLength={4000} value={instruction} disabled={disabled}
+            onChange={(e) => setInstruction(e.target.value)} placeholder="예: 지원동기가 없습니다. 왜 이 직무와 이 회사인지로 시작하고, 직무와 직접 닿는 경험만 남겨 다시 구성해주세요." />
+          <button type="button" className={primaryButton} disabled={disabled || !instruction.trim()}
+            onClick={() => void onRevise("restructure", instruction)}>다시 구성 요청</button>
         </> : <>
           <p className="text-xs leading-5 text-gray-500">글을 고치지 않고 평가와 구절별 수정 제안을 받습니다. 제안은 하나씩 반영하거나 넘길 수 있고, 반영할 때는 AI를 다시 부르지 않습니다.</p>
           <input aria-label="중점적으로 봐줄 부분" className={inputStyle} maxLength={500} value={focus} disabled={disabled}
             onChange={(e) => setFocus(e.target.value)} placeholder="중점적으로 봐줄 부분 (선택) — 예: 지원동기가 설득력 있는지" />
           <button type="button" className={primaryButton} disabled={disabled} onClick={() => void onRevise("review", focus)}>첨삭 받기</button>
         </>}
-        <p className="text-[11px] text-gray-400">첨삭 1회에 AI 호출 1번이 듭니다(형식 오류 시에만 1번 더).</p>
+        <p className="text-[11px] text-gray-400">{mode === "restructure" ? "다시 구성은 새로 쓰기와 같은 단계를 거쳐 AI 호출이 4~6번 들고, 몇 분 걸립니다." : "첨삭 1회에 AI 호출 1번이 듭니다(형식 오류 시에만 1번 더)."}</p>
       </div>}
     </div>}
 
     {needsInfo && <div data-block="needs-info" className="scroll-mt-24 space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium text-amber-900">고쳐쓰기에 정보가 더 필요합니다</p>
+        <p className="text-sm font-medium text-amber-900">{needsInfo.scope === "restructure" ? "다시 구성" : "고쳐쓰기"}에 정보가 더 필요합니다</p>
         <button type="button" className="text-gray-400 hover:text-gray-600" disabled={disabled} onClick={() => onAction({ action: "dismiss-needs-info" })}>닫기</button>
       </div>
       <p className="text-amber-800">요청: {needsInfo.instruction}</p>
@@ -166,8 +178,8 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
       <textarea aria-label="보완 정보" className={inputStyle} rows={3} maxLength={1800} value={extraInfo} disabled={disabled} onChange={(e) => setExtraInfo(e.target.value)} placeholder="답변이나 기사·보고서 본문과 출처 링크를 붙여넣어주세요." />
       <div className="flex flex-wrap gap-2">
         <button type="button" className={primaryButton} disabled={disabled || !extraInfo.trim()}
-          onClick={() => void onRevise("rewrite", `${needsInfo.instruction}\n[추가 정보]\n${extraInfo}`)}>답변 추가해서 다시 고쳐쓰기</button>
-        <button type="button" className={secondaryButton} disabled={disabled} onClick={() => void onRevise("rewrite", `${needsInfo.instruction}\n${CONDITIONAL_REQUEST}`)}>자료 없이 조건부로 진행</button>
+          onClick={() => void onRevise(needsInfo.scope === "restructure" ? "restructure" : "rewrite", `${needsInfo.instruction}\n[추가 정보]\n${extraInfo}`)}>답변 추가해서 다시 요청</button>
+        <button type="button" className={secondaryButton} disabled={disabled} onClick={() => void onRevise(needsInfo.scope === "restructure" ? "restructure" : "rewrite", `${needsInfo.instruction}\n${CONDITIONAL_REQUEST}`)}>자료 없이 조건부로 진행</button>
         <button type="button" className={secondaryButton} disabled={disabled} onClick={() => startResearchForm(needsInfo.instruction, needsInfo.questions)}>업계 사례 조사하기</button>
       </div>
     </div>}
@@ -189,7 +201,7 @@ export function EssayRevisionTools({ answer, disabled, revising, error, highligh
 
     {pending && <div data-block="pending-revision" className="scroll-mt-24 space-y-2 rounded-lg border border-green-200 bg-green-50/50 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-green-900">고쳐쓰기 결과</p>
+        <p className="text-sm font-medium text-green-900">{pending.scope === "restructure" ? "다시 구성 결과" : "고쳐쓰기 결과"}</p>
         <span className="text-xs text-gray-500">{pendingCount.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""}</span>
       </div>
       <p className="text-xs text-gray-600">요청: {pending.instruction}</p>

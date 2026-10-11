@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 let selectedModel;
-let calls = 0, saved = [], existing = [], options, errorResult = false;
+let calls = 0, saved = [], existing = [], options, prompt, errorResult = false;
+let homepage = null, resultText = '검증된 분석 [공식 자료](https://example.com/report)', homepageFetches = 0;
 const modules = {};
 function load(name) {
   if (modules[name]) return modules[name];
@@ -14,14 +15,20 @@ function load(name) {
     exports, process: { env: {} }, console: { info() {}, error() {} },
     require(id) {
       if (id === './ai-query') return { query: async function* (args) {
-        calls++; options = args.options;
+        calls++; options = args.options; prompt = args.prompt;
         await new Promise(resolve => setTimeout(resolve, 5));
         yield { type: 'result', subtype: errorResult ? 'error_max_turns' : 'success', is_error: errorResult,
-          result: '검증된 분석 [공식 자료](https://example.com/report)', modelUsage: {}, num_turns: 5, total_cost_usd: 0 };
+          result: resultText, modelUsage: {}, num_turns: 5, total_cost_usd: 0 };
       } };
       if (id === './db') return {
         getCompanySections: () => existing,
+        getCompanySiteUrls: () => (homepage ? [homepage.url] : []),
         saveCompanySection: (...args) => saved.push(args),
+      };
+      if (id === './company-homepage') return {
+        HOMEPAGE_UNVERIFIED: '※ 회사 홈페이지를 확인하지 못했습니다',
+        pickHomepageUrl: (urls) => urls[0] ?? null,
+        fetchHomepage: async () => { homepageFetches++; return homepage; },
       };
       if (id === './ai-model-settings') return { getAIModelId: () => selectedModel };
       if (id === './dart') return { isDartConfigured: () => false };
@@ -75,5 +82,26 @@ function load(name) {
   const updated = await researchSection('other-fixture', 'Fixture', 'overview');
   assert.equal(updated.model, selectedModel);
   assert.equal(options.effort, 'medium');
-  console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility');
+  // 회사 홈페이지: 서버가 읽은 원문을 1차 근거로 넣고 출처 맨 앞에 둔다.
+  existing = [];
+  homepage = { status: 'ok', url: 'https://www.example-am.co.kr/', title: '예시자산운용', text: 'IPO 투자자문 · 펀드운용 · 투자일임 공모주 펀드를 운용합니다.' };
+  const withSite = await researchSection('homepage-fixture', 'Fixture', 'overview');
+  assert.match(prompt, /회사 홈페이지 원문 — https:\/\/www\.example-am\.co\.kr\//);
+  assert.ok(prompt.includes('공모주 펀드를 운용합니다'), 'the homepage text must reach the research prompt');
+  assert.match(prompt, /공고 제목과 게시일을 함께/, 'quoted job postings must carry their title and date');
+  assert.deepEqual(JSON.parse(JSON.stringify(withSite.sources[0])), { title: '예시자산운용 홈페이지', url: 'https://www.example-am.co.kr/' });
+  assert.equal(withSite.status, 'ok');
+  // 홈페이지를 못 읽었고 모델도 확인하지 못했다고 표시하면 partial로 낮춘다.
+  homepage = { status: 'unavailable', url: 'https://www.example-am.co.kr/', reason: 'HTTP 503' };
+  resultText = '※ 회사 홈페이지를 확인하지 못했습니다\n추정 분석 [협회 공시](https://example.com/disclosure)';
+  const unverified = await researchSection('unverified-fixture', 'Fixture', 'culture');
+  assert.match(prompt, /회사 홈페이지 미확인.*HTTP 503/);
+  assert.equal(unverified.status, 'partial');
+  // 뉴스 섹션은 홈페이지를 읽지 않는다.
+  const fetchesBefore = homepageFetches;
+  resultText = '뉴스 분석 [기사](https://example.com/news)';
+  await researchSection('news-fixture', 'Fixture', 'news');
+  assert.equal(homepageFetches, fetchesBefore);
+  assert.ok(!prompt.includes('회사 홈페이지'), 'news research must not include the homepage block');
+  console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility, homepage grounding');
 })().catch(error => { console.error(error); process.exitCode = 1; });
