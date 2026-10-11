@@ -173,10 +173,31 @@ const { generateCustomEssayAnswer, prepareEssayBatch, draftRepairReason, materia
   assert.ok(kept.reviewNotes[0].startsWith('소재 배치에서 고르지 않은 경험 사용: card.EXP-31(출처: 다른 회사(가상증권) · 자기소개서)'));
   assert.ok(prompts.at(-1).includes('독립된 검토자') && prompts.at(-1).includes('가상증권'), 'the kept answer still goes through the context audit');
   assert.match(draftRepairReason(kept), /고르지 않은 경험\(card\.EXP-31\)/);
+  // 출처 언급·변명 표현은 한 번 고쳐 쓰게 하고, 그래도 남으면 답변은 남기되 메모 맨 앞에 둔다.
+  const metaAnswer = { ...answer, answer: `${answer.answer} 공고상 이 업무는 검증이 중요합니다.` };
+  queued = [metaAnswer, metaAnswer, answer, { issues: [] }];
+  const beforeMeta = prompts.length;
+  const repaired = await generateCustomEssayAnswer('test', request, undefined, cardBatch);
+  assert.equal(queued.length, 0);
+  assert.ok(prompts[beforeMeta + 2].includes('“공고상”'), 'the repair call receives the meta-phrase failure');
+  assert.equal(repaired.answer, answer.answer);
+  queued = [metaAnswer, metaAnswer, metaAnswer, { issues: [] }];
+  const keptMeta = await generateCustomEssayAnswer('test', request, undefined, cardBatch);
+  assert.ok(keptMeta.reviewNotes[0].startsWith('표현 확인: “공고상”'));
+  assert.ok(!keptMeta.reviewNotes.some((n) => n.startsWith('문체 점검:') && n.includes('공고상')), 'the meta phrase is not reported twice');
+  // 다시 구성: 사용자 요청을 작성 구상에도 보여주고, 작업 안내를 작성 지시에 붙인다. 보통 작성은 구상에 요청을 넣지 않는다.
+  queued = [{ plans: [plan] }, materialsOnlyUser];
+  const beforeDirection = prompts.length;
+  const directed = await prepareEssayBatch('test', [request], undefined, { directionInPlan: true });
+  assert.ok(prompts[beforeDirection].includes('[사용자의 구성 요청') && prompts[beforeDirection].includes(request.guidance));
+  assert.ok(!prompts[beforeOutside - 2].includes('[사용자의 구성 요청'), 'ordinary drafting keeps the plan independent of the request');
+  queued = [answer, answer, { issues: [] }];
+  await generateCustomEssayAnswer('test', request, undefined, directed, '[다시 구성] 처음부터 다시 판단한다.');
+  assert.ok(prompts.at(-3).includes('[다시 구성] 처음부터 다시 판단한다.'));
   // 작성 기록용 소재 배치 요약
   const logged = materialsLogDetail(kept.plan);
   assert.deepEqual(logged.selectedMaterials.map((m) => [m.sourceId, m.fit, m.anchor.quote]), [['user.current.0', 'direct', ANCHOR]]);
   assert.equal(logged.coverage[0].status, 'SUFFICIENT');
   assert.deepEqual(materialsLogDetail(undefined), {});
-  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result, credentials cited without material selection, containment kept with a note after one repair, materials logged');
+  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result, credentials cited without material selection, containment kept with a note after one repair, meta phrases repaired then noted, restructure direction in plan, materials logged');
 })().catch(error => { console.error(error); process.exitCode = 1; });

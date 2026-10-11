@@ -11,7 +11,7 @@ import { normalizeCompanyName } from "./company-normalize";
 import { parseModelJson, validateEssay, withVersion, type EssayAnswer, type EssayEvidence, type EssayRequest, type EssaySource } from "./essay-contract";
 import { loadApplicationSkills } from "./application-skills";
 import { validatePlans, applyMaterials, type EssayPlan, type PlanCitation } from "./essay-plan";
-import { lintEssayStyle, styleReviewNotes, STYLE_RULES } from "./essay-style";
+import { assertNoMetaPhrases, lintEssayStyle, MetaPhraseError, metaPhraseNotes, styleReviewNotes, STYLE_RULES } from "./essay-style";
 import { logEssayEvent } from "./essay-log";
 import { openConversation, type AIConversation } from "./ai-conversation";
 import { essayHistory } from "./essay-transcript";
@@ -349,7 +349,9 @@ function withEventReuseNotes(plans: EssayPlan[], sources: EssaySource[]): EssayP
   });
 }
 
-export async function prepareEssayBatch(seq: string, requests: EssayRequest[], signal?: AbortSignal): Promise<PreparedEssayBatch> {
+// directionInPlan: 다시 구성(essay-revision.ts restructureEssay)처럼 사용자 요청이 글의 구성 자체를 정할 때, 작성 구상 단계에도
+// 요청을 보여준다. 요청은 구성 방향일 뿐 개인 경험의 사실 근거가 아니므로, 구상이 개인 이력보다 먼저 정해지는 원칙은 유지된다.
+export async function prepareEssayBatch(seq: string, requests: EssayRequest[], signal?: AbortSignal, options: { directionInPlan?: boolean } = {}): Promise<PreparedEssayBatch> {
   const selection = requireApplicationRole(seq);
   const { conversation, context, skills, model } = await openEssayConversation(seq);
   const sources = [...context.sources, ...requests.flatMap((r, i) => r.guidance ? [{ id: `user.current.${i}`, text: context.redact(r.guidance) }] : [])];
@@ -364,7 +366,7 @@ export async function prepareEssayBatch(seq: string, requests: EssayRequest[], s
 ${APPLICATION_ROLE_RULES}
 [공고와 회사 자료: 링크는 제공된 출처이며 외부 조회는 하지 않습니다]\n${JSON.stringify(requirements)}
 [전체 문항과 조건]\n${JSON.stringify(conditions)}
-[기존 다른 문항]\n${JSON.stringify(otherQuestions)}
+${options.directionInPlan ? `[사용자의 구성 요청: 글의 구성·논지 방향으로 반영한다. 개인 경험의 사실 근거로 쓰지 않는다]\n${JSON.stringify(requests.map((r) => ({ question: r.question, request: context.redact(r.guidance) })))}\n` : ""}[기존 다른 문항]\n${JSON.stringify(otherQuestions)}
 순수 JSON만 반환하세요: {"plans":[{"question":"입력 문항 원문", "questionTypes":["experience|motivation|opinion|freeform 중 해당하는 유형 모두"], "personalEvidence":"required 또는 optional", "intent":"평가 의도와 직무 요구", "message":"핵심 주장", "outline":["문단별 역할"], "materialCriteria":["소재 선정 기준"], "researchMode":"direct 또는 perspective 또는 none", "research":[{"sourceId":"company 자료 id", "quote":"본문의 연속된 원문", "purpose":"활용 목적과 직무 해석", "paragraph":1}], "notes":["자료의 한계 또는 미활용 이유"]}]}
 입력한 모든 문항에 대해 하나씩 반환하세요. 자료가 없거나 무관하면 researchMode=none, research=[]로 두고 notes에 이유를 설명하세요.`,
     (value) => validatePlans(value, questions, requirements, skills.version), false);
@@ -381,7 +383,8 @@ card.*의 writtenFor는 그 경험이 원래 쓰였던 지원서의 회사·직�
   return { context, sources, plans, skills, model, conversation, role: selection.role, roleRevision: selection.revision };
 }
 
-export async function generateCustomEssayAnswer(seq: string, request: EssayRequest, signal?: AbortSignal, prepared?: PreparedEssayBatch): Promise<EssayAnswer> {
+// taskNote: 초안 작성 지시에 덧붙이는 작업 안내(다시 구성 등). 사실 자료가 아니라 인용 대상이 아니다.
+export async function generateCustomEssayAnswer(seq: string, request: EssayRequest, signal?: AbortSignal, prepared?: PreparedEssayBatch, taskNote = ""): Promise<EssayAnswer> {
   const batch = prepared ?? await prepareEssayBatch(seq, [request], signal);
   const index = batch.plans.findIndex((p) => p.question === request.question);
   if (index < 0) throw new Error("이 문항의 작성 구상이 없습니다.");
@@ -407,7 +410,7 @@ export async function generateCustomEssayAnswer(seq: string, request: EssayReque
 [사용자 문항과 조건] ${JSON.stringify({ question: request.question, maxChars: request.maxChars, countSpaces: request.countSpaces, guidance: request.guidance })}${request.guidance ? `\n추가 요청을 근거로 인용할 때 sourceId는 ${userCurrentId}입니다.` : ""}
 [현재 저장된 이 문항의 답변: 수정할 이전 답변이며 사실 근거 아님]\n${previousAnswer || "없음"}
 [이 문항의 구상과 선정 소재: 사실 근거가 아닌 작성 방향]\n${JSON.stringify(plan)}${researchRule}
-${editPreferences ? `${editPreferences}\n` : ""}구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. 소재 배치의 coverage가 WEAKLY_SUPPORTED인 요구는 근거가 뒷받침하는 범위로 주장을 줄이고, MISSING·NO_ACTUAL_EXPERIENCE인 요구를 지어낸 경험으로 채우지 마세요. 소재 배치에서 고른 경험만 근거로 쓰세요(코드가 확인합니다). ${CREDENTIAL_RULE} fit=transferable 소재는 경험을 사실대로 쓰고 직무 연결은 anchor 구절에 대한 한두 문장으로만 밝히며, 경험을 지원 직무의 용어로 바꿔 부르지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.\n${OUTPUT}`, signal);
+${taskNote ? `${taskNote}\n` : ""}${editPreferences ? `${editPreferences}\n` : ""}구상에 부합하는 소재를 비교·선택한 뒤 초안을 작성하세요. 개인 경험이 필수인 문항에서 핵심 경험이 없을 때만 보완 질문을 하세요. 견해형은 주장·작동 원리·반론과 한계 중심으로 쓰고 경험을 강요하지 마세요. 구상 자체를 실제 경험처럼 서술하지 마세요. 소재 배치의 coverage가 WEAKLY_SUPPORTED인 요구는 근거가 뒷받침하는 범위로 주장을 줄이고, MISSING·NO_ACTUAL_EXPERIENCE인 요구를 지어낸 경험으로 채우지 마세요. 소재 배치에서 고른 경험만 근거로 쓰세요(코드가 확인합니다). ${CREDENTIAL_RULE} fit=transferable 소재는 경험을 사실대로 쓰고 직무 연결은 anchor 구절에 대한 한두 문장으로만 밝히며, 경험을 지원 직무의 용어로 바꿔 부르지 마세요. intent에는 평가 의도와 선택한 답변 방향을 설명하세요. 모든 서술 문장은 존댓말로 작성하세요.\n${OUTPUT}`, signal);
   // A separate editorial pass must inspect the draft against the original evidence, not merely paraphrase it.
   // 초안의 문체 문제는 코드로 미리 찾아 편집 단계에 함께 넘긴다 — 추가 호출 없이 편집의 초점을 잡아준다.
   // Findar 점검(lintEssayStyle)과 외부 스킬 점검(jasoseo-plugin style_check.py)을 함께 넘긴다.
@@ -433,6 +436,12 @@ ${editPreferences ? `${editPreferences}\n` : ""}구상에 부합하는 소재를
       catch (error) {
         if (!final || !(error instanceof ContainmentError)) throw error;
         outsideNotes = containmentNotes(error.outside, materialOrigins);
+      }
+      // 본문의 출처 언급·변명 표현도 같은 수정 호출로 넘긴다. 비싼 독립 검증보다 먼저 막고, 수정 뒤에도 남으면 메모로 둔다.
+      try { assertNoMetaPhrases(answer.answer); }
+      catch (error) {
+        if (!final || !(error instanceof MetaPhraseError)) throw error;
+        outsideNotes = [...outsideNotes, ...metaPhraseNotes(error.phrases)];
       }
     }
     // 회사 근거 누락은 사실 오류가 아니라 구상 반영도의 문제다. 이것만으로는 수정 호출(추가 비용)을 하거나

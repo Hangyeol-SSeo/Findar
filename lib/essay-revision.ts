@@ -2,7 +2,9 @@ import { throwIfAIAborted } from "./ai-operation";
 import { randomUUID } from "node:crypto";
 import { assertApplicationRole, requireApplicationRole } from "./application-role";
 import { saveApplicationDraft } from "./db";
-import { askModel, getCachedApplicationDraft, openEssayConversation, type ApplicationDraft } from "./application-draft";
+import {
+  askModel, draftRepairReason, generateCustomEssayAnswer, getCachedApplicationDraft, materialsLogDetail, openEssayConversation, prepareEssayBatch, type ApplicationDraft,
+} from "./application-draft";
 import type { AIConversation } from "./ai-conversation";
 import { recordEditSignals } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
@@ -14,7 +16,7 @@ import {
   assertRevisionMaterials, CONTEXT_AUDIT_UNAVAILABLE, ContextAuditError, contextIssueNotes, isExperienceSource, jobSourceText, runContextAudit,
   type AddedMaterial, type ContextIssue,
 } from "./application-harness";
-import { lintEssayStyle, styleReviewNotes } from "./essay-style";
+import { assertNoMetaPhrases, lintEssayStyle, MetaPhraseError, metaPhraseNotes, metaPhrases, styleReviewNotes } from "./essay-style";
 import {
   containsForbiddenName, extractNumbers, hasBanmalEnding, ModelJsonSyntaxError, parseEssayRequest, parseModelJson, validateEssay, withVersion,
   type EssayAnswer, type EssayFeedback, type EssaySource, type EssaySuggestion,
@@ -183,6 +185,8 @@ ${MEMORY_RULE}
 evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 원문 인용을 넣는다. 현재 답변에서 유지한 사실과 수치는 user.answer에서 연속된 원문 그대로 인용한다.
 [이전 답변이 쓴 경험 자료] ${JSON.stringify(priorIds)}
 위 목록에 없는 개인 경험 자료(card.*·resume.experience.*·profile.* 등)는 수정 요청이 그 경험을 필요로 할 때만 새로 쓰고, 그때는 addedMaterials에 그 경험이 답하는 수정 요청·문항·공고 업무의 원문 구절을 anchor로 댄다(코드가 원문 일치를 확인한다). card.*의 writtenFor가 다른 회사·직무면 그 회사·직무를 위한 해석·동기는 가져오지 않는다.
+수정 요청의 문구는 무엇을 고칠지에 대한 지시이지 본문에 옮길 표현이 아니다. 요청에 쓰인 말을 그대로 본문 문장으로 옮기지 말고, 자기소개서에서 자연스러운 지원자의 말로 바꿔 쓴다.
+수정 요청이 길거나 어조가 강해도 아래 형식을 지킨다. 보완 질문만 할 때도 status=needs_info와 missingInfo를 넣는다.
 순수 JSON 객체만 반환한다:
 {"status":"draft 또는 needs_info","intent":"문항 의도와 이번 수정 방향","answer":"수정한 전체 본문","changeSummary":["무엇을 왜 바꿨는지 한 문장씩"],
 "evidence":[{"sourceId":"자료 id","quote":"자료 text에서 정확히 연속된 원문 발췌","usedFor":"이 근거로 뒷받침한 주장"}],"missingInfo":[],"reviewNotes":["사용자가 확인할 점"],
@@ -190,17 +194,24 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   type Checked = { value: Record<string, unknown>; essay: EssayAnswer; added: AddedMaterial[]; contextNotes: string[] };
   // 사실 검증 → 새 경험의 근거 고정 → 독립 맥락 검증. 검증 실패는 한 번 고쳐 쓰게 하고, 맥락 지적이 고친 뒤에도 남으면
   // 수정본은 남기되(사용자가 반영 여부를 고른다) 지적을 검토 메모 맨 앞에 둔다.
-  const check = async (text: string): Promise<Checked> => {
+  const check = async (text: string, final = false): Promise<Checked> => {
     const value = parseModelJson(text);
     const essay = validateEssay(value, request, sources, context.forbiddenNames, true);
     if (essay.status !== "draft") return { value, essay, added: [], contextNotes: [] };
+    // 출처 언급·변명 표현은 새로 생긴 것만 막는다 — 사용자가 직접 쓴 현재 글에 있던 표현은 요청 범위 밖이면 그대로 둬야 한다.
+    let metaNotes: string[] = [];
+    try { assertNoMetaPhrases(essay.answer, baseText); }
+    catch (error) {
+      if (!final || !(error instanceof MetaPhraseError)) throw error;
+      metaNotes = metaPhraseNotes(error.phrases);
+    }
     const added = assertRevisionMaterials(essay.evidence, priorIds, value.addedMaterials, anchorTexts);
     const issues = await runContextAudit({
       company: context.company, role: selection.role, jobText: jobSourceText(sources), question, answer: essay.answer,
       otherCompanies: context.otherCompanies, employers: context.employers, materialOrigins: [...new Set(essay.evidence.flatMap((e) => context.materialOrigins.get(e.sourceId) ?? []))],
     }, (p) => askModel(p, undefined, model, seq));
-    if (issues?.length) throw new ContextAuditError<Checked>(issues, { value, essay, added, contextNotes: contextIssueNotes(issues) });
-    return { value, essay, added, contextNotes: issues === null ? [CONTEXT_AUDIT_UNAVAILABLE] : [] };
+    if (issues?.length) throw new ContextAuditError<Checked>(issues, { value, essay, added, contextNotes: [...metaNotes, ...contextIssueNotes(issues)] });
+    return { value, essay, added, contextNotes: [...metaNotes, ...(issues === null ? [CONTEXT_AUDIT_UNAVAILABLE] : [])] };
   };
   const askJson = revisionJsonRequester(conversation);
   let raw = await askJson(prompt);
@@ -209,7 +220,7 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   catch (error) {
     const reason = error instanceof Error ? error.message : "형식 오류";
     raw = await askJson(`[검증 실패] ${reason}\n방금 응답에서 지적된 문제를 해결한 최종 JSON만 반환하라.`, true);
-    try { result = await check(raw); }
+    try { result = await check(raw, true); }
     catch (finalError) {
       if (!(finalError instanceof ContextAuditError) || !finalError.answer) throw finalError;
       result = finalError.answer as Checked;
@@ -247,6 +258,59 @@ evidence에는 수정본의 핵심 사실과 본문의 모든 수치에 대한 �
   return { draft, outcome: essay.status === "needs_info" ? "needs-info" : "pending-revision" };
 }
 
+// 다시 구성. 고쳐쓰기는 요청한 부분만 고치므로 지원동기·구성·소재 같은 뼈대를 문제 삼는 요청에는 맞지 않는다 — 실제로 한 문항에
+// 아홉 번 요청해도 처음 초안의 뼈대가 그대로 남았다. 그래서 새로 쓰기와 같은 작성 구상 → 소재 배치 → 작성·편집·검증을 요청을
+// 구성 방향으로 삼아 다시 거친다(AI 호출 4~6번). 결과는 덮어쓰지 않고 고쳐쓰기처럼 비교한 뒤 반영/버리기를 고르게 한다.
+const RESTRUCTURE_NOTE = "[다시 구성] 현재 답변의 구성과 소재를 그대로 따르지 말고, 문항·공고·사용자의 구성 요청에 맞춰 처음부터 다시 판단한다. 현재 답변에서 사용자가 직접 쓴 표현과 살릴 만한 문장은 유지한다. 요청의 문구를 본문 표현으로 그대로 옮기지 않는다.";
+
+export async function restructureEssay(seq: string, question: string, instruction: string, signal?: AbortSignal): Promise<RevisionOutcome> {
+  const threadId = newEssayThread();
+  const current = getCachedApplicationDraft(seq)?.essayAnswers.find((a) => isUserAnswer(a, question));
+  logEssayEvent({ seq, question, type: "revision_requested", threadId, textBefore: current?.answer ?? null, detail: { instruction, scope: "restructure" } });
+  try { return await runRestructure(seq, question, instruction, threadId, signal); }
+  catch (error) {
+    const repairReason = draftRepairReason(error);
+    logEssayEvent({ seq, question, type: "revision_failed", threadId, detail: {
+      instruction, scope: "restructure", error: error instanceof Error ? error.message : String(error), ...(repairReason ? { repairReason } : {}),
+    } });
+    throw error;
+  }
+}
+
+async function runRestructure(seq: string, question: string, instruction: string, threadId: string, signal?: AbortSignal): Promise<RevisionOutcome> {
+  const selection = requireApplicationRole(seq);
+  const current = findEssayAnswer(seq, question);
+  const baseText = current.answer;
+  if (!baseText.trim()) throw new Error("다시 구성할 본문이 없습니다. 먼저 답변을 작성하거나 직접 쓴 글을 가져와주세요.");
+  // 처음 작성할 때의 추가 요청(분량·강조점 등)은 이번 요청과 함께 유지한다.
+  const guidance = [instruction, current.guidance ? `[처음 작성할 때의 추가 요청]\n${current.guidance}` : ""].filter(Boolean).join("\n\n").slice(0, 6000);
+  const request = { question, maxChars: current.maxChars, countSpaces: current.countSpaces, guidance };
+  const batch = await prepareEssayBatch(seq, [request], signal, { directionInPlan: true });
+  const essay = await generateCustomEssayAnswer(seq, request, signal, batch, RESTRUCTURE_NOTE);
+  throwIfAIAborted();
+  assertApplicationRole(seq, selection.revision);
+  const plan = essay.plan;
+  const changeSummary = plan ? [`핵심 메시지: ${plan.message}`, `문단 구성: ${plan.outline.join(" → ")}`] : [];
+  const draft = updateEssayAnswer(seq, question, (answer) => {
+    if (answer.answer !== baseText) throw new Error("다시 구성하는 동안 답변이 바뀌어 결과를 저장하지 않았습니다. 다시 요청해주세요.");
+    if (essay.status === "needs_info")
+      return { ...answer, revisionNeedsInfo: { instruction, questions: essay.missingInfo, createdAt: Date.now(), threadId, scope: "restructure" } };
+    return { ...answer, revisionNeedsInfo: undefined, pendingRevision: {
+      instruction, baseText, answer: essay.answer, changeSummary, evidence: essay.evidence, reviewNotes: essay.reviewNotes,
+      createdAt: Date.now(), threadId, scope: "restructure", ...(plan ? { plan } : {}), intent: essay.intent,
+    } };
+  });
+  if (essay.status === "needs_info")
+    logEssayEvent({ seq, question, type: "revision_needs_info", threadId, textBefore: baseText, detail: { instruction, scope: "restructure", questions: essay.missingInfo, model: batch.model, ...materialsLogDetail(plan) } });
+  else
+    logEssayEvent({ seq, question, type: "revision_proposed", threadId, textBefore: baseText, textAfter: essay.answer, detail: {
+      instruction, scope: "restructure", model: batch.model, intent: essay.intent, changeSummary, reviewNotes: essay.reviewNotes,
+      evidenceSources: [...new Set(essay.evidence.map((e) => e.sourceId))], ...materialsLogDetail(plan),
+      ...(draftRepairReason(essay) ? { repairReason: draftRepairReason(essay) } : {}),
+    } });
+  return { draft, outcome: essay.status === "needs_info" ? "needs-info" : "pending-revision" };
+}
+
 // 첨삭 B의 제안 검증. 원문에 없는 구절, 반말, 금지 명칭, 근거 없는 새 수치가 들어간 제안은 다시 묻지 않고 버린다.
 function validSuggestions(value: unknown, baseText: string, sources: EssaySource[], forbiddenNames: string[]): EssaySuggestion[] {
   if (!Array.isArray(value)) return [];
@@ -258,6 +322,7 @@ function validSuggestions(value: unknown, baseText: string, sources: EssaySource
     if (typeof s?.original !== "string" || !s.original.trim() || typeof s.replacement !== "string") continue;
     if (!baseText.includes(s.original) || s.original === s.replacement || seen.has(s.original)) continue;
     if (s.replacement && (hasBanmalEnding(s.replacement) || containsForbiddenName(s.replacement, forbiddenNames))) continue;
+    if (metaPhrases(s.replacement, baseText).length) continue;
     if (extractNumbers(s.replacement).some((n) => !knownNumbers.has(n))) continue;
     seen.add(s.original);
     result.push({
@@ -365,11 +430,13 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
           throw new Error("첨삭을 요청한 뒤 글이 바뀌어 비교 결과가 맞지 않습니다. 버리고 다시 요청해주세요.");
         signals.push(...changedPairs(pending.baseText, pending.answer).slice(0, 3).map((p) => ({ kind: "accepted" as const, category: "고쳐쓰기", ...p })));
         log({ type: "revision_accepted", threadId: pending.threadId, textBefore: pending.baseText, textAfter: pending.answer,
-          detail: { instruction: pending.instruction, proposedAt: pending.createdAt } });
+          detail: { instruction: pending.instruction, proposedAt: pending.createdAt, ...(pending.scope ? { scope: pending.scope } : {}) } });
         return {
           ...answer, answer: pending.answer, evidence: pending.evidence, reviewNotes: pending.reviewNotes,
+          // 다시 구성은 구상·소재를 새로 정했으므로, 이후 고쳐쓰기가 새 소재를 "이전 답변이 쓴 경험"으로 보도록 함께 바꾼다.
+          ...(pending.plan ? { plan: pending.plan } : {}), ...(pending.intent ? { intent: pending.intent } : {}),
           status: "draft", missingInfo: [], evidenceStale: false, pendingRevision: undefined,
-          versions: withVersion(answer, pending.answer, "ai_revision", pending.instruction.slice(0, 80)),
+          versions: withVersion(answer, pending.answer, "ai_revision", `${pending.scope === "restructure" ? "다시 구성: " : ""}${pending.instruction}`.slice(0, 80)),
         };
       }
       case "discard-revision": {
