@@ -125,6 +125,12 @@ const clean = { issues: [] };
   await revision.reviewEssay('S', question, '');
   const issues = draft.essayAnswers[0].feedback.issues;
   assert.ok(issues[0].startsWith('직무·회사 맥락 확인(다른 회사 맥락)') && issues[1] === '구체성 부족');
+  // 첨삭 받기: 지원자 본인의 사실은 자료에 없다고 지우지 않고, 회사 설명은 회사 자료와 대조하며, 이전 첨삭을 되풀이하지 않는다.
+  const reviewPrompt = prompts.find((p) => p.startsWith('[작업: 첨삭 받기'));
+  for (const rule of ['지원자가 확인한 사실로 본다', '다른 경험으로 바꾸자는 의견도 suggestions가 아니라 issues', '공고에 적혀 있지 않다는 이유만으로 지적하지 않는다', '이전 첨삭 결과는 참고일 뿐'])
+    assert.ok(reviewPrompt.includes(rule), `review prompt must keep: ${rule}`);
+  // 독립 검증도 공고에 없다는 이유만으로 회사·직무 설명이나 포부를 지적하지 않는다.
+  assert.ok(prompts.at(-1).includes('공고에 적혀 있지 않다는 이유만으로') && prompts.at(-1).includes('stretched_link는 지원자의 과거 경험을'));
 
   // 문장 내 따옴표·줄바꿈 오류가 연속 발생해도 문법 복구 뒤 정상 검증을 거친다.
   const malformed = '{"answer":"저는 "확인"했습니다.","intent":"수정"}';
@@ -233,9 +239,19 @@ const clean = { issues: [] };
   assert.ok(isStructuralRequest('왜 이 직무에 지원하는지 지원동기가 없고, 기승전결을 어떻게 가져갈지부터'));
   assert.ok(!isStructuralRequest('글자 수 제한에 맞게 줄여주세요.'));
 
+  // 작업 기록의 첨삭 결과는 요약과 개수만 남긴다(제안 전문이 있으면 다음 첨삭이 그대로 되풀이했다). 반영·넘긴 제안은 따로 남는다.
+  const transcript = compile('lib/essay-transcript.ts', (id) => (id === './db' ? { listEssayEventRowsAfter: () => [] } : stubs[id] ?? require(id)));
+  const reviewed = transcript.renderEssayEvent({ rowid: 1, question, type: 'review_received', textBefore: null, textAfter: null, analysis: null,
+    detail: { summary: '흐름은 좋습니다.', issues: ['IPO 근거 없음'], suggestions: [{ category: '사실·근거', original: 'GARCH 문장', replacement: '', reason: '자료에 없음' }] } });
+  assert.ok(reviewed.includes('흐름은 좋습니다.') && reviewed.includes('보완할 점 1개, 제안 1개'));
+  assert.ok(!reviewed.includes('GARCH') && !reviewed.includes('IPO 근거 없음'), 'previous review details are not replayed');
+  const dismissed = transcript.renderEssayEvent({ rowid: 2, question, type: 'suggestion_dismissed', textBefore: null, textAfter: null, analysis: null,
+    detail: { category: '사실·근거', original: 'GARCH 문장', replacement: '', reason: '자료에 없음' } });
+  assert.ok(dismissed.includes('GARCH 문장'), 'what the user dismissed is still remembered');
+
   // 대화로 이어 쓰기: 고쳐쓰기 지시에는 규칙·자료 전문이 없고(머리말에 있음), 수정 호출은 실패 이유만 덧붙인다(앞 응답은 대화에 있음).
   assert.ok(conversationTurns.every((t) => !t.includes('[사실 자료]')), 'turns do not re-send the sources');
   assert.ok(conversationTurns.some((t) => t.startsWith('[검증 실패]') && !t.includes(baseText)), 'repair turns do not re-send the previous prompt');
   assert.ok(conversationTurns.some((t) => t.includes('버린 수정본')), 'revision turns tell the model to honour what the user rejected before');
-  console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text, meta-phrase blocking, needs_info without body, restructure');
+  console.log('PASS revision harness: new experiences need verbatim request/question/job anchors, independent audit without the reviser\'s reasoning with one repair then notes, 첨삭 받기 audits the current text, meta-phrase blocking, needs_info without body, restructure, review trusts the user\'s own facts and does not replay old reviews');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

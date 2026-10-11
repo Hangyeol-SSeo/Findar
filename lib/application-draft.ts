@@ -314,20 +314,41 @@ export interface PreparedEssayBatch {
 const STRUCTURE_ERROR = "AI가 작성 방향과 근거를 구성하는 중 오류가 발생했습니다. 입력하신 문항의 문제는 아닙니다. 다시 작성을 요청해주세요.";
 
 // 형식·근거 검증에 실패하면 한 번만 고쳐 달라고 한다. ask가 작업 대화면 실패한 응답은 이미 대화에 있어 다시 보내지 않는다.
-async function structuredStep(ask: (prompt: string, followUp?: boolean) => Promise<string>, prompt: string, validate: (value: Record<string, unknown>) => EssayPlan[], inConversation: boolean) {
-  const result = await ask(prompt);
-  try { return validate(parseModelJson(result)); }
-  catch (error) {
-    const reason = error instanceof Error ? error.message : "형식 오류";
-    try {
-      return validate(parseModelJson(await ask(inConversation
+// 형식·근거 검증에 실패하면 고쳐 달라고 한다. JSON 문법 오류는 내용 검증과 따로 한 번 더 고칠 기회를 준다 — 흥국증권 4문항
+// 작성에서 첫 응답의 문법 오류가 유일한 수정 기회를 써 버려, 수정 응답의 소재 하나 때문에 전체가 실패했다.
+// 마지막 시도(final)에서는 validate가 통과한 문항만 살리고 나머지를 문항별 보완 질문으로 돌릴 수 있다(applyMaterials의 lenient).
+// ask가 작업 대화면 실패한 응답은 이미 대화에 있어 다시 보내지 않는다.
+async function structuredStep(ask: (prompt: string, followUp?: boolean) => Promise<string>, prompt: string,
+  validate: (value: Record<string, unknown>, final: boolean) => EssayPlan[], inConversation: boolean) {
+  const reasons: string[] = [];
+  let raw = await ask(prompt);
+  let syntaxRepairs = 1, contentRepairs = 1;
+  for (;;) {
+    let value: Record<string, unknown>;
+    try { value = parseModelJson(raw); }
+    catch (error) {
+      reasons.push(error instanceof Error ? error.message : "형식 오류");
+      if (syntaxRepairs-- <= 0) break;
+      raw = await ask(inConversation
+        ? "[JSON 문법 오류] 방금 응답의 내용은 그대로 두고 JSON 문법만 바로잡아 다시 반환하세요. 문자열 안의 큰따옴표·역슬래시·줄바꿈을 이스케이프하고 쉼표와 괄호를 확인하세요."
+        : `${prompt}\n[JSON 문법 오류가 있던 응답]\n${raw}\n내용은 그대로 두고 JSON 문법만 바로잡은 JSON을 반환하세요.`, true);
+      continue;
+    }
+    try { return validate(value, contentRepairs <= 0); }
+    catch (error) {
+      const reason = error instanceof Error ? error.message : "형식 오류";
+      reasons.push(reason);
+      if (contentRepairs-- <= 0) break;
+      raw = await ask(inConversation
         ? `[검증 실패] ${reason}\n방금 응답에서 모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`
-        : `${prompt}\n[검증 실패 결과]\n${result}\n검증 실패: ${reason}\n모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`, true)));
-    } catch (repairError) {
-      console.error("[application-draft] 구상 검증 실패:", repairError);
-      throw new Error(STRUCTURE_ERROR);
+        : `${prompt}\n[검증 실패 결과]\n${raw}\n검증 실패: ${reason}\n모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`, true);
     }
   }
+  console.error("[application-draft] 구상 검증 실패:", reasons.join(" / "));
+  // 사용자에게는 같은 안내를 보여 주되, 실제 검증 사유는 작성 기록(draft_failed의 repairReason)에 남긴다.
+  const failure = new Error(STRUCTURE_ERROR);
+  repairReasons.set(failure, reasons.map((r, i) => `${i + 1}번째 응답: ${r}`).join(" / "));
+  throw failure;
 }
 
 // 같은 사건(event_id)의 경험 카드를 여러 문항의 소재로 고르면 알린다(cover-letter-team: 문항 간 소재 중복은 사건 기준).
@@ -345,7 +366,7 @@ function withEventReuseNotes(plans: EssayPlan[], sources: EssaySource[]): EssayP
       .map((m) => `간접 연결 소재 확인: ${m.sourceId}는 직접 해 본 일이 아니라 “${(m.anchor?.quote ?? "").slice(0, 40)}”에 간접적으로 연결한 경험입니다 — ${m.reason}`);
     const notes = [...transferable, ...[...usedBy].filter(([, qs]) => qs.length > 1 && qs.includes(p.question))
       .map(([ev, qs]) => `소재 중복 확인: 같은 경험(${ev})을 다른 문항(${qs.filter((q) => q !== p.question).map((q) => `“${q.slice(0, 30)}”`).join(", ")})에도 썼습니다. 서로 다른 면을 보여주는지 확인해주세요.`)];
-    return notes.length ? { ...p, materialNotes: notes } : p;
+    return notes.length ? { ...p, materialNotes: [...(p.materialNotes ?? []), ...notes] } : p;
   });
 }
 
@@ -377,7 +398,7 @@ ${options.directionInPlan ? `[사용자의 구성 요청: 글의 구성·논지 
 순수 JSON만 반환하세요: {"materials":[{"question":"입력 문항 원문", "coverage":[{"requirement":"이 문항의 하위 요구 또는 구상의 소재 선정 기준", "mandatory":true, "status":"SUFFICIENT|WEAKLY_SUPPORTED|MISSING|NO_ACTUAL_EXPERIENCE|CONTRADICTORY|NOT_APPLICABLE|UNKNOWN", "sourceIds":["근거 개인 자료 id"], "rationale":"그 자료의 어느 내용이 왜 이 요구를 충족하는지(또는 왜 부족한지)"}], "selectedMaterials":[{"sourceId":"개인 자료 id", "quote":"연속된 원문", "reason":"선정 이유와 중복 시 차별점", "anchor":{"source":"question|job|request", "quote":"이 소재가 답하는 문항·공고 업무/자격요건·사용자 요청의 원문 구절 그대로"}, "fit":"direct|transferable"}], "missingInfo":["필요한 핵심 경험 질문"]}]}
 모든 문항을 함께 배치하고 각각 하나씩 반환하세요. mandatory는 문항이 실제로 요구하는 하위 요소면 true, 더 좋게 만드는 선택 기준이면 false입니다. 필수 요소에 근거가 없을 때만 답변을 쓸 수 없으며, 그 밖의 질문은 보강 제안으로 처리됩니다. 모든 하위 요구를 coverage로 판정하고, selectedMaterials의 모든 소재는 SUFFICIENT 또는 WEAKLY_SUPPORTED 판정의 근거여야 합니다. 맞는 소재가 없으면 억지로 고르지 말고 MISSING 등으로 기록하세요. card.* 자료는 같은 event_id면 같은 사건입니다. ${CREDENTIAL_RULE}
 소재마다 anchor로 이 소재가 답하는 원문 구절을 대세요(코드가 원문 일치를 확인합니다). direct는 그 업무·요구를 실제로 해 본 경험, transferable은 다른 맥락의 경험이 그 구절과 닿는 경우입니다. 어느 쪽으로도 닿지 않으면 고르지 마세요.
-card.*의 writtenFor는 그 경험이 원래 쓰였던 지원서의 회사·직무입니다. 다른 회사·다른 직무용으로 쓴 해석·동기·포부는 가져오지 말고, 경험의 사실만 이번 문항과 공고 구절에 비추어 다시 판단하세요.`, (value) => applyMaterials(value, plans, sources), true);
+card.*의 writtenFor는 그 경험이 원래 쓰였던 지원서의 회사·직무입니다. 다른 회사·다른 직무용으로 쓴 해석·동기·포부는 가져오지 말고, 경험의 사실만 이번 문항과 공고 구절에 비추어 다시 판단하세요.`, (value, final) => applyMaterials(value, plans, sources, { lenient: final }), true);
   plans = withEventReuseNotes(plans, sources);
   assertApplicationRole(seq, selection.revision);
   return { context, sources, plans, skills, model, conversation, role: selection.role, roleRevision: selection.revision };

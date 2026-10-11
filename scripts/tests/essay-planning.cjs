@@ -12,7 +12,7 @@ const stubs = {
   './ai-operation': compile('lib/ai-operation.ts', require),
   './application-role': { requireApplicationRole: () => ({ role: '리스크관리', revision: 'role-v1' }), assertApplicationRole: () => {}, APPLICATION_ROLE_RULES: '지원 직무를 기준으로 작성' },
   './ai-model-settings': { getAIModelId: () => 'fixture-model' },
-  './ai-query': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); yield { type: 'result', subtype: 'success', result: JSON.stringify(queued.length ? queued.shift() : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', mandatory: true, status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] } : answer) }; } },
+  './ai-query': { async *query({ prompt, options }) { assert.equal(options.maxTurns, 3); assert.deepEqual(options.tools, []); assert.deepEqual(options.allowedTools, []); prompts.push(prompt); const next = queued.length ? queued.shift() : undefined; yield { type: 'result', subtype: 'success', result: typeof next === 'string' ? next : JSON.stringify(next !== undefined ? next : prompts.length === 1 ? { plans: [plan] } : prompts.length === 2 ? { materials: [{ question: plan.question, coverage: [{ requirement: '핵심 경험', mandatory: true, status: 'SUFFICIENT', sourceIds: ['user.current.0'], rationale: '판단과 행동이 있습니다.' }], selectedMaterials: [{ sourceId: 'user.current.0', quote: answer.answer, reason: '판단 과정이 드러납니다.', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] } : answer) }; } },
   './db': { getJobBySeq: () => ({ company: '예시 회사', title: '분석', positions: ['분석'], qualifications: ['판단력'] }), getCompanySections: () => [{ sectionType: 'overview', content: '검증 절차를 중시합니다.', sources: [{ title: '공식 자료', url: 'https://example.com/research' }], generatedAt: 1234, status: 'ok' }], getApplicationDraftRow: () => null,
     insertAIUsage: () => {}, getAIConversationRow: () => undefined, saveAIConversationRow: () => {}, deleteAIConversationRow: () => {}, listEssayEventRowsAfter: () => [] },
   './ai-model-types': { isCodexModel: () => false },
@@ -68,7 +68,10 @@ const { generateCustomEssayAnswer, prepareEssayBatch, draftRepairReason, materia
   const validators = stubs['./essay-plan'];
   const sources = result.researchSources;
   assert.throws(() => validators.validatePlans({ plans: [] }, [plan.question], sources, 'test'), /문항 수/);
-  assert.throws(() => validators.validatePlans({ plans: [{ ...plan, research: [{ ...plan.research[0], quote: '없는 원문' }] }] }, [plan.question], sources, 'test'), /근거/);
+  // 원문에 없는 회사 근거는 작성 전체를 실패시키지 않고 빼고 메모로 남긴다(구상이 문항 전체를 한 번에 검증해, 인용 하나로 전부 실패했다).
+  const withoutBadCitation = validators.validatePlans({ plans: [{ ...plan, research: [{ ...plan.research[0], quote: '없는 원문' }] }] }, [plan.question], sources, 'test');
+  assert.equal(withoutBadCitation[0].research.length, 0);
+  assert.ok(withoutBadCitation[0].notes.some((n) => n.includes('원문과 맞지 않아')));
   assert.throws(() => validators.applyMaterials({ materials: [{ question: plan.question, selectedMaterials: [{ sourceId: 'company.overview', quote: sources[0].text, reason: '경험', anchor: { source: 'request', quote: ANCHOR }, fit: 'direct' }], missingInfo: [] }] }, [result.plan], sources), /경험/);
   assert.equal(result.answer, answer.answer);
   const secondPlan = { ...plan, question: '지원동기', researchMode: 'direct' };
@@ -139,7 +142,8 @@ const { generateCustomEssayAnswer, prepareEssayBatch, draftRepairReason, materia
   assert.ok(!audited.reviewNotes.some(n => n.includes('버려져야 함')), 'a finding that does not quote the answer is dropped');
   assert.throws(() => stubs['./essay-contract'].validateEssay(reasoning, requests[0], [], []), /근거/);
   assert.throws(() => stubs['./essay-contract'].validateEssay({ ...reasoning, answer: '수익이 30% 증가했습니다.' }, requests[0], [], [], true), /수치/);
-  assert.throws(() => validators.validatePlans({ plans: [{ ...plan, research: [{ ...plan.research[0], paragraph: '1' }] }] }, [plan.question], sources, 'test'), /문단 번호/);
+  // 문단 번호가 정수가 아닌 인용도 같은 방식으로 빼고 메모를 남긴다(범위 밖 정수는 가까운 문단으로 맞춘다).
+  assert.equal(validators.validatePlans({ plans: [{ ...plan, research: [{ ...plan.research[0], paragraph: '1' }] }] }, [plan.question], sources, 'test')[0].research.length, 0);
   // 자격·어학·학력은 소재 배치를 거치지 않는 사실 자료다: 고르지 않아도 인용할 수 있고, 등록번호는 넘기지 않는다.
   applicant = { ...applicant, certifications: [{ name: '투자자산운용사', issuer: '금융투자협회', registrationNumber: 'REG-SECRET', issuedDate: '2025-06' }] };
   const certified = { ...answer, answer: `${answer.answer} 투자자산운용사 자격을 취득했습니다.`, evidence: [...answer.evidence, { sourceId: 'profile.certification.0', quote: '투자자산운용사', usedFor: '직무 지식' }] };
@@ -194,10 +198,58 @@ const { generateCustomEssayAnswer, prepareEssayBatch, draftRepairReason, materia
   queued = [answer, answer, { issues: [] }];
   await generateCustomEssayAnswer('test', request, undefined, directed, '[다시 구성] 처음부터 다시 판단한다.');
   assert.ok(prompts.at(-3).includes('[다시 구성] 처음부터 다시 판단한다.'));
+  // 인용 복구: 모델이 마크다운 강조·줄바꿈·JSON 이스케이프를 바꿔 옮긴 인용도 자료의 원래 구절로 바로잡는다.
+  const { findVerbatim, validatePlans } = stubs['./essay-plan'];
+  const research = '**연혁·회사 성격.** DART 공시 기준 설립일은 2024년 3월 11일이며,\n대표이사는 김동연입니다. "IPO 투자자문"을 합니다.';
+  assert.equal(findVerbatim(research, '연혁·회사 성격. DART 공시 기준 설립일은 2024년 3월 11일이며, 대표이사는'), '연혁·회사 성격.** DART 공시 기준 설립일은 2024년 3월 11일이며,\n대표이사는');
+  assert.equal(findVerbatim(research, '설립일은 2024년 3월 11일이며,\\n대표이사는'), '설립일은 2024년 3월 11일이며,\n대표이사는');
+  assert.equal(findVerbatim(research, '\\"IPO 투자자문\\"을 합니다.'), '"IPO 투자자문"을 합니다.');
+  assert.equal(findVerbatim(research, '없는 문장입니다'), null);
+  // 구상의 회사 근거가 원문에 없으면 작성 전체를 실패시키지 않고 그 인용만 빼고 메모를 남긴다. 인용이 다 빠지면 none으로 낮춘다.
+  const companySources = [{ id: 'company.overview', text: research }];
+  const planWith = (cites) => ({ plans: [{ ...plan, question: '성장과정', researchMode: 'direct', research: cites, notes: [] }] });
+  const recovered = validatePlans(planWith([{ sourceId: 'company.overview', quote: '연혁·회사 성격. DART 공시 기준', purpose: '회사 이해', paragraph: 9 }]), ['성장과정'], companySources, 'v');
+  assert.equal(recovered[0].research[0].quote, '연혁·회사 성격.** DART 공시 기준');
+  assert.equal(recovered[0].research[0].paragraph, plan.outline.length, 'an out-of-range paragraph is clamped');
+  const degraded = validatePlans(planWith([{ sourceId: 'company.overview', quote: '원문에 없는 인용입니다', purpose: '회사 이해', paragraph: 1 }, { sourceId: 'company.culture', quote: 'x', purpose: 'y', paragraph: 1 }]), ['성장과정'], companySources, 'v');
+  assert.equal(degraded[0].researchMode, 'none');
+  assert.equal(degraded[0].research.length, 0);
+  assert.ok(degraded[0].notes.some((n) => n.includes('회사 근거 인용 2개') && n.includes('company.culture')));
+  // 구상이 두 번 모두 검증에 실패하면 사용자 안내는 그대로이고, 실제 사유는 작성 기록용 repairReason에 남는다.
+  queued = [{ plans: [] }, { plans: [] }];
+  const structureFailure = await prepareEssayBatch('test', [request]).catch((e) => e);
+  assert.match(structureFailure.message, /작성 방향과 근거를 구성하는 중 오류/);
+  assert.match(draftRepairReason(structureFailure), /1번째 응답: 전체 문항 수와 구상 수가 일치하지 않습니다.*2번째 응답: 전체 문항 수와 구상 수가 일치하지 않습니다/);
+  // JSON 문법 오류는 내용 수정 기회를 쓰지 않는다: 문법 오류 → 문법만 고친 응답이 내용 검증에 실패 → 내용 수정 → 통과.
+  queued = ['{"plans": [ 깨진 JSON', { plans: [] }, { plans: [plan] }, materialsOnlyUser];
+  const beforeSyntax = prompts.length;
+  const recoveredPlan = await prepareEssayBatch('test', [request]).catch((e) => e);
+  assert.ok(!(recoveredPlan instanceof Error), `syntax repair must not consume the content repair: ${recoveredPlan.message ?? ''}`);
+  assert.ok(prompts[beforeSyntax + 1].includes('JSON 문법만 바로잡'), 'the second call is a syntax-only repair');
+  assert.ok(prompts[beforeSyntax + 2].includes('검증 실패'), 'the third call is the content repair');
+  // 흥국증권 사례: 4문항 중 한 문항의 소재 하나가 anchor 검증에 걸리면, 엄격 모드는 수정을 요청하고(throw),
+  // 마지막 시도(lenient)는 다른 문항을 살리고 그 소재만 뺀다. 쓸 경험이 남지 않은 문항만 보완 질문으로 돌린다.
+  const hkSources = [{ id: 'job', text: JSON.stringify({ rawContent: '리스크 한도 모니터링 및 보고서 작성' }) }, { id: 'card.EXP-1', text: '종목별 손실 기여도를 엑셀로 정리' }, { id: 'card.EXP-2', text: '도서관 서가를 돌며 잘못 꽂힌 책을 바로잡음' }];
+  const hkPlans = ['성장과정', '성격의 장단점'].map((question) => ({ ...plan, question, research: [], researchMode: 'none' }));
+  const good = (question, sourceId, quote) => ({ question, missingInfo: [], coverage: [{ requirement: '경험', mandatory: true, status: 'SUFFICIENT', sourceIds: [sourceId], rationale: '근거' }],
+    selectedMaterials: [{ sourceId, quote, reason: '이유', anchor: { source: 'job', quote: '리스크 한도 모니터링' }, fit: 'direct' }] });
+  const bad = { ...good('성격의 장단점', 'card.EXP-2', '도서관 서가를 돌며'), selectedMaterials: [{ sourceId: 'card.EXP-2', quote: '도서관 서가를 돌며', reason: '이유', anchor: { source: 'job', quote: '꼼꼼한 성격' }, fit: 'transferable' }] };
+  const hkValue = { materials: [good('성장과정', 'card.EXP-1', '종목별 손실 기여도를 엑셀로 정리'), bad] };
+  assert.throws(() => validators.applyMaterials(hkValue, hkPlans, hkSources), /anchor\.quote/);
+  const lenientPlans = validators.applyMaterials(hkValue, hkPlans, hkSources, { lenient: true });
+  assert.equal(lenientPlans[0].selectedMaterials[0].sourceId, 'card.EXP-1');
+  assert.equal(lenientPlans[0].missingInfo.length, 0, 'the healthy question is written');
+  assert.equal(lenientPlans[1].selectedMaterials.length, 0);
+  assert.ok(lenientPlans[1].missingInfo[0].includes('쓸 경험을 자료에서 찾지 못했습니다'), 'only the broken question becomes a needs-info question');
+  assert.ok(lenientPlans[1].materialNotes.some((n) => n.includes('card.EXP-2')));
+  // 문항 행이 아예 없으면 그 문항만 보완 질문으로 돌린다.
+  const missingRow = validators.applyMaterials({ materials: [good('성장과정', 'card.EXP-1', '종목별 손실 기여도를 엑셀로 정리')] }, hkPlans, hkSources, { lenient: true });
+  assert.equal(missingRow[0].missingInfo.length, 0);
+  assert.ok(missingRow[1].missingInfo[0].includes('이 문항만 다시 작성을 요청'));
   // 작성 기록용 소재 배치 요약
   const logged = materialsLogDetail(kept.plan);
   assert.deepEqual(logged.selectedMaterials.map((m) => [m.sourceId, m.fit, m.anchor.quote]), [['user.current.0', 'direct', ANCHOR]]);
   assert.equal(logged.coverage[0].status, 'SUFFICIENT');
   assert.deepEqual(materialsLogDetail(undefined), {});
-  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result, credentials cited without material selection, containment kept with a note after one repair, meta phrases repaired then noted, restructure direction in plan, materials logged');
+  console.log('PASS plan before personal history, planned drafting, editorial review, grounded result, credentials cited without material selection, containment kept with a note after one repair, meta phrases repaired then noted, restructure direction in plan, verbatim quote recovery, bad research citations dropped not fatal, structure failure reason logged, separate JSON syntax retry, lenient final material pass keeps healthy questions, materials logged');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -55,9 +55,11 @@ export function renderEssayEvent(e: TranscriptEvent, omitBody = false): string |
     case "revision_discarded": return `${q} 사용자가 수정본을 버렸다(원하지 않음).`;
     case "needs_info_dismissed": return `${q} 사용자가 보완 질문을 닫았다.`;
     case "review_requested": return `${q} 사용자 첨삭 받기 요청${str(d.focus) ? ` — 중점: ${str(d.focus)}` : ""}`;
+    // 첨삭 결과는 요약과 개수만 남긴다. 제안·지적 전문을 남기면 다음 첨삭이 바뀐 자료로 다시 판단하지 않고 그대로 되풀이했다
+    // (회사 리서치를 새로 만든 뒤에도 제안 10개 중 9개가 같았다). 사용자가 반영하거나 넘긴 제안은 아래 사건으로 따로 남는다.
     case "review_received": {
-      const suggestions = Array.isArray(d.suggestions) ? (d.suggestions as Record<string, unknown>[]).map(suggestion) : [];
-      return `${q} AI 첨삭: ${str(d.summary)}${list(d.issues).length ? `\n보완할 점: ${list(d.issues).join(" / ")}` : ""}${suggestions.length ? `\n제안:\n${suggestions.map((s) => `- ${s}`).join("\n")}` : ""}`;
+      const count = Array.isArray(d.suggestions) ? d.suggestions.length : 0;
+      return `${q} AI 첨삭(요약): ${str(d.summary)}${count || list(d.issues).length ? ` — 보완할 점 ${list(d.issues).length}개, 제안 ${count}개` : ""}`;
     }
     case "review_failed": return `${q} 첨삭 실패: ${str(d.error)}`;
     case "suggestion_applied": return `${q} 사용자가 첨삭 제안을 반영했다: ${suggestion(d)}`;

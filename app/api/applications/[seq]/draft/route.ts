@@ -3,13 +3,16 @@ import { getCachedApplicationDraft } from "@/lib/application-draft";
 import { saveApplicationDraft, getJobBySeq } from "@/lib/db";
 import { detectSubmissionMethod } from "@/lib/application-method";
 import { recordManualEdit } from "@/lib/essay-revision";
+import { companyResearchNotice } from "@/lib/company-research";
+import { normalizeCompanyName } from "@/lib/company-normalize";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ seq: string }> }) {
   const { seq } = await params;
   const job = getJobBySeq(seq);
   if (!job) return Response.json({ error: "공고를 찾을 수 없습니다." }, { status: 404 });
   return Response.json({ draft: getCachedApplicationDraft(seq), siteUrl: job.siteUrl,
-    submissionMethod: detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl) });
+    submissionMethod: detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl),
+    companyResearchNotice: companyResearchNotice(normalizeCompanyName(job.company)) });
 }
 
 export async function POST() {
