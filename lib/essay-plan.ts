@@ -29,6 +29,32 @@ function field(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("작성 구상의 필수 설명이 없습니다.");
   return value;
 }
+// 모델이 자료를 인용할 때 공백·줄바꿈·마크다운 강조(**)·JSON 이스케이프(\\n, \\")를 바꿔 옮기는 일이 잦다. 자료는 JSON 문자열로 넘어가
+// 모델에게는 이스케이프된 모습으로 보이고, 회사 리서치는 마크다운이 많다. 이런 차이만 무시하고 같은 구절을 찾아 자료의 원래 구절을
+// 돌려준다(뒤 단계의 원문 일치 검증이 그대로 통과하도록). 못 찾으면 null.
+export function findVerbatim(sourceText: string, quote: string): string | null {
+  if (!quote.trim()) return null;
+  if (sourceText.includes(quote)) return quote;
+  const norm = (text: string, keepIndex: boolean) => {
+    const chars: string[] = [], index: number[] = [];
+    let prevSpace = true;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "*" || ch === "`") continue;
+      if (/\s/.test(ch)) { if (!prevSpace) { chars.push(" "); if (keepIndex) index.push(i); } prevSpace = true; continue; }
+      chars.push(ch); if (keepIndex) index.push(i); prevSpace = false;
+    }
+    while (chars.at(-1) === " ") { chars.pop(); index.pop(); }
+    return { text: chars.join(""), index };
+  };
+  const unescaped = quote.replace(/\\n/g, " ").replace(/\\"/g, '"').replace(/\\t/g, " ");
+  const src = norm(sourceText, true), q = norm(unescaped, false).text;
+  if (q.length < 5) return null;
+  const at = src.text.indexOf(q);
+  if (at < 0) return null;
+  return sourceText.slice(src.index[at], src.index[at + q.length - 1] + 1);
+}
+
 export function validatePlans(value: Record<string, unknown>, questions: string[], sources: EssaySource[], skillVersion: string): EssayPlan[] {
   if (!Array.isArray(value.plans) || value.plans.length !== questions.length) throw new Error("전체 문항 수와 구상 수가 일치하지 않습니다.");
   return questions.map((question) => {
@@ -42,18 +68,25 @@ export function validatePlans(value: Record<string, unknown>, questions: string[
     const outline = planStrings(p.outline), materialCriteria = planStrings(p.materialCriteria);
     if (!outline.length || !materialCriteria.length) throw new Error("문단 흐름과 소재 선정 기준이 필요합니다.");
     if (!["direct", "perspective", "none"].includes(String(p.researchMode)) || !Array.isArray(p.research)) throw new Error("리서치 활용 설계가 없습니다.");
-    const research = p.research.map((r: PlanCitation) => {
+    // 회사 근거 인용은 원문 구절로 바로잡고, 그래도 원문에 없거나 형식이 틀린 인용은 작성 전체를 실패시키지 않고 빼서 메모로 남긴다.
+    // 흥국증권 4문항 작성이 이 검증 하나로 두 번 연속 통째로 실패했다(구상 단계는 문항 전체를 한 번에 검증한다).
+    const dropped: string[] = [];
+    const research: PlanCitation[] = p.research.flatMap((r: PlanCitation) => {
       const source = sources.find((s) => s.id === r?.sourceId && s.id.startsWith("company."));
-      const prefix = `문항 “${question}”의 회사 근거(${r?.sourceId ?? "출처 없음"})`;
-      if (!source) throw new Error(`${prefix}: 제공된 company 자료 ID를 사용해주세요.`);
-      if (!source.text.includes(field(r.quote))) throw new Error(`${prefix}: 인용이 원문과 다릅니다. 해당 text에서 연속된 원문을 그대로 복사해주세요.`);
-      if (!Number.isInteger(r.paragraph) || r.paragraph < 1 || r.paragraph > outline.length) throw new Error(`${prefix}: 문단 번호는 1~${outline.length} 사이 정수여야 합니다.`);
-      return { sourceId: r.sourceId, quote: r.quote, purpose: field(r.purpose), paragraph: r.paragraph };
+      const quote = source && typeof r?.quote === "string" ? findVerbatim(source.text, r.quote) : null;
+      const paragraph = Number.isInteger(r?.paragraph) ? Math.min(Math.max(r.paragraph, 1), outline.length) : null;
+      if (!source || !quote || paragraph === null || typeof r?.purpose !== "string" || !r.purpose.trim()) {
+        dropped.push(r?.sourceId ?? "출처 없음");
+        return [];
+      }
+      return [{ sourceId: r.sourceId, quote, purpose: r.purpose, paragraph }];
     });
-    if ((p.researchMode === "none") !== (research.length === 0)) throw new Error("리서치 활용 방식과 근거가 일치하지 않습니다.");
-    const notes = planStrings(p.notes);
-    if (p.researchMode === "none" && !notes.length) throw new Error("리서치를 활용하지 않는 이유가 필요합니다.");
-    return { questionTypes, personalEvidence: p.personalEvidence, question, intent: field(p.intent), message: field(p.message), outline, materialCriteria, researchMode: p.researchMode as EssayPlan["researchMode"], research, notes, selectedMaterials: [], missingInfo: [], skillVersion };
+    const notes = Array.isArray(p.notes) ? p.notes.filter((n): n is string => typeof n === "string" && !!n.trim()) : [];
+    if (dropped.length) notes.push(`회사 근거 인용 ${dropped.length}개(${[...new Set(dropped)].join(", ")})는 원문과 맞지 않아 쓰지 않았습니다.`);
+    // 인용이 모두 빠지면 리서치를 쓰지 않는 구상으로 낮춘다. 인용 없이 none이 아니라고 한 구상도 같은 처리다.
+    const researchMode = research.length ? (p.researchMode === "none" ? "perspective" : p.researchMode) : "none";
+    if (researchMode === "none" && !notes.length) notes.push("회사 자료를 근거로 쓰지 않는 구상입니다.");
+    return { questionTypes, personalEvidence: p.personalEvidence, question, intent: field(p.intent), message: field(p.message), outline, materialCriteria, researchMode: researchMode as EssayPlan["researchMode"], research, notes, selectedMaterials: [], missingInfo: [], skillVersion };
   });
 }
 // 공고 자료에서 업무·자격요건 문자열(anchor로 댈 수 있는 곳)과 이름 문자열(회사명·공고 제목·직무명·모집 직무)을 나눈다.
@@ -104,11 +137,12 @@ export function applyMaterials(value: Record<string, unknown>, plans: EssayPlan[
     if (rows.length !== 1 || !Array.isArray(rows[0].selectedMaterials)) throw new Error("문항별 소재 배치가 누락되거나 중복되었습니다.");
     const selectedMaterials = rows[0].selectedMaterials.map((m: SelectedMaterial) => {
       const source = sources.find((s) => s.id === m?.sourceId && s.id !== "job" && !s.id.startsWith("company."));
-      if (!source || !source.text.includes(field(m.quote))) throw new Error("선정한 경험이 저장 자료와 일치하지 않습니다.");
+      const quote = source ? findVerbatim(source.text, field(m.quote)) : null;
+      if (!source || !quote) throw new Error(`선정한 경험(${m?.sourceId ?? "출처 없음"})의 인용이 저장 자료와 일치하지 않습니다. 해당 자료에서 연속된 원문을 그대로 복사해주세요.`);
       const anchor = m.anchor;
       if (!isValidAnchor(anchor, anchorTextsFrom(sources, plan.question))) throw new Error(`문항 “${plan.question}”의 소재 ${m.sourceId}: ${ANCHOR_RULE}`);
       if (m.fit !== "direct" && m.fit !== "transferable") throw new Error("소재의 fit은 direct 또는 transferable이어야 합니다. 어느 쪽으로도 원문 구절과 닿지 않으면 고르지 마세요.");
-      return { sourceId: m.sourceId, quote: m.quote, reason: field(m.reason), anchor: { source: anchor.source, quote: anchor.quote }, fit: m.fit };
+      return { sourceId: m.sourceId, quote, reason: field(m.reason), anchor: { source: anchor.source, quote: anchor.quote }, fit: m.fit };
     });
     const missingInfo = planStrings(rows[0].missingInfo);
     if (plan.personalEvidence === "required" && !selectedMaterials.length && !missingInfo.length) throw new Error("적합한 경험 또는 보완 질문이 필요합니다.");

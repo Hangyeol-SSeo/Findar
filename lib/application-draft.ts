@@ -325,7 +325,11 @@ async function structuredStep(ask: (prompt: string, followUp?: boolean) => Promi
         : `${prompt}\n[검증 실패 결과]\n${result}\n검증 실패: ${reason}\n모든 문항의 구조와 원문 근거를 바로잡은 JSON만 반환하세요.`, true)));
     } catch (repairError) {
       console.error("[application-draft] 구상 검증 실패:", repairError);
-      throw new Error(STRUCTURE_ERROR);
+      // 사용자에게는 같은 안내를 보여 주되, 실제 검증 사유는 작성 기록(draft_failed의 repairReason)에 남긴다.
+      // 흥국증권 작성이 두 번 실패했을 때 사유가 서버 로그에만 있어 원인을 알 수 없었다.
+      const failure = new Error(STRUCTURE_ERROR);
+      repairReasons.set(failure, `첫 응답: ${reason} / 수정 응답: ${repairError instanceof Error ? repairError.message : String(repairError)}`);
+      throw failure;
     }
   }
 }
