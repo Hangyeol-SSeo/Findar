@@ -147,8 +147,8 @@ export function parseModelJson(text: string): Record<string, unknown> {
 export function validateEssay(
   value: Record<string, unknown>, request: EssayRequest, sources: EssaySource[], forbiddenNames: string[], allowReasoningOnly = false
 ): EssayAnswer {
-  // 보완 질문(needs_info)에는 본문이 없으므로, 모델이 answer·intent를 아예 빼고 보내도 받아준다. 실제로 길고 강한 고쳐쓰기
-  // 요청에서 질문만 돌려준 응답이 "본문 또는 문항 해석이 없습니다"로 두 번 연속 실패했다.
+  // 보완 질문(needs_info)에는 본문이 없으므로, 모델이 answer·intent를 아예 빼고 보내도 받아준다. "본문 또는 문항 해석이 없습니다"
+  // 실패의 주원인(수정 턴이 원래 지시를 잃음)은 작업 대화의 followUp으로 고쳤고, 이건 질문만 돌려준 응답을 위한 방어다.
   if (value.status === "needs_info") {
     for (const key of ["answer", "intent"]) value[key] ??= "";
     for (const key of ["evidence", "reviewNotes"]) value[key] ??= [];

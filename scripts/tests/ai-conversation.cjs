@@ -31,7 +31,8 @@ const stubs = {
       if (options.model.startsWith('gpt-')) { yield { type: 'result', subtype: 'success', is_error: false, result, codexUsage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 50 } }; return; }
       yield { type: 'result', subtype: 'success', is_error: false, result, session_id: sessionId, total_cost_usd: 0.01,
         ...(options.model === 'claude-small' ? { modelUsage: { 'claude-small': { contextWindow: 30000, maxOutputTokens: 4000 } } } : {}),
-        usage: { input_tokens: options.model === 'claude-small' ? 15000 : options.resume ? 100 : 5000, cache_read_input_tokens: options.resume ? 9000 : 0, cache_creation_input_tokens: options.resume ? 100 : 9000, output_tokens: 40 } };
+        ...(options.model === 'claude-big-output' ? { modelUsage: { 'claude-big-output': { contextWindow: 200000, maxOutputTokens: 128000 } } } : {}),
+        usage: { input_tokens: options.model === 'claude-small' ? 15000 : options.model === 'claude-big-output' ? 105000 : options.resume ? 100 : 5000, cache_read_input_tokens: options.resume ? 9000 : 0, cache_creation_input_tokens: options.resume ? 100 : 9000, output_tokens: 40 } };
     },
   },
   './ai-model-types': { isCodexModel: (m) => m.startsWith('gpt-') },
@@ -135,7 +136,7 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   await conv.ask('[작업: 문항 2 작성]');
   assert.equal(calls.at(-1).options.resume, undefined, 'over the limit mid-operation it starts a new session');
   assert.ok(calls.at(-1).prompt.includes('[이번 작업에서 이미 주고받은 내용') && calls.at(-1).prompt.includes('[작업: 문항 1 작성]'));
-  // 같은 흐름이라도 기본 한도(20만 - 3.2만 - 8천)에서는 이어 쓴다.
+  // 같은 흐름이라도 기본 한도(20만 - 출력 몫 3.2만 - 8천)에서는 이어 쓴다.
   conv = open('claude-sonnet-5-5', `${HEADER} + 기본 한도`);
   await conv.ask('[기본 1]');
   const sid = rows.get('seq1/claude').sessionId;
@@ -146,6 +147,31 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   await conv.ask('[작은 모델 1]');
   await conv.ask('[작은 모델 2]');
   assert.equal(calls.at(-1).options.resume, undefined, 'the learned window decides when to start over');
+  // 최대 출력을 크게 알리는 모델(Sonnet 5.5: 20만/12.8만)도 출력 몫은 실제 쓰는 양(4만)까지만 뺀다 — 10.5만 토큰을 쓴 뒤에도 이어 쓴다.
+  conv = open('claude-big-output', `${HEADER} + 큰 최대 출력`);
+  await conv.ask('[큰 출력 1]');
+  const bigSid = rows.get('seq1/claude').sessionId;
+  await conv.ask('[큰 출력 2]', undefined, { followUp: true });
+  assert.equal(calls.at(-1).options.resume, bigSid, 'a large advertised max output does not shrink the limit below real use');
+
+  // 7b) 새 세션으로 넘어간 이어지는 턴(검증 실패 수정)은 원래 지시와 고칠 응답을 상한과 관계없이 함께 보낸다.
+  // 실제 사고: 상한(4천 자)보다 긴 지시·응답이 통째로 빠져, 수정 호출이 요구 형식을 모른 채 답해 실패했다.
+  const bigTask = `[작업: 고쳐쓰기]\n${'현재 답변 '.repeat(1000)}\n{"status":"draft 또는 needs_info","intent":"…","answer":"…"}`;
+  conv = open('claude-sonnet-5-5', `${HEADER} + 이어지는 턴`, { maxContextTokens: 14_050 });
+  await conv.ask('[작업: 앞선 다른 문항]');
+  await conv.ask(bigTask);
+  const taskResponse = `응답${calls.length}`;
+  await conv.ask('[검증 실패] 맥락 지적', undefined, { followUp: true });
+  let last = calls.at(-1);
+  assert.equal(last.options.resume, undefined);
+  assert.ok(last.prompt.includes(bigTask) && last.prompt.includes(`[응답]\n${taskResponse}`), 'the follow-up carries its task instruction and the response to fix');
+  // 수정의 수정(문법 복구 뒤 검증 실패)도 원래 지시까지 거슬러 올라간다.
+  await conv.ask('[JSON 문법 오류] 다시', undefined, { followUp: true });
+  last = calls.at(-1);
+  assert.ok(last.prompt.includes(bigTask) && last.prompt.includes('[지시]\n[검증 실패] 맥락 지적'));
+  // 새 작업(followUp 아님)은 앞선 긴 주고받음을 상한 밖이면 넣지 않는다.
+  await conv.ask('[작업: 다음 문항]');
+  assert.ok(!calls.at(-1).prompt.includes(bigTask), 'a new task does not force earlier turns in');
 
   // 8) 사용량: 새 세션/이어 쓰기/세션 없음 구분과 캐시 적중이 남는다.
   const modes = usage.map((u) => u.mode);
@@ -192,5 +218,5 @@ const open = (model = 'claude-sonnet-5-5', header = HEADER, extra = {}) => openC
   const tiny = renderEssayTranscript(log, 60);
   assert.ok(tiny.length <= 60 + 40 && tiny.startsWith('(오래된 기록') && tiny.includes('새 초안 본문'), 'over budget it drops the oldest events and says so');
 
-  console.log('PASS conversation: fresh session with header+history, resumed turns send only new history+instruction, header change/resume failure/oversize start a new session from the same history, Codex stateless with earlier turns, cross-model handoff via history, usage with cache hits, serialized turns, per-turn token limit from the model-reported window, capped earlier turns, redacted history, stable/compacted/trimmed transcript');
+  console.log('PASS conversation: fresh session with header+history, resumed turns send only new history+instruction, header change/resume failure/oversize start a new session from the same history, Codex stateless with earlier turns, cross-model handoff via history, usage with cache hits, serialized turns, per-turn token limit from the model-reported window (output reserve capped), capped earlier turns, follow-ups keep their task instruction, redacted history, stable/compacted/trimmed transcript');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

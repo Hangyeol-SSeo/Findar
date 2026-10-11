@@ -37,21 +37,26 @@ export interface ConversationOptions {
 export interface AIConversation {
   readonly model: string;
   readonly provider: "claude" | "codex";
-  ask(turn: string, signal?: AbortSignal): Promise<string>;
+  // followUp: 방금 응답을 고치거나 이어 받는 턴(검증 실패 수정·편집 등). 이 작업의 원래 지시에 기대므로, 새 세션으로 넘어가도
+  // 그 지시부터 지금까지의 주고받음을 빠짐없이 함께 보낸다.
+  ask(turn: string, signal?: AbortSignal, options?: { followUp?: boolean }): Promise<string>;
 }
 
 const SESSION_DIR = join(process.cwd(), "data", "ai-sessions");
 const DEFAULT_TIMEOUT_MS = 600_000;
 // 세션의 문맥이 한도를 넘을 것 같으면 정리한 기록으로 새로 시작한다. 모델의 문맥 한도에 닿기 전에 끊어야 호출 실패나
-// Claude Code의 자동 요약(기억이 흐려지고 캐시가 깨짐)을 피한다. 한도는 모델이 알려 주는 문맥 크기에서 최대 출력과 여유분을
-// 뺀 값이고(처음엔 Sonnet 기준 20만/3.2만으로 가정), 판단은 실제 사용량(토큰)으로 한다. 새로 붙일 글은 한국어 기준으로
+// Claude Code의 자동 요약(기억이 흐려지고 캐시가 깨짐)을 피한다. 한도는 모델이 알려 주는 문맥 크기에서 출력 몫과 여유분을
+// 뺀 값이고(처음엔 Sonnet 기준 20만으로 가정), 판단은 실제 사용량(토큰)으로 한다. 새로 붙일 글은 한국어 기준으로
 // 넉넉하게 글자 수 = 토큰 수로 어림한다.
+// 출력 몫은 모델이 알려 주는 최대 출력(Sonnet 5.5는 12.8만)이 아니라 실제로 쓰는 양에 맞춘다(생각 포함 실측 최대 약 3.3만).
+// 최대 출력을 그대로 빼면 한도가 6.4만으로 줄어, 머리말(약 8만 자)만으로 넘쳐 매 턴 새 세션이 열리고 캐시를 다시 썼다.
 const DEFAULT_WINDOW = { contextWindow: 200_000, maxOutputTokens: 32_000 };
+const OUTPUT_RESERVE_TOKENS = 40_000;
 const SAFETY_TOKENS = 8_000;
 const windows = new Map<string, { contextWindow: number; maxOutputTokens: number }>();
 const contextLimit = (model: string) => {
   const w = windows.get(model) ?? DEFAULT_WINDOW;
-  return w.contextWindow - w.maxOutputTokens - SAFETY_TOKENS;
+  return w.contextWindow - Math.min(w.maxOutputTokens, OUTPUT_RESERVE_TOKENS) - SAFETY_TOKENS;
 };
 function learnWindow(model: string, result: unknown) {
   const usage = (result as { modelUsage?: Record<string, { contextWindow?: unknown; maxOutputTokens?: unknown }> } | null)?.modelUsage?.[model];
@@ -132,31 +137,38 @@ export function openConversation(options: ConversationOptions): AIConversation {
     // 머리말이 아주 커도 최근 기억은 남긴다(최소 몫).
     return { history: Math.max(8_000, Math.min(HISTORY_MAX, Math.floor(room * 0.6))), opLog: Math.max(4_000, Math.min(OP_LOG_MAX, Math.floor(room * 0.4))) };
   };
-  // 이번 작업에서 주고받은 턴. 세션을 새로 시작하거나 세션 없이 보낼 때 이 작업의 앞선 맥락을 잃지 않게 함께 보낸다.
-  const opLog: string[] = [];
+  // 이번 작업에서 주고받은 턴(지시+응답 한 쌍씩). 세션을 새로 시작하거나 세션 없이 보낼 때 이 작업의 앞선 맥락을 잃지 않게 함께 보낸다.
+  const opLog: { text: string; followUp: boolean }[] = [];
   let session: { id: string; at: string | null } | null = null;
   let checkedStored = false;
   let synced = 0;
   let contextTokens = 0;
 
   // 이번 작업의 앞선 주고받음은 최근 것부터 상한까지만 넣는다(문항이 많은 일괄 작성에서 끝없이 커지지 않게).
-  const recentOpLog = (budget: number) => {
-    const kept: string[] = [];
-    let size = 0;
-    for (let i = opLog.length - 1; i >= 0 && size + opLog[i].length <= budget; i--) { kept.unshift(opLog[i]); size += opLog[i].length; }
+  // 다만 이어지는 턴(followUp)이면 그 턴이 기대는 원래 지시부터 지금까지는 상한과 관계없이 모두 넣는다 — 빠지면 모델이
+  // 요구 형식도 고칠 글도 모른 채 답한다(실제로 고쳐쓰기 수정 호출이 형식을 지어내 실패했다).
+  const recentOpLog = (budget: number, followUp: boolean) => {
+    let start = opLog.length;
+    if (followUp) {
+      start = opLog.findLastIndex((e) => !e.followUp);
+      if (start < 0) start = 0;
+    }
+    const kept = opLog.slice(start).map((e) => e.text);
+    let size = kept.reduce((n, t) => n + t.length, 0);
+    for (let i = start - 1; i >= 0 && size + opLog[i].text.length <= budget; i--) { kept.unshift(opLog[i].text); size += opLog[i].text.length; }
     if (!kept.length) return "";
     const omitted = opLog.length - kept.length;
     return `\n\n[이번 작업에서 이미 주고받은 내용${omitted ? ` — 앞선 ${omitted}건은 생략(저장된 결과는 작업 기록에 있음)` : ""}]\n${kept.join("\n\n")}`;
   };
 
-  const freshPrompt = (turn: string) => {
+  const freshPrompt = (turn: string, followUp: boolean) => {
     const budget = budgets();
     const full = history.render(null, budget.history);
-    const prompt = `${header}\n\n[지금까지의 작업 기록]\n${full.text || "아직 없음"}${recentOpLog(budget.opLog)}\n\n${turn}`;
+    const prompt = `${header}\n\n[지금까지의 작업 기록]\n${full.text || "아직 없음"}${recentOpLog(budget.opLog, followUp)}\n\n${turn}`;
     return { prompt, lastRowid: full.lastRowid };
   };
 
-  async function once(turn: string, signal: AbortSignal | undefined, allowResume: boolean): Promise<string> {
+  async function once(turn: string, signal: AbortSignal | undefined, allowResume: boolean, followUp: boolean): Promise<string> {
     if (provider === "claude" && allowResume && !checkedStored) {
       checkedStored = true;
       const row = getAIConversationRow(key, provider);
@@ -177,14 +189,14 @@ export function openConversation(options: ConversationOptions): AIConversation {
       if (contextTokens + prompt.length > maxTokens()) resumable = false;
     }
     if (!resumable) {
-      ({ prompt, lastRowid } = freshPrompt(turn));
+      ({ prompt, lastRowid } = freshPrompt(turn, followUp));
       mode = provider === "claude" ? "fresh" : "stateless";
     }
     const current = resumable ? session : null;
     const result = await run(prompt, model, current ? { resume: current.id, at: current.at } : null, provider === "claude", signal, timeoutMs);
     recordAIUsage({ key, feature, model, mode, promptChars: prompt.length, result: result.result });
     learnWindow(model, result.result);
-    opLog.push(`[지시]\n${turn}`, `[응답]\n${result.text}`);
+    opLog.push({ text: `[지시]\n${turn}\n\n[응답]\n${result.text}`, followUp });
     if (provider === "claude" && result.sessionId) {
       session = { id: result.sessionId, at: result.lastMessageId };
       contextTokens = contextTokensOf(result.result) ?? (mode === "resumed" ? contextTokens : 0) + prompt.length + result.text.length;
@@ -199,17 +211,18 @@ export function openConversation(options: ConversationOptions): AIConversation {
 
   return {
     model, provider,
-    ask(turn, signal) {
+    ask(turn, signal, options) {
+      const followUp = options?.followUp === true;
       return serialize(key, async () => {
         throwIfAIAborted();
-        try { return await once(turn, signal, true); }
+        try { return await once(turn, signal, true, followUp); }
         catch (error) {
           throwIfAIAborted();
           if (signal?.aborted) throw error;
           console.error(`[ai-conversation] 모델 호출 실패, ${session ? "새 세션으로" : "한 번 더"} 다시 시도합니다:`, error);
           // 세션을 이어 쓰다 실패하면(세션 파일 손상·만료 등) 같은 기록으로 새 세션을 시작한다.
           if (session && provider === "claude") { deleteAIConversationRow(key, provider); session = null; }
-          return await once(turn, signal, false);
+          return await once(turn, signal, false, followUp);
         }
       });
     },

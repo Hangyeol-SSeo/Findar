@@ -198,7 +198,7 @@ const clean = { issues: [] };
   assert.equal(draft.essayAnswers[0].feedback.suggestions.length, 1);
   assert.equal(draft.essayAnswers[0].feedback.suggestions[0].replacement, '투자 동아리에서');
 
-  // 보완 질문만 돌려준 응답(answer·intent 없음)도 받아준다 — 길고 강한 요청에서 두 번 연속 실패했던 형태.
+  // 보완 질문만 돌려준 응답(answer·intent 없음)도 받아준다.
   reset();
   queued = [{ status: 'needs_info', missingInfo: ['어느 회사의 사례인가요?'] }];
   await revision.reviseEssay('S', question, '업계 사례를 넣어주세요');
