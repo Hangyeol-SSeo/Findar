@@ -12,7 +12,7 @@ import {
 // 과거에 실제로 썼던 자소서와 면접 대본을 참고 자료로 축적하는 모듈. 원본은 설정 화면에서 올린
 // data/essay-sources/(lib/essay-sources.ts)에 있고, 여기서는 파일마다 문항·답변을 원문 그대로 뽑아 저장한다.
 // 파일 이름+내용 해시로 캐시해 새로 올리거나 바뀐 파일만 분석하고, 지운 파일의 항목은 함께 지운다.
-// 이 자료는 한 번 추출하고 끝이 아니라, Findar에서 다듬어 확정한 답변(appendEssayEntry)도 계속 쌓인다.
+// 이 자료는 한 번 추출하고 끝이 아니라, 지원 도우미에서 "최종본으로 저장"한 답변(saveFinalEssay)도 계속 쌓인다.
 const DATA_DIR = join(process.cwd(), "data");
 const ESSAY_BANK_PATH = join(DATA_DIR, "essay-bank.json");
 const TEXT_SOURCE_LIMIT = 60_000;
@@ -24,8 +24,9 @@ export interface EssayEntry {
   company: string; // 어느 회사에 낸(또는 낼) 답변인지 — 모르면 빈 문자열
   question: string; // 자소서 문항이나 면접 질문. 파일에 없으면 내용상 가장 가까운 주제
   answer: string; // 원문 그대로
-  source: "imported" | "saved"; // 올린 파일에서 추출됐는지, 앱에서 다듬은 뒤 저장했는지
+  source: "imported" | "saved"; // 올린 파일에서 추출됐는지, 지원 도우미에서 최종본으로 저장했는지
   createdAt: number;
+  seq?: string; // saved 항목: 어느 공고의 답변인지. 같은 공고·문항을 다시 저장하면 이 항목을 고쳐 쓴다
   kind?: EssaySourceKind; // imported 항목의 자료 종류. 예전 항목은 없을 수 있다(자기소개서로 본다)
   sourceFile?: string; // essaySourceKey — 어느 파일에서 나왔는지
   context?: string; // 지원 시기·직무·면접 단계 등 파일에 적힌 배경
@@ -326,11 +327,32 @@ export function getEssaySourceStatus() {
 
 // "지원 도우미" 탭에서 초안을 다듬어 확정한 뒤 저장할 때 호출 — 이렇게 쌓인 saved 항목이
 // 다음 초안 생성부터 바로 참고 자료로 쓰인다 (사용자가 요청한 발전형 피드백 루프).
-export function appendEssayEntry(company: string, question: string, answer: string): void {
-  if (!answer.trim()) return;
+// 지원 도우미의 "최종본으로 저장". 같은 공고·문항의 최종본은 하나만 두고 새 글로 바꾼다 — 고칠 때마다 쌓이면
+// 경험 카드와 문체 자료에 같은 글이 여러 번 들어간다. 따로 파일을 올리지 않아도 과거 자소서 자료가 된다.
+export function saveFinalEssay(input: { seq: string; company: string; role: string; question: string; answer: string }): EssayEntry {
+  const answer = input.answer.trim();
+  if (!answer) throw new Error("저장할 본문이 없습니다.");
+  let saved!: EssayEntry;
   updateBank((bank) => {
-    bank.entries.push({ id: randomUUID(), company, question, answer, source: "saved", createdAt: Date.now() });
+    const previous = bank.entries.find((e) => e.source === "saved" && e.seq === input.seq && e.question === input.question);
+    saved = { id: previous?.id ?? randomUUID(), seq: input.seq, company: input.company, question: input.question, answer,
+      context: input.role ? `지원 직무: ${input.role}` : "", source: "saved", createdAt: Date.now() };
+    bank.entries = previous ? bank.entries.map((e) => (e === previous ? saved : e)) : [...bank.entries, saved];
   });
+  return saved;
+}
+
+export function listFinalEssays(seq?: string): EssayEntry[] {
+  return getCachedEssayBank().entries.filter((e) => e.source === "saved" && (seq === undefined || e.seq === seq));
+}
+
+export function deleteFinalEssay(id: string): void {
+  let found = false;
+  updateBank((bank) => {
+    found = bank.entries.some((e) => e.id === id && e.source === "saved");
+    bank.entries = bank.entries.filter((e) => !(e.id === id && e.source === "saved"));
+  });
+  if (!found) throw new Error("저장한 최종본을 찾을 수 없습니다.");
 }
 
 // 프롬프트에 넣기 좋은 형태로 압축 — 전체를 다 넣으면 너무 기니 최근 것 위주로 일부만.

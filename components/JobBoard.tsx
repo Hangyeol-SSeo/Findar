@@ -1138,7 +1138,7 @@ export default function JobBoard() {
               </div>
             ) : panelTab === "draft" ? (
               <div className="flex-1 overflow-y-auto p-5">
-                <ApplicationDraftPanel key={selectedJob.seq} roleRevision={roleRevision} seq={selectedJob.seq} companyName={selectedJob.company} />
+                <ApplicationDraftPanel key={selectedJob.seq} roleRevision={roleRevision} seq={selectedJob.seq} />
               </div>
             ) : (
             <div className="flex-1 overflow-y-auto p-5">

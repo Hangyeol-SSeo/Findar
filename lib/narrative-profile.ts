@@ -93,7 +93,7 @@ export function writeCoreNarrative(core: Omit<CoreNarrative, "updatedAt">): void
 }
 
 // 시드 질문에 처음 답할 때도, 이후 "경험 추가" 버튼으로 계속 쌓을 때도 이 함수 하나로
-// 처리한다 — essay-bank.ts의 appendEssayEntry와 동일한 append-only 패턴.
+// 처리한다 — 덮어쓰지 않고 뒤에 쌓는 append-only 패턴.
 export function appendNarrativeEpisode(input: {
   promptId: string;
   prompt: string;

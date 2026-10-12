@@ -4,43 +4,23 @@ import { useState, useEffect, useRef } from "react";
 import { detectBrowserExtension } from "@/lib/browser-extension-client";
 import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
 import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
-import { FREEFORM_ESSAY_QUESTION } from "@/lib/essay-questions";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
-import { EssayImportForm, EssayRevisionTools, type AnswerAction, type ResearchRequest, type RevisionMode } from "./EssayRevisionTools";
+import { EssayImportForm, EssayReviewTools, type AnswerAction } from "./EssayReviewTools";
 import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
 import Toast, { useToast } from "./Toast";
-
-// 첨삭·조사 작업이 끝났을 때 알릴 문구(작업 결과 종류별).
-const OUTCOME_MESSAGES: Record<string, string> = {
-  "pending-revision": "고쳐쓰기 결과가 도착했습니다. 바뀐 부분을 비교하고 반영 여부를 골라주세요.",
-  feedback: "첨삭 결과가 도착했습니다. 제안을 하나씩 반영하거나 넘길 수 있습니다.",
-  "needs-info": "고쳐쓰기에 정보가 더 필요합니다. 답변 아래의 질문을 확인해주세요.",
-  candidates: "업계 사례 후보를 찾았습니다. 읽을 자료와 구성 방향을 골라주세요.",
-  findings: "자료 정리를 마쳤습니다. 쓸 자료를 골라 고쳐쓰기를 요청해주세요.",
-};
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
 const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40";
 
-interface QuestionRow { id: string; question: string; maxChars: string; countSpaces: boolean; guidance: string; freeform: boolean }
-function newRow(id: string): QuestionRow {
-  return { id, question: "", maxChars: "", countSpaces: true, guidance: "", freeform: false };
-}
+// 이 공고에서 "최종본으로 저장"해 과거 자소서 자료에 들어간 글.
+interface FinalEssay { question: string; answer: string; savedAt: number }
 
-// 소재 배치 단계의 요구별 판정(cover-letter-team 갭 상태). 맞는 소재가 없으면 "소재 없음"으로 남고 억지로 채우지 않는다.
-const COVERAGE_LABEL: Record<string, string> = {
-  SUFFICIENT: "충분", WEAKLY_SUPPORTED: "근거 약함", MISSING: "소재 없음", NO_ACTUAL_EXPERIENCE: "경험 없음",
-  CONTRADICTORY: "모순", NOT_APPLICABLE: "해당 없음", UNKNOWN: "미확인",
-};
-const COVERAGE_STYLE: Record<string, string> = {
-  SUFFICIENT: "bg-emerald-100 text-emerald-800", WEAKLY_SUPPORTED: "bg-amber-100 text-amber-800",
-  MISSING: "bg-red-100 text-red-700", NO_ACTUAL_EXPERIENCE: "bg-red-100 text-red-700", CONTRADICTORY: "bg-red-100 text-red-700",
-};
-
-export default function ApplicationDraftPanel({ seq, companyName, roleRevision }: { seq: string; companyName: string; roleRevision?: string | null }) {
+// 자기소개서는 대화 세션에서 쓰고, 여기서는 저장·직접 수정·버전 기록·첨삭 받기·최종본 저장만 한다.
+export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: string; roleRevision?: string | null }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
+  const [finals, setFinals] = useState<FinalEssay[]>([]);
   const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
   const [researchNotice, setResearchNotice] = useState<string | null>(null);
   const [url, setUrl] = useState("");
@@ -49,15 +29,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
-  // 확인하지 않은 경험 카드는 작성에 쓰이지 않는다. 이력서까지 카드로 정리된 뒤에는 이를 모르면 경험이 빠진 답변이 나오므로 알린다.
-  const [cardGate, setCardGate] = useState<{ unconfirmed: number; coversProfile: boolean; stale: boolean } | null>(null);
-  useEffect(() => {
-    const abort = new AbortController();
-    fetch("/api/experience-cards", { cache: "no-store", signal: abort.signal }).then((r) => r.json()).then((s: { cards: { user_confirmed: boolean }[]; coversProfile: boolean; stale: boolean }) =>
-      setCardGate({ unconfirmed: s.cards.filter((c) => !c.user_confirmed).length, coversProfile: s.coversProfile, stale: s.stale })).catch(() => {});
-    return () => abort.abort();
-  }, [seq]);
-  // 이 공고 작업 대화의 실제 AI 사용량. 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
+  // 이 공고에서 쓴 실제 AI 사용량(첨삭). 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
   const [usage, setUsage] = useState<{ calls: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; cacheHitRatio: number } | null>(null);
   useEffect(() => {
     const abort = new AbortController();
@@ -65,27 +37,12 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       .then((u: { summary: NonNullable<typeof usage> }) => setUsage(u.summary.calls ? u.summary : null)).catch(() => {});
     return () => abort.abort();
   }, [seq, draft?.revision]);
-  const nextRowId = useRef(1);
-  const [rows, setRows] = useState<QuestionRow[]>(() => [newRow("q0")]);
-  // 보낸 문항을 작업별로 기억해 두었다가, 작업이 실패·취소되면 저장되지 않은 문항을 입력란에 되돌린다.
-  // 실패할 때마다 4문항을 처음부터 다시 입력해야 했다.
-  const submittedRows = useRef(new Map<string, { rows: QuestionRow[]; at: number }>());
-  // "이 문항 보완해서 다시 작성"으로 채운 입력란은 답변 목록보다 한참 위에 있어서, 렌더링 뒤 그 칸으로 이동시킨다.
-  const focusGuidanceRowId = useRef<string | null>(null);
-  useEffect(() => {
-    const id = focusGuidanceRowId.current;
-    if (!id) return;
-    focusGuidanceRowId.current = null;
-    const field = document.querySelector<HTMLTextAreaElement>(`[data-guidance-row="${id}"]`);
-    field?.scrollIntoView({ behavior: "smooth", block: "center" });
-    field?.focus({ preventScroll: true });
-  }, [rows]);
   const [pollRevision, setPollRevision] = useState(0);
   const { message: toastMessage, showToast } = useToast(6000);
-  // 문항별 첨삭·조사 오류는 그 답변 아래에 보여준다(위쪽 알림만으로는 놓치기 쉬움).
+  // 문항별 첨삭 오류는 그 답변 아래에 보여준다(위쪽 알림만으로는 놓치기 쉬움).
   const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
   const [highlightQuestion, setHighlightQuestion] = useState<string | null>(null);
-  const attention = useRef<{ question?: string; block?: string } | null>(null);
+  const attention = useRef<{ question: string; block: string } | null>(null);
   // 이 화면이 열려 있는 동안 진행 중이던 작업만 끝났을 때 알린다 — 다시 열었을 때 지난 작업으로 화면이 튀지 않게.
   const watchedTasks = useRef(new Set<string>());
   const [tasks, setTasks] = useState<ApplicationTask[]>([]);
@@ -104,7 +61,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     fetch(`/api/applications/${seq}/draft`, { signal: abort.signal }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setDraft(data.draft); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
+      setDraft(data.draft); setFinals(data.finals ?? []); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
     }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
@@ -141,53 +98,39 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
         active = data.tasks.some(taskActive);
         setTasks(data.tasks);
         let reloadDraft = false;
-        const restore: { rows: QuestionRow[]; at: number }[] = [];
         for (const task of data.tasks) {
           if (taskActive(task)) { watchedTasks.current.add(task.id); continue; }
           if (handledTasks.current.has(task.id)) continue;
           handledTasks.current.add(task.id);
           const watched = watchedTasks.current.has(task.id);
-          const submitted = task.kind === "writing" && task.status !== "completed" ? submittedRows.current.get(task.id) : undefined;
-          if (submitted) { restore.push(submitted); submittedRows.current.delete(task.id); }
           if (task.status === "cancelled") {
             if (task.kind !== "document") reloadDraft = true;
-            if (watched) showToast(task.kind === "writing" ? `자기소개서 작성을 취소했습니다. 이미 저장한 문항 ${task.done}개는 유지됩니다.` : "작업을 취소했습니다. 기존 결과는 유지됩니다.");
+            if (watched) showToast("작업을 취소했습니다. 기존 결과는 유지됩니다.");
             continue;
           }
-          if (task.kind === "revision" || task.kind === "research") {
+          if (task.kind === "revision") {
             reloadDraft = true;
             if (!watched) continue;
             const question = task.question ?? "";
             if (task.status === "failed") {
               setAnswerErrors((prev) => ({ ...prev, [question]: task.error ?? "작업에 실패했습니다." }));
-              showToast(`${task.kind === "research" ? "업계 사례 조사" : "첨삭"}에 실패했습니다. 답변 아래에서 이유를 확인해주세요.`);
+              showToast("첨삭에 실패했습니다. 답변 아래에서 이유를 확인해주세요.");
             } else {
-              showToast(OUTCOME_MESSAGES[task.result?.outcome ?? ""] ?? "작업을 마쳤습니다.");
+              showToast("첨삭 결과가 도착했습니다. 제안을 하나씩 반영하거나 넘길 수 있습니다.");
             }
-            const outcome = task.result?.outcome;
-            attention.current = { question, block: task.status === "failed" ? "error" : outcome === "candidates" || outcome === "findings" ? "research" : outcome };
+            attention.current = { question, block: task.status === "failed" ? "error" : "feedback" };
             continue;
           }
           if (task.status === "failed") setError(task.error ?? "작업에 실패했습니다.");
-          if (watched && task.kind === "writing") {
-            showToast(task.status === "failed" ? "자기소개서 작성에 실패했습니다. 위쪽 알림을 확인해주세요." : "자기소개서 작성을 마쳤습니다.");
-            attention.current = {};
-          }
-          if (task.kind === "writing") {
-            // 실패한 묶음 작업도 앞 문항까지 저장됐을 수 있다. 조회는 전체에서 한 번만 한다.
-            reloadDraft = true;
-            if (task.status === "completed") setNotice(`문항 ${task.done}개 처리를 마쳤습니다.${task.result?.needsInfo ? ` ${task.result.needsInfo}개는 자료·정보 보완이 필요합니다.` : " 답변을 저장했습니다."} 작성된 답변은 자동 입력 탭에서 지원서에 넣을 수 있습니다.`);
-          }
           const document = task.result?.document;
           if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
         }
         if (reloadDraft && !dirtyRef.current) {
           const draftResponse = await fetch(`/api/applications/${seq}/draft`, { cache: "no-store", signal: abort.signal });
-          if (!draftResponse.ok) throw new Error("완성된 답변을 불러오지 못했습니다. 지원 도우미를 다시 열어주세요.");
+          if (!draftResponse.ok) throw new Error("첨삭 결과를 불러오지 못했습니다. 지원 도우미를 다시 열어주세요.");
           const current = await draftResponse.json();
           if (!stopped && !dirtyRef.current) setDraft(current.draft);
-          if (!stopped) restoreUnsaved(restore, current.draft);
-        } else if (!stopped) restoreUnsaved(restore, null);
+        }
       } catch (e) {
         failures++;
         if (!stopped) setError(e instanceof Error ? e.message : "작업 상태 확인 실패");
@@ -200,17 +143,14 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     return () => { stopped = true; abort.abort(); clearTimeout(timer); };
   }, [seq, pollRevision, showToast]);
 
-  // 작업이 끝나면 결과가 놓인 곳으로 화면을 옮긴다: 첨삭·조사는 해당 답변의 첨삭 영역(잠시 강조), 문항 작성은 위쪽 알림.
+  // 첨삭이 끝나면 그 답변의 첨삭 결과(또는 오류)로 화면을 옮기고 잠시 강조한다.
   useEffect(() => {
     const target = attention.current;
     if (!target) return;
     attention.current = null;
-    // 결과 블록(비교 화면·첨삭 결과·보완 질문·조사·오류)의 시작이 보이게 옮긴다. 블록이 길어도 윗부분부터 읽을 수 있다.
-    const anchor = target.question !== undefined ? document.querySelector(`[data-revision-anchor="${encodeURIComponent(target.question)}"]`) : null;
-    const element = target.question === undefined ? document.querySelector("[data-draft-status]")
-      : anchor?.querySelector(`[data-block="${target.block}"]`) ?? anchor;
-    element?.scrollIntoView({ behavior: "smooth", block: "start" });
-    if (target.question !== undefined) setHighlightQuestion(target.question);
+    const anchor = document.querySelector(`[data-revision-anchor="${encodeURIComponent(target.question)}"]`);
+    (anchor?.querySelector(`[data-block="${target.block}"]`) ?? anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setHighlightQuestion(target.question);
   }, [draft, answerErrors]);
   useEffect(() => {
     if (highlightQuestion === null) return;
@@ -218,26 +158,10 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     return () => clearTimeout(timer);
   }, [highlightQuestion]);
 
-  const writingTask = tasks.find((t) => t.kind === "writing" && taskActive(t));
-  const writingBusy = busy === "writing" || !!writingTask;
-  const revisionTask = tasks.find((t) => (t.kind === "revision" || t.kind === "research") && taskActive(t));
-  const revisionBusy = busy === "revision" || !!revisionTask;
-  const essayBusy = writingBusy || revisionBusy || ["save", "bank", "answer-action", "import"].includes(busy);
+  const reviewTask = tasks.find((t) => t.kind === "revision" && taskActive(t));
+  const reviewBusy = busy === "review" || !!reviewTask;
+  const essayBusy = reviewBusy || ["save", "final", "answer-action", "import"].includes(busy);
   const documentBusy = busy === "document";
-  const progress = writingTask ? { done: writingTask.done, total: writingTask.total } : null;
-  // 실패·취소된 작성 작업에서 이번에 저장되지 않은 문항만 입력란에 되돌린다(이미 입력 중인 문항은 그대로 둔다).
-  function restoreUnsaved(entries: { rows: QuestionRow[]; at: number }[], saved: ApplicationDraft | null) {
-    const back = entries.flatMap(({ rows: sent, at }) => sent.filter((row) => !saved?.essayAnswers.some((a) =>
-      a.question === row.question.trim() && "generatedAt" in a && typeof a.generatedAt === "number" && a.generatedAt >= at)));
-    if (!back.length) return;
-    setRows((prev) => {
-      const typing = prev.filter((r) => r.question.trim());
-      const fresh = back.filter((r) => !typing.some((t) => t.question.trim() === r.question.trim()))
-        .map((r) => ({ ...r, id: `q${nextRowId.current++}` }));
-      return [...typing, ...fresh].length ? [...typing, ...fresh] : prev;
-    });
-    setNotice(`저장되지 않은 문항 ${back.length}개를 입력란에 그대로 되돌려 두었습니다. 다시 작성을 누르면 됩니다.`);
-  }
   function acceptTask(task: ApplicationTask) {
     watchedTasks.current.add(task.id);
     setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]);
@@ -251,7 +175,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     if (!response.ok) throw new Error(data.error || "요청에 실패했습니다.");
     return data;
   }
-  // 저장 후의 최신 revision을 돌려준다 — 바로 이어지는 첨삭 동작이 그 값으로 충돌을 검사한다.
+  // 저장 후의 최신 revision을 돌려준다 — 바로 이어지는 동작이 그 값으로 충돌을 검사한다.
   async function save(): Promise<string | null> {
     if (!draft || !dirty) return draft?.revision ?? null;
     const data = await api("draft", draft, "PUT");
@@ -264,57 +188,15 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
     catch (e) { if (!controller.current?.signal.aborted) setError(e instanceof Error ? e.message : "처리 중 오류가 발생했습니다."); }
     finally { if (!controller.current?.signal.aborted) setBusy(""); }
   }
-  function addRow() { setRows((prev) => [...prev, newRow(`q${nextRowId.current++}`)]); }
-  function removeRow(id: string) { setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev)); }
-  function updateRow(id: string, patch: Partial<QuestionRow>) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
-  // 체크하면 실제 문항 텍스트에 자유기술형 안내 문구를 바로 채워 넣는다 — 이 문항을 그대로
-  // 보내면 서버는 다른 문항과 똑같이 취급하고, 프롬프트 안의 "자유롭게 기술" 표현을 보고
-  // 알아서 여러 주제를 엮은 하나의 글로 작성한다.
-  function toggleFreeform(id: string, checked: boolean) {
-    updateRow(id, { freeform: checked, question: checked ? FREEFORM_ESSAY_QUESTION : "" });
-  }
-
-  async function generateAll() {
-    const filled = rows.filter((r) => r.question.trim());
-    if (!filled.length || writingBusy) return;
-    await run("writing", async () => {
-      await save();
-      const sentAt = Date.now();
-      const data = await api("draft/question", { questions: filled.map((row) => ({
-        question: row.question, ...(row.maxChars ? { maxChars: Number(row.maxChars) } : {}),
-        countSpaces: row.countSpaces, guidance: row.guidance,
-      })) });
-      submittedRows.current.set(data.task.id, { rows: filled, at: sentAt });
-      acceptTask(data.task);
-      setRows([newRow(`q${nextRowId.current++}`)]);
-      setNotice("백그라운드에서 문항을 작성합니다. 탭을 바꾸거나 다른 공고의 작업을 시작할 수 있습니다.");
-    });
-  }
-  async function startRevision(question: string, mode: RevisionMode, text: string, findingIds?: string[]) {
+  async function startReview(question: string, focus: string) {
     let started = false;
     setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
-    await run("revision", async () => {
+    await run("review", async () => {
       await save();
-      const data = await api("draft/revision", { question, mode, ...(mode === "review" ? { focus: text } : { instruction: text, findingIds }) });
+      const data = await api("draft/review", { question, focus });
       acceptTask(data.task);
       started = true;
-      setNotice(mode === "rewrite" ? "고쳐쓰기를 시작했습니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
-        : mode === "restructure" ? "다시 구성을 시작했습니다. 구상부터 다시 하므로 몇 분 걸립니다. 끝나면 답변 아래에 비교 화면이 나타납니다."
-        : "첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
-    });
-    return started;
-  }
-  async function startResearch(question: string, request: ResearchRequest) {
-    let started = false;
-    setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
-    await run("revision", async () => {
-      await save();
-      const data = await api("draft/research", { question, ...request });
-      acceptTask(data.task);
-      started = true;
-      setNotice(request.step === "scope" ? "업계 사례 후보를 찾고 있습니다. 끝나면 알려드립니다." : "고른 자료를 읽고 정리하고 있습니다. 끝나면 알려드립니다.");
+      setNotice("첨삭을 시작했습니다. 끝나면 답변 아래에 평가와 제안이 나타납니다.");
     });
     return started;
   }
@@ -326,6 +208,15 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       setDraft(data.draft);
     });
   }
+  // 최종본으로 저장: 고친 내용을 먼저 저장하고, 그 본문을 과거 자소서 자료에 넣는다.
+  async function saveFinal(question: string) {
+    await run("final", async () => {
+      const revision = await save();
+      const data = await api("draft/final", { question, revision });
+      setFinals(data.finals);
+      setNotice("최종본을 과거 자소서 자료에 저장했습니다. 다음 자기소개서와 경험 카드에 쓰입니다.");
+    });
+  }
   async function importAnswer(input: { question: string; maxChars?: number; countSpaces: boolean; answer: string }) {
     let imported = false;
     await run("import", async () => {
@@ -333,7 +224,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       const data = await api("draft/import", { ...input, revision });
       setDraft(data.draft);
       imported = true;
-      setNotice("직접 쓴 글을 저장했습니다. 답변 아래의 첨삭하기로 다듬을 수 있습니다.");
+      setNotice("자기소개서를 저장했습니다. 고칠 곳은 직접 고치거나 첨삭을 받을 수 있고, 다 되면 ‘최종본으로 저장’을 눌러주세요.");
     });
     return imported;
   }
@@ -365,7 +256,7 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
       <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
-        <span>{task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "research" ? "업계 사례 조사" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
+        <span>{task.kind === "revision" ? "첨삭" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
         <ApplicationTaskCancelButton task={task} onUpdate={acceptTask} onError={setError} />
         {task.error && <span className="text-red-600">{task.error}</span>}
         {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.result.document.filled}/{task.result.document.total}칸 입력 · 다운로드</a>}
@@ -421,98 +312,55 @@ export default function ApplicationDraftPanel({ seq, companyName, roleRevision }
       </div>
     </section>}
 
-    {workspace === "essay" && cardGate && (cardGate.unconfirmed > 0 || cardGate.stale) && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-      {cardGate.unconfirmed > 0 && <>확인하지 않은 경험 카드 {cardGate.unconfirmed}개는 자기소개서 작성에 쓰이지 않습니다{cardGate.coversProfile ? " (이력서 경험도 카드로 확인해야 쓰입니다)" : ""}. </>}
-      {cardGate.stale && <>경험 자료가 바뀌어 카드를 다시 만들어야 합니다. </>}
-      <a href="/profile#experience" className="underline">내 지원 자료 → 경험 카드</a>에서 확인해주세요.
-    </p>}
+
     {workspace === "essay" && researchNotice && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">{researchNotice}</p>}
-    {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="작성·첨삭은 이 공고의 작업 대화를 이어 쓰며, 앞부분은 캐시에서 읽습니다.">
+    {workspace === "essay" && usage && <p className="text-xs text-gray-400" title="이 공고에서 첨삭에 쓴 AI 사용량입니다.">
       이 공고 AI 사용: {usage.calls.toLocaleString()}회 · 새로 처리한 입력 {usage.inputTokens.toLocaleString()} · 캐시에서 읽은 입력 {usage.cacheReadTokens.toLocaleString()}({Math.round(usage.cacheHitRatio * 100)}%) · 출력 {usage.outputTokens.toLocaleString()} 토큰
     </p>}
     {workspace === "essay" && <><section className="space-y-3">
-      <div><h3 className="font-semibold text-gray-800">실제 문항에 맞춰 자기소개서 작성</h3><p className="mt-1 text-xs leading-5 text-gray-500">지원 직무와 문항의 요구를 분석하여 경험·동기·견해·자유형에 맞는 구성과 근거로 작성합니다. 학교·프로젝트·창업 팀명은 본문에서 제외합니다. 문항이 여러 개면 ‘문항 추가’로 늘려서 순서대로 작성할 수 있습니다 — 앞서 작성한 문항의 답변을 참고해 같은 경험을 반복하지 않습니다.</p></div>
-      {rows.map((row, i) => <div key={row.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={row.freeform} disabled={essayBusy} onChange={(e) => toggleFreeform(row.id, e.target.checked)} />자유 문항</label>
-          {rows.length > 1 && <button type="button" disabled={essayBusy} className="text-xs text-gray-400 hover:text-red-500" onClick={() => removeRow(row.id)}>삭제</button>}
-        </div>
-        <label className="block text-xs font-medium text-gray-700">지원서 문항<textarea className={`${inputStyle} mt-1`} rows={4} value={row.question} maxLength={8000} disabled={essayBusy} onChange={(e) => {
-          updateRow(row.id, { question: e.target.value, countSpaces: /공백\s*제외/.test(e.target.value) ? false : row.countSpaces });
-        }} placeholder={`문항 ${i + 1} — 실제 지원서에서 묻는 문항을 그대로 붙여넣어주세요. 하위 질문과 작성 조건도 함께 넣어주세요.`} /></label>
-        <div className="flex items-center gap-4"><label className="text-xs text-gray-600">최대 글자 수<input aria-label={`문항 ${i + 1} 최대 글자 수`} className={`${inputStyle} mt-1 max-w-40`} type="number" min={1} max={10000} value={row.maxChars} onChange={(e) => updateRow(row.id, { maxChars: e.target.value })} disabled={essayBusy} placeholder="문항에 있으면 자동 반영" /></label><label className="text-xs text-gray-600 flex items-center gap-2"><input type="checkbox" checked={row.countSpaces} onChange={(e) => updateRow(row.id, { countSpaces: e.target.checked })} disabled={essayBusy} />공백 포함</label></div>
-        <label className="block text-xs text-gray-600">이번 문항의 추가 자료·관점·수정 요청 <span className="text-gray-400">(선택)</span><textarea data-guidance-row={row.id} className={`${inputStyle} mt-1`} rows={3} maxLength={6000} value={row.guidance} onChange={(e) => updateRow(row.id, { guidance: e.target.value })} disabled={essayBusy} placeholder="구체적인 경험, 본인의 견해, 참고할 자료의 본문과 출처, 수정 요청 등을 적어주세요." /></label>
-      </div>)}
-      <div className="flex items-center gap-2">
-        <button type="button" disabled={essayBusy} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40" onClick={addRow}>+ 문항 추가</button>
-        <button className={buttonStyle} disabled={essayBusy || !rows.some((r) => r.question.trim())} onClick={generateAll}>
-          {writingBusy
-            ? (progress ? `문항 ${progress.done + 1}/${progress.total} 작성 중...` : "문항 분석 · 구상 · 작성 · 편집 검토 중...")
-            : rows.filter((r) => r.question.trim()).length > 1 ? "문항 전체 답변 작성" : "이 문항 답변 작성"}
-        </button>
+      <div><h3 className="font-semibold text-gray-800">자기소개서</h3><p className="mt-1 text-xs leading-5 text-gray-500">대화에서 쓴 글을 문항과 함께 저장해 두세요. 저장한 글은 직접 고치고, 첨삭을 받고, 이전 버전으로 되돌릴 수 있습니다. 다 되면 ‘최종본으로 저장’을 누르세요. 따로 파일을 올리지 않아도 과거 자소서 자료에 들어가 다음 자기소개서와 경험 카드에 쓰입니다.</p></div>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-600">
+        <button type="button" className="rounded-md border border-blue-200 bg-white px-2.5 py-1 font-medium text-blue-700 hover:bg-blue-50 active:scale-95"
+          onClick={() => run("copy", async () => {
+            await navigator.clipboard.writeText(`Findar 공고 seq=${seq} 자기소개서를 같이 쓰자. 먼저 curl -s ${location.origin}/api/applications/${seq}/essay-context 로 공고·회사·경험 자료를 읽고, 문항을 물어봐줘.`);
+            setNotice("대화 시작 문장을 복사했습니다. Claude 대화창에 붙여 넣으면 이 공고 자료를 한 번에 읽고 시작합니다.");
+          })}>대화로 쓰기</button>
+        <span>Claude 대화창에 붙여 넣을 시작 문장을 복사합니다. 대화가 이 공고의 공고·회사·경험 자료를 한 번에 읽습니다.</span>
       </div>
-      {writingBusy && <p className="text-xs text-gray-500" role="status">전체 문항의 구상과 경험 배치를 정한 뒤 리서치 근거를 연결해 작성하고 편집 검토를 진행합니다{rows.filter((r) => r.question.trim()).length > 1 ? " — 문항마다 순서대로 작성되어 시간이 오래 걸릴 수 있습니다" : ""}. 잠시 기다려주세요.</p>}
-      <EssayImportForm disabled={essayBusy} onImport={importAnswer} />
+      <EssayImportForm disabled={essayBusy} defaultOpen={!currentAnswers.length} onImport={importAnswer} />
     </section>
     {currentAnswers.map(({ a, index }) => {
       const answer = a as EssayAnswer;
       const count = characterCount(answer.answer, answer.countSpaces);
+      const final = finals.find((f) => f.question === answer.question);
+      const finalCurrent = !!final && final.answer === answer.answer.trim() && !dirty;
       return <section key={index} className="rounded-xl border border-gray-200 p-4 space-y-3">
-        <h4 className="whitespace-pre-wrap text-sm font-semibold text-gray-800">{answer.question}</h4>
-        <p className="text-xs leading-5 text-gray-500">{answer.intent}</p>
-        {roleRevision != null && answer.roleRevision !== roleRevision && <p className="text-xs text-amber-700">현재 지원 직무로 생성된 답변이 아닙니다. 기존 답변을 검토하거나 다시 작성해주세요.</p>}
-        {answer.targetRole && <p className="text-xs text-gray-500">작성 기준 직무: {answer.targetRole}</p>}
-        {answer.status === "needs_info" ? <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800"><p className="font-medium">답변에 필요한 정보를 보완해주세요</p><ul className="mt-2 list-disc pl-4">{answer.missingInfo.map((info, i) => <li key={i}>{info}</li>)}</ul></div> : <>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <h4 className="whitespace-pre-wrap text-sm font-semibold text-gray-800">{answer.question}</h4>
+          {final && <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${finalCurrent ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
+            title={`${new Date(final.savedAt).toLocaleString("ko-KR")}에 저장`}>{finalCurrent ? "최종본 저장됨" : "최종본 저장 후 바뀜"}</span>}
+        </div>
+        {answer.intent && <p className="text-xs leading-5 text-gray-500">{answer.intent}</p>}
+        {roleRevision != null && answer.roleRevision && answer.roleRevision !== roleRevision && <p className="text-xs text-amber-700">지금 고른 지원 직무와 다른 직무 기준으로 저장한 답변입니다.</p>}
+        {answer.targetRole && <p className="text-xs text-gray-500">지원 직무: {answer.targetRole}</p>}
+        {answer.status === "needs_info" ? <div className="bg-amber-50 p-3 rounded-lg text-sm text-amber-800"><p className="font-medium">예전 AI 작성이 정보 부족으로 멈춘 문항입니다</p><ul className="mt-2 list-disc pl-4">{answer.missingInfo.map((info, i) => <li key={i}>{info}</li>)}</ul><p className="mt-2 text-xs">대화에서 쓴 글을 위 ‘자기소개서 저장’에 같은 문항으로 저장하면 이 내용이 바뀝니다.</p></div> : <>
           <textarea aria-label={`${answer.question} 답변`} className={inputStyle} rows={12} value={answer.answer} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} />
           <p className={`text-xs ${answer.maxChars && count > answer.maxChars ? "text-red-600" : "text-gray-400"}`}>{count.toLocaleString()}자{answer.maxChars ? ` / ${answer.maxChars.toLocaleString()}자` : ""} · 공백 {answer.countSpaces ? "포함" : "제외"}{dirty ? " · 수정 내용 저장 필요" : ""}</p>
         </>}
-        {answer.plan && <details className="text-xs text-gray-600">
-          <summary className="cursor-pointer">작성 구상과 회사 리서치 활용</summary>
-          <div className="mt-2 space-y-3">
-            <p className="font-medium">핵심 주장: {answer.plan.message}</p>
-            <ol className="list-decimal pl-4 space-y-1">{answer.plan.outline.map((step, i) => <li key={i}>{step}</li>)}</ol>
-            <p>리서치 활용: {answer.plan.researchMode === "direct" ? "본문의 논거로 사용" : answer.plan.researchMode === "perspective" ? "소재 선정 관점으로 사용" : "직접 활용하지 않음"}</p>
-            {answer.plan.research.map((r, i) => {
-              const source = answer.researchSources?.find((s) => s.id === r.sourceId);
-              return <div key={i} className="space-y-1">
-                <p>{r.paragraph}번 문단 · {r.purpose}</p>
-                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">{r.quote}</blockquote>
-                {source?.generatedAt && <p>조사 시각: {new Date(source.generatedAt).toLocaleString("ko-KR")}{source.status === "partial" ? " · 일부 확인되지 않은 조사" : ""}</p>}
-                {!!source?.links?.length && <p>해당 조사 항목의 출처</p>}
-                {source?.links?.filter((link) => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}
-              </div>;
-            })}
-            {answer.plan.selectedMaterials.map((m, i) => <p key={i}>소재 선정 이유: {m.reason}{m.anchor && <span className="text-gray-400"> · {m.fit === "transferable" ? "간접 연결" : "직접 경험"} — “{m.anchor.quote}”({m.anchor.source === "job" ? "공고" : m.anchor.source === "question" ? "문항" : "요청"})</span>}</p>)}
-            {!!answer.plan.coverage?.length && <div className="space-y-1">
-              <p className="font-medium">요구별 소재 판정</p>
-              {answer.plan.coverage.map((c, i) => <p key={i}>
-                <span className={`mr-1 rounded px-1 ${COVERAGE_STYLE[c.status] ?? "bg-gray-100 text-gray-600"}`}>{COVERAGE_LABEL[c.status] ?? c.status}</span>
-                {c.requirement}{c.sourceIds.length ? ` (${c.sourceIds.join(", ")})` : ""} — {c.rationale}
-              </p>)}
-            </div>}
-            {answer.plan.notes.map((note, i) => <p key={i}>{note}</p>)}
-            <p className="text-gray-400">직접 수정한 답변에는 생성 시점의 구상이 그대로 표시됩니다.</p>
-          </div>
-        </details>}
-        <details className="text-xs text-gray-500"><summary className="cursor-pointer">사용한 근거와 검토 사항</summary><div className="mt-2 space-y-2">{answer.evidence.map((e, i) => <div key={i}><p className="font-medium">{e.usedFor}</p><blockquote className="whitespace-pre-wrap border-l-2 pl-2 mt-1">{e.quote}</blockquote><p className="text-gray-400">{e.sourceId}</p>{answer.researchSources?.find(s => s.id === e.sourceId)?.links?.filter(link => /^https?:\/\//i.test(link.url)).map((link, j) => <a key={j} href={link.url} target="_blank" rel="noopener noreferrer" className="block text-blue-600 underline">{link.title}</a>)}</div>)}{answer.reviewNotes.map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">직접 수정·제안 반영·버전 복원 이후의 본문이라 위 근거 검토가 현재 글과 다를 수 있습니다.</p>}<p>직접 고친 문장은 위 생성 시점의 근거 검토에 포함되지 않습니다.</p></div></details>
-        <div className="flex flex-wrap gap-3 text-xs">
-          <button type="button" disabled={essayBusy} className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700 transition hover:bg-blue-100 active:scale-95 active:bg-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:pointer-events-none disabled:opacity-40" onClick={() => {
-            const id = `q${nextRowId.current++}`;
-            focusGuidanceRowId.current = id;
-            setRows([{ id, question: answer.question, maxChars: answer.maxChars?.toString() ?? "", countSpaces: answer.countSpaces, guidance: answer.guidance, freeform: answer.question === FREEFORM_ESSAY_QUESTION }]);
-            setNotice("위 문항 입력란에서 필요한 자료나 수정 요청을 보완한 뒤 다시 작성해주세요. 지금 글을 다듬으려면 ‘첨삭하기’를 이용해주세요.");
-          }} title="구상부터 처음부터 다시 작성합니다. 지금 글은 버전 기록에 남습니다.">새로 쓰기</button>
-          {answer.answer && <><button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button><button disabled={essayBusy} className="text-gray-500" onClick={() => run("bank", async () => {
-            await save();
-            const response = await fetch("/api/essay-bank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seq, company: companyName, question: answer.question, answer: answer.answer }) });
-            if (!response.ok) throw new Error("확정 답변을 경험 자료로 저장하지 못했습니다.");
-            setNotice("검토한 답변을 다음 작성에 참고할 자료로 저장했습니다.");
-          })}>검토한 답변을 자료로 저장</button></>}
-        </div>
-        <EssayRevisionTools answer={answer} disabled={essayBusy} revising={revisionBusy} error={answerErrors[answer.question] || undefined}
+        {answer.reviewNotes.some((n) => n.startsWith("확인:")) && <ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+          {answer.reviewNotes.filter((n) => n.startsWith("확인:")).map((n, i) => <li key={i}>{n}</li>)}
+        </ul>}
+        {answer.reviewNotes.some((n) => !n.startsWith("확인:")) && <details className="text-xs text-gray-500"><summary className="cursor-pointer">문체 점검</summary><div className="mt-2 space-y-1">{answer.reviewNotes.filter((n) => !n.startsWith("확인:")).map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">이전 글을 점검한 결과라 지금 글과 다를 수 있습니다. 저장하면 다시 점검합니다.</p>}</div></details>}
+        {answer.answer && <div className="flex flex-wrap items-center gap-3 text-xs">
+          <button type="button" disabled={essayBusy || finalCurrent} className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 transition hover:bg-emerald-100 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            title="지금 글을 과거 자소서 자료에 저장합니다. 같은 문항을 다시 저장하면 새 글로 바뀝니다." onClick={() => void saveFinal(answer.question)}>
+            {busy === "final" ? "저장 중..." : final ? "최종본 다시 저장" : "최종본으로 저장"}
+          </button>
+          <button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button>
+        </div>}
+        <EssayReviewTools answer={answer} disabled={essayBusy} reviewing={reviewBusy} error={answerErrors[answer.question] || undefined}
           highlight={highlightQuestion === answer.question}
-          onRevise={(mode, text, findingIds) => startRevision(answer.question, mode, text, findingIds)}
-          onResearch={(request) => startResearch(answer.question, request)}
+          onReview={(focus) => startReview(answer.question, focus)}
           onAction={(action) => void answerAction(answer.question, action)} />
       </section>;
     })}

@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   return Response.json(getExperienceCardStatus(), { status: 202 });
 }
 
-// 사용자 확인/확인 취소 — 확인한 카드만 자기소개서 작성에 쓰인다.
+// 사용자 확인/확인 취소 — 확인하지 않은 카드는 자기소개서 자료에 "(미확인)"으로 표시된다.
 export async function PATCH(request: Request) {
   if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
   try {

@@ -82,17 +82,24 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
       else if (url.pathname.endsWith('/tasks')) { taskRequests++; data = { tasks }; }
       else if (url.pathname.endsWith('/fill/web')) { webRequests++; data = { token: 'a'.repeat(64) }; }
       else if (url.pathname.endsWith('/fill/document')) { const document = { total: 3, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' }; const task = { id: 'doc-' + tasks.length, kind: 'document', status: 'completed', done: 1, total: 1, result: { document } }; tasks.push(task); data = { task }; status = 202; }
-      else if (url.pathname.endsWith('/draft/question')) {
+      else if (url.pathname.endsWith('/draft/import')) {
+        const body = req.postDataJSON(); assert.equal(body.question, '팀의 문제를 해결한 경험을 설명해주세요.');
+        const answer = { question: body.question, countSpaces: true, guidance: '', source: 'user_question', intent: '', answer: body.answer, evidence: [], missingInfo: [], reviewNotes: [], status: 'draft', generatedAt: Date.now() };
+        saved = { ...saved, revision: 'imported', essayAnswers: [...saved.essayAnswers, answer] }; data = { draft: saved };
+      }
+      else if (url.pathname.endsWith('/draft/review')) {
         generationRequests++;
-        const body = req.postDataJSON().questions[0]; assert.equal(body.question, '팀의 문제를 해결한 경험을 설명해주세요.');
-        const answer = { ...body, source: 'user_question', intent: '문제 해결 과정의 판단과 행동', answer: '재현 절차를 기록하고 담당자와 확인 순서를 맞췄습니다.', evidence: [{ sourceId: 'memory.episode.test', quote: '재현 절차 기록', usedFor: '실제 행동' }], missingInfo: [], reviewNotes: [], status: 'draft', generatedAt: Date.now() };
-        const task = { id: 'writing', kind: 'writing', status: 'running', done: 0, total: 1 }; tasks.push(task); data = { task }; status = 202;
-        releaseWriting = () => { saved = { ...saved, revision: 'generated', essayAnswers: [...saved.essayAnswers, answer] }; task.status = 'completed'; task.done = 1; task.result = { draft: saved }; };
+        const { question } = req.postDataJSON();
+        const task = { id: 'review', kind: 'revision', question, status: 'running', done: 0, total: 1 }; tasks.push(task); data = { task }; status = 202;
+        releaseWriting = () => {
+          saved = { ...saved, revision: 'reviewed', essayAnswers: saved.essayAnswers.map((a) => a.question === question ? { ...a, feedback: { focus: '', baseText: a.answer, summary: '흐름이 자연스럽습니다.', strengths: [], issues: [], suggestions: [], createdAt: Date.now() } } : a) };
+          task.status = 'completed'; task.done = 1; task.result = { draft: saved, outcome: 'feedback' };
+        };
       } else if (url.pathname.endsWith('/draft')) {
         if (req.method() === 'PUT') {
           if (failSave) { data = { error: '테스트 저장 실패' }; status = 500; }
           else { saved = { ...req.postDataJSON(), revision: 'edited' }; data = { draft: saved }; }
-        } else data = { draft: saved, siteUrl: job.siteUrl, submissionMethod: { method: 'web_form', templateAttachments: [], consentAttachments: [], submissionEmail: null } };
+        } else data = { draft: saved, finals: [], siteUrl: job.siteUrl, submissionMethod: { method: 'web_form', templateAttachments: [], consentAttachments: [], submissionEmail: null } };
       } else { status = 400; data = { error: 'Unexpected API in fixture test' }; }
       await route.fulfill({ status, json: data });
     });
@@ -100,7 +107,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.goto(process.env.FINDAR_TEST_URL || 'http://localhost:3000');
     await page.getByText(job.title, { exact: true }).click();
     await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
-    await page.getByText('실제 문항에 맞춰 자기소개서 작성', { exact: true }).waitFor();
+    await page.getByRole('heading', { name: '자기소개서', exact: true }).waitFor();
     assert.equal(generationRequests, 0);
     await page.waitForTimeout(300);
     const idleRequests = taskRequests;
@@ -124,15 +131,20 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(webRequests, 1);
     await page.getByRole('button', { name: '문항별 자기소개서', exact: true }).click();
     console.log('PASS no idle polling, missing extension guidance, delayed extension handshake and connection');
-    await page.getByPlaceholder(/문항 1 — 실제 지원서/).fill('팀의 문제를 해결한 경험을 설명해주세요.');
-    await page.getByRole('button', { name: '이 문항 답변 작성', exact: true }).click();
-    await page.getByText(/백그라운드에서 문항을 작성합니다/).waitFor();
+    await page.getByLabel('지원서 문항', { exact: true }).fill('팀의 문제를 해결한 경험을 설명해주세요.');
+    await page.getByLabel('내가 쓴 답변', { exact: true }).fill('재현 절차를 기록하고 담당자와 확인 순서를 맞췄습니다.');
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+    await page.getByText(/자기소개서를 저장했습니다/).waitFor();
+    assert.equal(generationRequests, 0, 'saving an essay makes no AI call');
+    await page.getByRole('button', { name: '첨삭 받기', exact: true }).click();
+    await page.getByRole('button', { name: '첨삭 받기', exact: true }).click();
+    await page.getByText(/첨삭을 시작했습니다/).waitFor();
     await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).isEnabled(), true);
     await page.getByLabel('Word 지원서 양식').setInputFiles({ name: '동시작업.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('fixture') });
     await page.getByRole('button', { name: '개인정보·답변 채운 Word 만들기', exact: true }).click();
     await page.getByText(/Word 작성을 시작했습니다/).waitFor();
-    assert.ok(tasks.some(t => t.kind === 'writing' && t.status === 'running'));
+    assert.ok(tasks.some(t => t.kind === 'revision' && t.status === 'running'));
     assert.ok(tasks.some(t => t.kind === 'document'));
     await page.waitForTimeout(300);
     const runningRequests = taskRequests;
@@ -141,7 +153,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByRole('button', { name: '공고 상세', exact: true }).click();
     releaseWriting();
     await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
-    await page.getByText(/문항 1개를 작성하고 저장했습니다/).waitFor();
+    await page.getByText('흐름이 자연스럽습니다.', { exact: true }).waitFor();
     assert.equal(generationRequests, 1);
     const completedRequests = taskRequests;
     await page.waitForTimeout(4500);
@@ -159,7 +171,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(saved.essayAnswers[1].answer, '사용자가 직접 고친 문장입니다.');
     fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/ui.png', fullPage: true });
-    console.log('PASS UI background generation, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery');
+    console.log('PASS UI essay save without AI, background review, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery');
     await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
     const picker = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).click();

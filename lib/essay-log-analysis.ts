@@ -7,6 +7,7 @@ import { ANONYMIZED_SOURCE, HEDGE, inspectEssayStyle, OPINION_ENDING, type Style
 
 export const ESSAY_EVENT_ACTORS = {
   task_cancel_requested: "user",
+  outline_requested: "user", outline_generated: "ai", outline_failed: "system",
   draft_requested: "user", draft_generated: "ai", draft_failed: "system",
   answer_imported: "user", manual_edit: "user",
   revision_requested: "user", revision_proposed: "ai", revision_needs_info: "ai", revision_failed: "system",

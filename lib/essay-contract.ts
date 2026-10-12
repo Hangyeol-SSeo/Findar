@@ -1,5 +1,3 @@
-import type { EssayPlan } from "./essay-plan";
-
 export interface EssayRequest {
   question: string;
   maxChars?: number;
@@ -14,23 +12,11 @@ export type EssayVersionKind = "ai_draft" | "user_import" | "user_edit" | "ai_re
 export interface EssayVersion { id: string; answer: string; kind: EssayVersionKind; note: string; createdAt: number }
 export const MAX_ESSAY_VERSIONS = 10;
 
-// 첨삭 A(요청대로 고쳐쓰기)와 다시 구성의 결과. 바로 적용하지 않고 사용자가 비교 화면에서 반영/버리기를 고른다.
-// 다시 구성(scope=restructure)은 구상·소재를 새로 정하므로, 반영할 때 plan·intent도 함께 바꾼다.
-export type RevisionScope = "partial" | "restructure";
+// 예전 문단 다시 쓰기의 결과. 이제 만들지 않지만, 저장된 답변에 남아 있으면 작성 기록 보충(essay-log)이 읽는다.
 export interface PendingRevision {
   instruction: string; baseText: string; answer: string; changeSummary: string[];
   evidence: EssayEvidence[]; reviewNotes: string[]; createdAt: number;
   threadId?: string; // 작성 기록(essay-log)에서 요청·결과·반영을 잇는 id
-  scope?: RevisionScope;
-  plan?: EssayPlan;
-  intent?: string;
-}
-
-// 고쳐쓰기 요청이 글의 구성·소재·지원동기 전반을 문제 삼는지 보는 간단한 단서. 화면이 "다시 구성"을 권할 때만 쓰고,
-// 어느 쪽으로 보낼지는 사용자가 고른다. 실제 기록: "기본적인게 하나도 되어있지 않아 … 지원동기가 없고 … 기승전결부터".
-const STRUCTURAL_REQUEST = /구성|구조|흐름|기승전결|뼈대|소재|지원\s?동기(?:가|를|도)?\s?(?:없|부족|약)|처음부터|새로\s?(?:써|작성)|다시\s?(?:써|작성|구성)|전체적으로|전반적으로|문단\s?(?:순서|배치|구성)/;
-export function isStructuralRequest(text: string): boolean {
-  return STRUCTURAL_REQUEST.test(text);
 }
 // 첨삭 B(첨삭 받기)의 결과. 제안은 원문 구절을 바꾸는 단순 치환이라 반영할 때 AI를 다시 부르지 않는다.
 export interface EssaySuggestion {
@@ -43,20 +29,8 @@ export interface EssayFeedback {
   threadId?: string;
 }
 
-// 고쳐쓰기 요청이 자료에 없는 사실을 필요로 할 때 모델이 돌려준 질문. 오류가 아니라 사용자가 답할 보완 요청이다.
-export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string; scope?: RevisionScope }
-
-// 버튼을 눌렀을 때만 도는 업계 사례 조사. 후보 찾기(scoped) → 사용자가 자료와 구성 방향 선택 → 자료 정리(collected)
-// → 그 자료로 고쳐쓰기의 단계를 거쳐, 조사 중간에 사용자가 방향을 정할 수 있다.
-export interface ResearchCandidate { id: string; title: string; url: string; summary: string; publisher: string; date: string }
-export interface ResearchFinding { id: string; title: string; url: string; fact: string; quote: string; date: string }
-export interface IndustryResearch {
-  instruction: string; topic: string; stage: "scoped" | "collected";
-  directionQuestions: string[]; candidates: ResearchCandidate[];
-  direction: string; selectedIds: string[]; findings: ResearchFinding[];
-  notes: string[]; createdAt: number; updatedAt: number;
-  threadId?: string;
-}
+// 예전 고쳐쓰기의 보완 질문. PendingRevision과 같은 이유로 타입만 남긴다.
+export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string }
 
 export interface EssayAnswer extends EssayRequest {
   answer: string;
@@ -69,16 +43,13 @@ export interface EssayAnswer extends EssayRequest {
   generatedAt: number;
   targetRole?: string;
   roleRevision?: string;
-  plan?: EssayPlan;
-  researchSources?: EssaySource[];
   origin?: "generated" | "imported";
   versions?: EssayVersion[];
   // 직접 수정·제안 반영·버전 복원 뒤에는 evidence가 현재 본문을 검토한 결과가 아니다.
   evidenceStale?: boolean;
-  pendingRevision?: PendingRevision;
   feedback?: EssayFeedback;
-  revisionNeedsInfo?: RevisionNeedsInfo;
-  industryResearch?: IndustryResearch;
+  pendingRevision?: PendingRevision; // 예전 기능의 기록(새로 만들지 않음)
+  revisionNeedsInfo?: RevisionNeedsInfo; // 예전 기능의 기록(새로 만들지 않음)
 }
 
 // 기존 답변(versions 도입 전)도 현재 본문을 첫 버전으로 보고 이어서 쌓는다.
@@ -142,49 +113,4 @@ export function parseModelJson(text: string): Record<string, unknown> {
   catch (error) { throw new ModelJsonSyntaxError(error); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("작성 결과 형식이 올바르지 않습니다.");
   return value as Record<string, unknown>;
-}
-
-export function validateEssay(
-  value: Record<string, unknown>, request: EssayRequest, sources: EssaySource[], forbiddenNames: string[], allowReasoningOnly = false
-): EssayAnswer {
-  // 보완 질문(needs_info)에는 본문이 없으므로, 모델이 answer·intent를 아예 빼고 보내도 받아준다. "본문 또는 문항 해석이 없습니다"
-  // 실패의 주원인(수정 턴이 원래 지시를 잃음)은 작업 대화의 followUp으로 고쳤고, 이건 질문만 돌려준 응답을 위한 방어다.
-  if (value.status === "needs_info") {
-    for (const key of ["answer", "intent"]) value[key] ??= "";
-    for (const key of ["evidence", "reviewNotes"]) value[key] ??= [];
-  }
-  for (const key of ["answer", "intent"])
-    if (typeof value[key] !== "string") throw new Error("작성 결과에 본문 또는 문항 해석이 없습니다.");
-  const strings = (key: string): string[] => {
-    if (!Array.isArray(value[key]) || !(value[key] as unknown[]).every((x) => typeof x === "string"))
-      throw new Error("작성 결과의 검토 정보가 올바르지 않습니다.");
-    return value[key] as string[];
-  };
-  const answer = (value.answer as string).trim();
-  const missingInfo = strings("missingInfo");
-  const reviewNotes = strings("reviewNotes");
-  if (value.status !== "draft" && value.status !== "needs_info") throw new Error("작성 상태가 올바르지 않습니다.");
-  if (!Array.isArray(value.evidence)) throw new Error("답변의 근거가 없습니다.");
-  const evidence: EssayEvidence[] = value.evidence.map((item: unknown) => {
-    const e = item as EssayEvidence;
-    const source = e && sources.find((s) => s.id === e.sourceId);
-    if (!source || typeof e.quote !== "string" || !e.quote.trim() || !source.text.includes(e.quote) || typeof e.usedFor !== "string")
-      throw new Error("답변 근거가 저장된 원문과 일치하지 않습니다.");
-    return { sourceId: e.sourceId, quote: e.quote, usedFor: e.usedFor };
-  });
-  if (value.status === "needs_info") {
-    if (!missingInfo.length) throw new Error("보완할 경험을 확인하지 못했습니다.");
-    return { ...request, answer: "", intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "needs_info", source: "user_question", generatedAt: Date.now() };
-  }
-  if (!answer || (!evidence.length && !allowReasoningOnly)) throw new Error("근거 없는 답변은 저장하지 않습니다.");
-  if (hasBanmalEnding(answer))
-    throw new Error("답변에 반말 종결이 포함되어 있습니다. 모든 서술 문장을 존댓말로 다시 작성해주세요.");
-  if (request.maxChars && characterCount(answer, request.countSpaces) > request.maxChars)
-    throw new Error("답변이 글자 수 제한을 초과했습니다.");
-  if (containsForbiddenName(answer, forbiddenNames))
-    throw new Error("답변에 제외 대상 고유명사가 포함되어 있습니다.");
-  // A numeric claim must occur in the quoted evidence. Semantic equivalence is checked by the editor.
-  const supported = new Set(evidence.flatMap((e) => extractNumbers(e.quote)));
-  if (extractNumbers(answer).some((n) => !supported.has(n))) throw new Error("근거에서 확인되지 않는 수치가 포함되어 있습니다.");
-  return { ...request, answer, intent: value.intent as string, evidence, missingInfo, reviewNotes, status: "draft", source: "user_question", generatedAt: Date.now() };
 }

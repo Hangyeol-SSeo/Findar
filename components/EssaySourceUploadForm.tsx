@@ -15,9 +15,12 @@ interface SourceFile {
   entryCount: number; analyzedAt: number | null; error: string; entries: SourceEntry[];
   company: string; role: string; companyUnknown: boolean;
 }
+// 지원 도우미에서 "최종본으로 저장"한 답변. 파일 없이 바로 과거 자소서 자료가 된다.
+interface FinalEssay { id: string; seq?: string; company: string; context?: string; question: string; answer: string; createdAt: number }
 interface SourceState {
   files: SourceFile[];
   progress: { running: boolean; done: number; total: number; current: string };
+  finals?: FinalEssay[];
 }
 
 const STATUS_TEXT: Record<SourceFile["status"], { label: string; style: string }> = {
@@ -121,6 +124,23 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
     }
   }
 
+  async function removeFinal(final: FinalEssay) {
+    if (!window.confirm(`“${final.question.slice(0, 40)}” 최종본을 과거 자소서 자료에서 뺄까요? 지원 도우미의 답변은 그대로 남습니다.`)) return;
+    setBusy("delete");
+    setError("");
+    try {
+      const res = await fetch(`/api/essay-sources?final=${encodeURIComponent(final.id)}`, { method: "DELETE" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      setState(body);
+      showToast("뺐습니다");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "삭제에 실패했습니다.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function remove(file: SourceFile) {
     if (!window.confirm(`${file.name} 파일을 삭제할까요? 이 파일에서 추출한 ${file.entryCount}개 항목도 더 이상 쓰이지 않습니다.`)) return;
     setBusy("delete");
@@ -184,6 +204,7 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
   const needsAnalysis = state.files.some((f) => f.status === "not-analyzed" || f.status === "stale");
   const hasFailed = state.files.some((f) => f.status === "failed");
   const { progress } = state;
+  const finals = state.finals ?? [];
 
   return (
     <div className="space-y-4">
@@ -272,8 +293,31 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
           </div>
         </div>
 
+        {finals.length > 0 && (
+          <section className="space-y-1">
+            <h4 className="text-xs font-semibold text-gray-500">지원 도우미에서 저장한 최종본 {finals.length}개</h4>
+            <ul className="divide-y divide-gray-100">
+              {finals.map((f) => (
+                <li key={f.id} className="py-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <details className="min-w-0 flex-1 text-xs">
+                      <summary className="cursor-pointer">
+                        <span className="text-sm text-gray-800">{f.question.length > 60 ? `${f.question.slice(0, 60)}…` : f.question}</span>
+                        <span className="ml-2 text-gray-400">{[f.company, f.context, new Date(f.createdAt).toLocaleDateString("ko-KR")].filter(Boolean).join(" · ")}</span>
+                      </summary>
+                      <p className="mt-2 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 leading-5 text-gray-600">{f.answer}</p>
+                    </details>
+                    <button onClick={() => removeFinal(f)} disabled={!!busy || progress.running}
+                      className="shrink-0 text-xs text-gray-400 hover:text-red-600 disabled:opacity-40">빼기</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {state.files.length === 0 ? (
-          <p className="text-sm text-gray-400">아직 올린 자료가 없습니다.</p>
+          finals.length === 0 && <p className="text-sm text-gray-400">아직 올린 자료가 없습니다.</p>
         ) : (
           (Object.keys(KIND_LABEL) as Kind[]).map((k) => {
             const files = state.files.filter((f) => f.kind === k);
@@ -360,8 +404,8 @@ export default function EssaySourceUploadForm({ showToast }: { showToast: (msg: 
         )}
 
         <p className="text-xs leading-5 text-gray-400">
-          분석은 파일마다 한 번만 돌고, 새로 올리거나 바뀐 파일만 다시 분석합니다. 지금 분석하지 않아도 다음 자기소개서 작성 때 자동으로 분석됩니다.
-          문항·답변은 요약하지 않고 원문 그대로 옮겨 자기소개서 작성의 참고 자료로 씁니다.
+          분석은 파일마다 한 번만 돌고, 새로 올리거나 바뀐 파일만 다시 분석합니다. 문항·답변은 요약하지 않고 원문 그대로 옮겨 참고 자료로 씁니다.
+          지원 도우미에서 ‘최종본으로 저장’한 글은 파일을 올리지 않아도 여기에 바로 들어갑니다. 경험 카드에 반영하려면 경험 카드에서 다시 만들어주세요.
         </p>
       </div>
     </div>

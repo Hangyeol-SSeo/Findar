@@ -54,7 +54,7 @@ function load(relative) {
   assert.equal((await route.PUT(req({ role: '', revision: '' }), params)).status, 400);
   const current = db.getApplicationRole('a');
   const tasks = load('lib/application-tasks.ts');
-  const task = tasks.createApplicationTask('a', 'writing');
+  const task = tasks.createApplicationTask('a', 'revision');
   assert.equal((await route.PUT(req({ role: 'IB', revision: current.revision }), params)).status, 409);
   await tasks.executeApplicationTask(task.id, async () => ({}));
   assert.equal((await route.PUT(req({ role: 'IB', revision: current.revision }), params)).status, 200);
