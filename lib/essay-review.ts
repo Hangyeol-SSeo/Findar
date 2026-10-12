@@ -8,12 +8,13 @@ import { getApplicationRole, getCompanySections, getJobBySeq, listEssayEventRows
 import { getCachedProfile } from "./profile";
 import { readApplicantProfile } from "./applicant-profile";
 import { readNarrativeProfile } from "./narrative-profile";
-import { getCachedEssayBank, summarizeEditPreferences } from "./essay-bank";
+import { getCachedEssayBank, listFinalEssays, summarizeEditPreferences } from "./essay-bank";
+import { getCachedApplicationDraft } from "./application-draft";
 import { cardsCoverProfile, getAllCards, getConfirmedCards } from "./experience-cards";
 import { normalizeCompanyName } from "./company-normalize";
 import {
   characterCount, containsForbiddenName, extractNumbers, hasBanmalEnding, ModelJsonSyntaxError, parseModelJson,
-  type EssayFeedback, type EssaySuggestion,
+  type EssayAnswer, type EssayFeedback, type EssaySuggestion,
 } from "./essay-contract";
 import { metaPhrases, styleReviewNotes } from "./essay-style";
 import { logEssayEvent, newEssayThread } from "./essay-log";
@@ -79,7 +80,7 @@ export function buildEssayContext(seq: string, { requireRole = true } = {}) {
       card.team_result.length && `결과(팀): ${card.team_result.join("; ")}`, card.result_limitations.length && `한계: ${card.result_limitations.join("; ")}`,
       quotes.length && `원문: ${quotes.join(" ")}`].filter(Boolean).join("\n");
     const checked = confirmed.has(card.id);
-    materials.push({ id: `card.${card.id}`, label: `${checked ? "" : "(미확인) "}${clip(card.context, 60)}`, kind: "card",
+    materials.push({ id: `card.${card.id}`, label: `${checked ? "" : "(미확인) "}${clip(redact(card.context), 60)}`, kind: "card",
       text: clip(redact(`${checked ? "" : "[사용자가 아직 확인하지 않은 카드: 사실이 틀렸을 수 있다]\n"}${text}`), CAP.material) });
   }
   const keywords = selection.role.split(/\s+/).filter((w) => w.length > 1);
@@ -87,13 +88,13 @@ export function buildEssayContext(seq: string, { requireRole = true } = {}) {
   [...narrative.episodes]
     .sort((a, b) => relevance(`${b.situation} ${b.reasoning} ${b.tags.join(" ")}`) - relevance(`${a.situation} ${a.reasoning} ${a.tags.join(" ")}`) || b.createdAt - a.createdAt)
     .slice(0, 8)
-    .forEach((e) => materials.push({ id: `episode.${e.id}`, label: clip(e.title || e.situation, 60), kind: "episode",
+    .forEach((e) => materials.push({ id: `episode.${e.id}`, label: clip(redact(e.title || e.situation), 60), kind: "episode",
       text: clip(redact([`상황: ${e.situation}`, e.reasoning && `그때의 판단 기준: ${e.reasoning}`, e.lesson && `남은 것: ${e.lesson}`].filter(Boolean).join("\n")), CAP.material) }));
   // 이력서·지원 정보 경험이 아직 카드로 정리되지 않았으면 원래 이력을 직접 쓴다(경험이 빠지지 않게).
   if (!cardsCoverProfile()) {
-    profile?.projects.forEach((p, i) => materials.push({ id: `resume.${i}`, label: clip(`${p.role} — ${p.summary}`, 60), kind: "resume",
+    profile?.projects.forEach((p, i) => materials.push({ id: `resume.${i}`, label: clip(redact(`${p.role} — ${p.summary}`), 60), kind: "resume",
       text: clip(redact(`${p.role}\n${p.summary}`), CAP.material) }));
-    applicant.activities.forEach((a, i) => materials.push({ id: `activity.${i}`, label: clip(`${a.role || a.category} — ${a.detail}`, 60), kind: "activity",
+    applicant.activities.forEach((a, i) => materials.push({ id: `activity.${i}`, label: clip(redact(`${a.role || a.category} — ${a.detail}`), 60), kind: "activity",
       text: clip(redact(`${a.category} · ${a.role}\n${a.detail}`), CAP.material) }));
   }
 
@@ -183,6 +184,43 @@ async function askJson(prompt: string, model: string, key: string, signal?: Abor
     throwIfAIAborted();
     return parseModelJson(await askOnce(`${prompt}\n\n[이전 응답: JSON 문법이 깨져 있었다]\n${raw}\n위 응답의 내용은 그대로 두고 JSON 문법만 바로잡아 유효한 JSON 객체만 반환하라.`, model, key, signal));
   }
+}
+
+// ── 대화 세션용 자료 ─────────────────────────────────────
+
+// 대화 세션에서 자기소개서를 쓸 때 한 번에 읽는 자료(GET /api/applications/[seq]/essay-context). AI 호출 없음.
+// 세션이 DB·JSON 파일을 하나씩 뒤지면 토큰이 들고 자료를 빠뜨려서, 첨삭과 같은 자료(이름 가리기 포함)를 글 한 덩어리로 준다.
+// 지원 직무를 고르기 전에도 나온다.
+export function essayContextDocument(seq: string, opts: { baseUrl: string; researchNotice?: string | null }): string {
+  const ctx = buildEssayContext(seq, { requireRole: false });
+  const job = getJobBySeq(seq)!;
+  const finals = listFinalEssays(seq);
+  const answers = (getCachedApplicationDraft(seq)?.essayAnswers ?? []).filter((a): a is EssayAnswer => a.source === "user_question" && !!a.answer.trim());
+  const section = (title: string, body: string) => (body.trim() ? `## ${title}\n${body.trim()}` : "");
+  const limit = (a: { maxChars?: number; countSpaces: boolean }) => (a.maxChars ? ` (${a.maxChars.toLocaleString()}자 이내, 공백 ${a.countSpaces ? "포함" : "제외"})` : "");
+  return [
+    `# Findar 자기소개서 자료 — ${job.company} / ${job.title} (seq=${seq})`,
+    `지원 직무: ${ctx.role || "아직 고르지 않음 — 공고에 모집 직무가 여러 개면 사용자에게 어느 직무인지 묻는다"}`,
+    "[비공개 명칭]은 다른 회사·학교·프로젝트 이름을 가린 것이다. 글에 넣지 않는다.",
+    section("작성 기준 (사용자가 실제 첨삭에서 요구한 것)", ESSAY_GUIDE.replace(/^\[자기소개서 작성 기준\]\n/, "")),
+    section("공고", ctx.job),
+    section("회사 자료 (회사 리서치의 개요·인재상, 잘라서 줌)", [opts.researchNotice ? `주의: ${opts.researchNotice}` : "", ctx.companyText.replace(/^#+\s*/gm, "")].filter(Boolean).join("\n\n")),
+    section("지원자 기본 정보", ctx.facts),
+    section("가치관·지원 방향 (본인이 직접 쓴 것)", ctx.values),
+    section("경험 자료 (경험 카드·서사. ‘(미확인)’은 사용자가 아직 사실 확인을 하지 않은 카드)",
+      ctx.materials.map((m) => `### ${m.label}\n${m.text}`).join("\n\n")),
+    section("문체 참고 (사실 근거가 아니라 말투 참고)", ctx.style),
+    section("이 공고에 저장된 자기소개서", answers.map((a) => {
+      const final = finals.find((f) => f.question === a.question);
+      const mark = final ? (final.answer === a.answer.trim() ? " [최종본 저장됨]" : " [최종본 저장 후 고침]") : "";
+      return `### ${a.question}${limit(a)}${mark}\n${a.answer}`;
+    }).join("\n\n")),
+    section("저장", [
+      "완성한 글은 사용자가 Findar 지원 도우미 → 문항별 자기소개서 → ‘자기소개서 저장’에 붙여 넣는다.",
+      `사용자가 대신 저장해 달라고 하면: GET ${opts.baseUrl}/api/applications/${seq}/draft 의 draft.revision(없으면 null)을 읽고,`,
+      `POST ${opts.baseUrl}/api/applications/${seq}/draft/import 에 JSON {"question", "maxChars", "countSpaces", "answer", "revision"}을 보낸다. 같은 문항은 새 버전으로 바뀐다.`,
+    ].join("\n")),
+  ].filter(Boolean).join("\n\n");
 }
 
 // ── 점검 ─────────────────────────────────────────────────

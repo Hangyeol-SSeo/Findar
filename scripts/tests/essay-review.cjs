@@ -152,5 +152,16 @@ const check = (t, r) => review.checkEssay('S', t, r);
   bank.deleteFinalEssay(firstId);
   assert.equal(bank.listFinalEssays('S').length, 0);
   assert.throws(() => bank.deleteFinalEssay('old'), /찾을 수 없습니다/, 'uploaded entries cannot be deleted as finals');
-  console.log('PASS essay review: redacted context, save without role or AI, warnings only (no applicant-number check), checks refresh on edit and applied suggestion, review filters suggestions with syntax retry, final save upserts into the essay bank');
+  // 7) 대화 세션용 자료: 지원 직무 없이도 나오고, 이름은 가리고, 이 공고에 저장된 글과 저장 방법을 담는다.
+  role = { role: '', revision: '' };
+  revision.importEssay('S', { question: '입사 후 포부', maxChars: 500, answer: '포부 본문입니다.' }, draft().revision ?? null, check);
+  const doc = review.essayContextDocument('S', { baseUrl: 'http://localhost:3000', researchNotice: '회사 리서치가 오래됐습니다.' });
+  assert.ok(doc.startsWith('# Findar 자기소개서 자료 — 가상증권'));
+  assert.ok(doc.includes('아직 고르지 않음') && doc.includes('주의: 회사 리서치가 오래됐습니다.'));
+  assert.ok(doc.includes('### (미확인) ') && !doc.includes('다른증권') && !doc.includes('가상대학교'), 'materials are labeled and names redacted');
+  assert.ok(doc.includes('### 입사 후 포부 (500자 이내, 공백 포함)\n포부 본문입니다.'));
+  assert.ok(doc.includes('/api/applications/S/draft/import'));
+  assert.equal(prompts.length, 2, 'the context document makes no AI call');
+  role = { role: '리스크관리팀 신입', revision: 'r1' };
+  console.log('PASS essay review: redacted context, save without role or AI, warnings only (no applicant-number check), checks refresh on edit and applied suggestion, review filters suggestions with syntax retry, final save upserts into the essay bank, conversation context document');
 })().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => { process.chdir(root); fs.rmSync(work, { recursive: true, force: true }); });

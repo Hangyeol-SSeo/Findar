@@ -319,6 +319,14 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     </p>}
     {workspace === "essay" && <><section className="space-y-3">
       <div><h3 className="font-semibold text-gray-800">자기소개서</h3><p className="mt-1 text-xs leading-5 text-gray-500">대화에서 쓴 글을 문항과 함께 저장해 두세요. 저장한 글은 직접 고치고, 첨삭을 받고, 이전 버전으로 되돌릴 수 있습니다. 다 되면 ‘최종본으로 저장’을 누르세요. 따로 파일을 올리지 않아도 과거 자소서 자료에 들어가 다음 자기소개서와 경험 카드에 쓰입니다.</p></div>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-600">
+        <button type="button" className="rounded-md border border-blue-200 bg-white px-2.5 py-1 font-medium text-blue-700 hover:bg-blue-50 active:scale-95"
+          onClick={() => run("copy", async () => {
+            await navigator.clipboard.writeText(`Findar 공고 seq=${seq} 자기소개서를 같이 쓰자. 먼저 curl -s ${location.origin}/api/applications/${seq}/essay-context 로 공고·회사·경험 자료를 읽고, 문항을 물어봐줘.`);
+            setNotice("대화 시작 문장을 복사했습니다. Claude 대화창에 붙여 넣으면 이 공고 자료를 한 번에 읽고 시작합니다.");
+          })}>대화로 쓰기</button>
+        <span>Claude 대화창에 붙여 넣을 시작 문장을 복사합니다. 대화가 이 공고의 공고·회사·경험 자료를 한 번에 읽습니다.</span>
+      </div>
       <EssayImportForm disabled={essayBusy} defaultOpen={!currentAnswers.length} onImport={importAnswer} />
     </section>
     {currentAnswers.map(({ a, index }) => {
