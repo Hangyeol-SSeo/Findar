@@ -11,7 +11,7 @@ export default function ApplicationTaskCancelButton({ task, onUpdate, onError }:
   const [pending, setPending] = useState(false);
   if (!taskActive(task)) return null;
   const cancelling = pending || task.status === "cancelling";
-  const label = task.kind === "writing" ? "자기소개서" : task.kind === "revision" ? "첨삭" : task.kind === "tailoring" ? "이력 평가" : "Word 입력";
+  const label = task.kind === "revision" ? "첨삭" : task.kind === "tailoring" ? "이력 평가" : "Word 입력";
   async function cancel() {
     setPending(true);
     try {

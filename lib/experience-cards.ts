@@ -15,8 +15,8 @@ import { buildApplicantItems, type ResumeItem } from "./resume-tailoring-contrac
 //  - 이력서 PDF의 항목 목록(resume-inventory)과 지원 정보의 경험 항목 — 사용자의 1차 이력(특정 회사용 각색 아님)
 //  - 올린 과거 자소서·면접 대본과 "자료로 저장"한 답변(essay-bank) — 특정 회사에 맞춰 각색됐을 수 있는 2차 자료
 // 같은 사건이 여러 곳에 나오면 하나로 묶는다. 카드 형식과 규칙은 cover-letter-team의 경험카드 스키마·검증 질문·구체성 규칙
-// 원문(skills/vendor)을 그대로 쓴다. 이력서까지 카드로 정리되면 작성에는 원본 이력 대신 확인한 카드만 쓰인다(collectContext).
-// 원본 스킬과 같이 **사용자가 설정 화면에서 확인한 카드만** 자기소개서 작성에 쓰인다(collectContext).
+// 원문(skills/vendor)을 그대로 쓴다. 이력서까지 카드로 정리되면 첨삭 자료에는 원본 이력 대신 카드가 쓰인다(lib/essay-review.ts).
+// 사용자는 설정 화면에서 사실과 맞는 카드를 확인하고, 확인하지 않은 카드는 "(미확인)"으로 표시해 참고만 한다.
 // 카드 내용이 바뀌면 확인은 무효다 — 확인 기록에 내용 해시를 남기고, 다시 만들 때 해시가 같은 카드만 확인을 이어받는다.
 
 const STORE_PATH = join(process.cwd(), "data", "experience-cards.json");
@@ -300,7 +300,7 @@ export function setCardConfirmed(id: string, confirmed: boolean): ExperienceCard
   return updated;
 }
 
-// 자기소개서 구성 확인에서 고를 수 있는 카드 전체. 확인 전 카드도 사용자가 구성에서 직접 보고 고르면 쓴다(lib/essay-writer.ts).
+// 카드 전체. 확인 전 카드도 "(미확인)" 표시를 달아 첨삭 자료에 넣는다(lib/essay-review.ts).
 export function getAllCards(): ExperienceCard[] {
   return readStore().cards;
 }

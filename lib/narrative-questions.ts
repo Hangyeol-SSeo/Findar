@@ -1,6 +1,6 @@
 // 자소서 문항과 달리 이건 공고와 무관하게 한 번만 물어보면 되는 질문들이다. 서버(초안
 // 생성 프롬프트가 참고하는 요약)와 클라이언트(설정 페이지 질문 카드) 양쪽이 같은 목록을
-// 써야 해서 lib/essay-questions.ts와 동일한 패턴으로 분리해둔다.
+// 써야 해서 lib/application-status.ts와 동일한 패턴으로 분리해둔다.
 export interface NarrativeSeedQuestion {
   id: string; // 안정적 key. NarrativeEpisode.promptId가 이걸 참조 — 질문 문구를 나중에
   // 다듬어도 과거에 저장된 답변의 연결이 깨지지 않는다.

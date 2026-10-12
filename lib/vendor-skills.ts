@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// skills/vendor/의 외부 스킬 원문(MIT)에서 필요한 절만 골라 쓴다. 지금은 경험 카드 추출에만 쓴다 — 자기소개서 작성은
-// lib/essay-writer.ts의 짧은 작성 기준으로 바뀌었다. 원문 파일은 고치지 않는다. 출처와 커밋은 skills/vendor/README.md.
+// skills/vendor/의 외부 스킬 원문(MIT)에서 필요한 절만 골라 쓴다. 지금은 경험 카드 추출에만 쓴다 — 자기소개서는 대화 세션에서
+// 쓰고, 첨삭은 lib/essay-review.ts의 짧은 작성 기준을 쓴다. 원문 파일은 고치지 않는다. 출처와 커밋은 skills/vendor/README.md.
 
 const VENDOR_DIR = join(process.cwd(), "skills", "vendor");
 const CLT = "cover-letter-team";

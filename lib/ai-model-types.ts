@@ -6,7 +6,7 @@ export const AI_FEATURES = [
   { id: "resumeInventory", label: "이력서 항목 추출", description: "이력서의 경험과 자격을 빠짐없이 정리합니다." },
   { id: "resumeTailoring", label: "이력 구성 평가", description: "공고에 맞춰 강조하거나 줄일 이력을 판단합니다." },
   { id: "essayBank", label: "자기소개서 소재 추출", description: "기존 자기소개서에서 참고할 경험을 추출합니다." },
-  { id: "applicationDraft", label: "자기소개서 작성", description: "구성 제안, 작성, 문단 다시 쓰기, 첨삭 받기에 사용합니다." },
+  { id: "applicationDraft", label: "자기소개서 첨삭", description: "지원 도우미의 첨삭 받기에 사용합니다. 글은 대화 세션에서 씁니다." },
   { id: "applicationFill", label: "지원서 입력칸 매핑", description: "저장된 지원 정보와 실제 입력칸을 연결합니다." },
 ] as const;
 

@@ -12,7 +12,7 @@ export type EssayVersionKind = "ai_draft" | "user_import" | "user_edit" | "ai_re
 export interface EssayVersion { id: string; answer: string; kind: EssayVersionKind; note: string; createdAt: number }
 export const MAX_ESSAY_VERSIONS = 10;
 
-// 문단 다시 쓰기의 결과. 바로 적용하지 않고 사용자가 비교 화면에서 반영/버리기를 고른다.
+// 예전 문단 다시 쓰기의 결과. 이제 만들지 않지만, 저장된 답변에 남아 있으면 작성 기록 보충(essay-log)이 읽는다.
 export interface PendingRevision {
   instruction: string; baseText: string; answer: string; changeSummary: string[];
   evidence: EssayEvidence[]; reviewNotes: string[]; createdAt: number;
@@ -29,20 +29,8 @@ export interface EssayFeedback {
   threadId?: string;
 }
 
-// 고쳐쓰기 요청이 자료에 없는 사실을 필요로 할 때 모델이 돌려준 질문. 오류가 아니라 사용자가 답할 보완 요청이다.
+// 예전 고쳐쓰기의 보완 질문. PendingRevision과 같은 이유로 타입만 남긴다.
 export interface RevisionNeedsInfo { instruction: string; questions: string[]; createdAt: number; threadId?: string }
-
-// 작성 전 구성 확인 단계. AI가 문항마다 핵심 메시지·문단 구성·쓸 경험·회사 근거·확인 질문을 제안하고, 사용자가 고친 뒤
-// 그 구성대로 작성한다. materials는 작성 자료 목록(essay-writer.ts listEssayMaterials)의 id다.
-export interface OutlineParagraph { role: string; materials: string[]; note: string }
-export interface OutlineQuestion { question: string; answer: string }
-export interface EssayOutline extends EssayRequest {
-  message: string;
-  paragraphs: OutlineParagraph[];
-  companyFacts: { text: string; use: boolean }[];
-  questions: OutlineQuestion[];
-  createdAt: number;
-}
 
 export interface EssayAnswer extends EssayRequest {
   answer: string;
@@ -55,14 +43,13 @@ export interface EssayAnswer extends EssayRequest {
   generatedAt: number;
   targetRole?: string;
   roleRevision?: string;
-  outline?: EssayOutline; // 이 답변을 쓸 때 확정한 구성
   origin?: "generated" | "imported";
   versions?: EssayVersion[];
   // 직접 수정·제안 반영·버전 복원 뒤에는 evidence가 현재 본문을 검토한 결과가 아니다.
   evidenceStale?: boolean;
-  pendingRevision?: PendingRevision;
   feedback?: EssayFeedback;
-  revisionNeedsInfo?: RevisionNeedsInfo;
+  pendingRevision?: PendingRevision; // 예전 기능의 기록(새로 만들지 않음)
+  revisionNeedsInfo?: RevisionNeedsInfo; // 예전 기능의 기록(새로 만들지 않음)
 }
 
 // 기존 답변(versions 도입 전)도 현재 본문을 첫 버전으로 보고 이어서 쌓는다.
@@ -127,11 +114,3 @@ export function parseModelJson(text: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("작성 결과 형식이 올바르지 않습니다.");
   return value as Record<string, unknown>;
 }
-
-// 빈 줄로 나뉜 문단(빈 줄이 없으면 줄 단위). 문단 다시 쓰기가 고칠 문단을 고르고, 다시 붙일 때 원래 구분을 쓴다.
-export function splitParagraphs(text: string): { paragraphs: string[]; separator: string } {
-  const blank = /\n\s*\n/.test(text);
-  return { paragraphs: text.split(blank ? /\n\s*\n/ : /\n/).map((p) => p.trim()).filter(Boolean), separator: blank ? "\n\n" : "\n" };
-}
-
-export const FIT_LENGTH_REQUEST = "글자 수 제한에 맞게 줄여주세요. 핵심 경험과 주장은 남기고 덜 중요한 문장부터 덜어내주세요.";

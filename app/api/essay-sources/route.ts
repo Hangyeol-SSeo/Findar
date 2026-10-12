@@ -1,5 +1,5 @@
 import { isSameOrigin } from "@/lib/request-origin";
-import { getEssayBankProgress, getEssaySourceStatus, setEssaySourceMeta } from "@/lib/essay-bank";
+import { deleteFinalEssay, getEssayBankProgress, getEssaySourceStatus, listFinalEssays, setEssaySourceMeta } from "@/lib/essay-bank";
 import { syncCardOrigins } from "@/lib/experience-cards";
 import {
   deleteEssaySource, ESSAY_SOURCE_KIND_LABEL, isEssaySourceKind, MAX_ESSAY_SOURCES_PER_KIND, parseEssaySourceMeta, saveEssaySourceFile, saveEssaySourceText,
@@ -8,7 +8,9 @@ import {
 export const runtime = "nodejs";
 
 function snapshot() {
-  return { files: getEssaySourceStatus(), progress: getEssayBankProgress() };
+  // finals: 지원 도우미에서 "최종본으로 저장"한 답변. 파일 없이 바로 과거 자소서 자료가 된다.
+  const finals = listFinalEssays().map(({ id, seq, company, context, question, answer, createdAt }) => ({ id, seq, company, context, question, answer, createdAt }));
+  return { files: getEssaySourceStatus(), progress: getEssayBankProgress(), finals };
 }
 
 // 올린 과거 자소서·면접 대본 목록과 파일별 분석 결과. AI 호출 없음.
@@ -18,7 +20,7 @@ export async function GET() {
 
 // multipart/form-data(kind + files 여러 개 + 선택 company·role) 또는 JSON({kind, title, text, company?, role?}: 붙여넣기).
 // company·role은 그 글을 낸 회사·직무로, AI 추출보다 우선하는 출처 정보다. 저장만 하고 분석은
-// /api/essay-sources/analyze 또는 다음 자기소개서 작성 때 한 번만 돈다.
+// /api/essay-sources/analyze("지금 분석")에서 한 번만 돈다.
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
   const saved: string[] = [];
@@ -65,6 +67,11 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
   const params = new URL(request.url).searchParams;
+  const final = params.get("final");
+  if (final) {
+    try { deleteFinalEssay(final); } catch (e) { return Response.json({ error: e instanceof Error ? e.message : "삭제하지 못했습니다." }, { status: 404 }); }
+    return Response.json(snapshot());
+  }
   const kind = params.get("kind");
   if (!isEssaySourceKind(kind) || !deleteEssaySource(kind, params.get("name") ?? ""))
     return Response.json({ error: "파일을 찾을 수 없습니다." }, { status: 404 });

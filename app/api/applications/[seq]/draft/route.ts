@@ -2,10 +2,10 @@ import { isSameOrigin } from "@/lib/request-origin";
 import { getCachedApplicationDraft } from "@/lib/application-draft";
 import { saveApplicationDraft, getJobBySeq } from "@/lib/db";
 import { detectSubmissionMethod } from "@/lib/application-method";
-import { recordManualEdit } from "@/lib/essay-revision";
+import { finalSummaries, recordManualEdit } from "@/lib/essay-revision";
 import { companyResearchNotice } from "@/lib/company-research";
 import { normalizeCompanyName } from "@/lib/company-normalize";
-import { listEssayMaterials } from "@/lib/essay-writer";
+import { checkEssay } from "@/lib/essay-review";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ seq: string }> }) {
   const { seq } = await params;
@@ -14,12 +14,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ seq
   return Response.json({ draft: getCachedApplicationDraft(seq), siteUrl: job.siteUrl,
     submissionMethod: detectSubmissionMethod(job.attachments, job.rawContent, job.siteUrl),
     companyResearchNotice: companyResearchNotice(normalizeCompanyName(job.company)),
-    // 구성 확인 화면의 "쓸 경험" 선택 목록(AI 호출 없음).
-    materials: listEssayMaterials(seq) });
+    // 최종본으로 저장한 답변(과거 자소서 자료에 들어간 글). AI 호출 없음.
+    finals: finalSummaries(seq) });
 }
 
 export async function POST() {
-  return Response.json({ error: "실제 지원서 문항을 입력한 뒤 문항별 작성을 이용해주세요." }, { status: 400 });
+  return Response.json({ error: "자기소개서는 문항과 함께 저장해주세요." }, { status: 400 });
 }
 
 export async function PUT(request: Request, { params }: { params: Promise<{ seq: string }> }) {
@@ -37,7 +37,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ seq:
     // 문항별 답변은 직접 고칠 때마다 버전을 남기고 수정 성향을 기록한다. 이전 방식 공통 답변은 본문만 바꾼다.
     const draft = { ...current, revision: crypto.randomUUID(), essayAnswers: current.essayAnswers.map((a, i) => {
       const text = body.essayAnswers[i].answer as string;
-      return a.source === "user_question" ? recordManualEdit(seq, a, text) : { ...a, answer: text };
+      return a.source === "user_question" ? recordManualEdit(seq, a, text, (t, r) => checkEssay(seq, t, r)) : { ...a, answer: text };
     }) };
     saveApplicationDraft(seq, JSON.stringify(draft), current.model);
     return Response.json({ draft });

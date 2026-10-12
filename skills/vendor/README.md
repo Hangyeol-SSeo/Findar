@@ -13,6 +13,6 @@
 |---|---|
 | 경험 카드 추출 (`lib/experience-cards.ts`) | `cover-letter-team/prompts/interviewer.md` — 경험카드 스키마, 검증 질문, 구체성 규칙 |
 
-자기소개서 작성(구성 제안 → 작성 → 문단 다시 쓰기 → 첨삭 받기)은 외부 스킬 원문 대신 `lib/essay-writer.ts`의 짧은 작성 기준을 쓴다.
+자기소개서는 대화 세션에서 쓰고, 웹의 첨삭 받기는 외부 스킬 원문 대신 `lib/essay-review.ts`의 짧은 작성 기준을 쓴다.
 예전에 함께 쓰던 `jasoseo-plugin`(KangRyun/jasoseo-plugin)과 `im-not-ai`(epoko77-ai/im-not-ai)는 작성 파이프라인을 단순화하면서 뺐다.
 원문의 대화형 인터뷰·작업 폴더·YAML 파일·승인 해시는 Findar의 저장소(올린 과거 자소서·면접 대본)와 설정 화면의 카드 확인으로 대체된다.

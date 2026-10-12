@@ -1,16 +1,18 @@
 import { throwIfAIAborted } from "./ai-operation";
 import { randomUUID } from "node:crypto";
-import { requireApplicationRole } from "./application-role";
-import { saveApplicationDraft } from "./db";
+import { getApplicationRole, getJobBySeq, saveApplicationDraft } from "./db";
 import { getCachedApplicationDraft, type ApplicationDraft } from "./application-draft";
-import { recordEditSignals } from "./essay-bank";
+import { listFinalEssays, recordEditSignals, saveFinalEssay } from "./essay-bank";
 import { changedPairs } from "./essay-diff";
 import { logEssayEvent, logEssayEvents, type EssayEventInput } from "./essay-log";
 import { locateInEssay } from "./essay-log-analysis";
-import { parseEssayRequest, withVersion, type EssayAnswer, type EssaySuggestion } from "./essay-contract";
+import { parseEssayRequest, withVersion, type EssayAnswer, type EssayRequest, type EssaySuggestion } from "./essay-contract";
 
-// 저장된 답변을 다루는 동작: 내 글 가져오기, 문단 다시 쓰기 결과 반영/버리기, 첨삭 제안 반영/넘기기, 버전 복원, 직접 수정.
-// 모두 AI 호출 없이 저장된 결과만 다룬다. AI가 쓰고 고치는 일은 lib/essay-writer.ts가 한다.
+// 저장된 답변을 다루는 동작: 자기소개서 저장, 직접 수정, 첨삭 제안 반영/넘기기, 버전 복원, 최종본 저장.
+// 모두 AI 호출 없이 저장된 결과만 다룬다. 글은 대화 세션에서 쓰고, AI 첨삭은 lib/essay-review.ts가 한다.
+
+// 본문이 바뀔 때마다 도는 점검(lib/essay-review.ts checkEssay). 결과는 검토 메모로 바꿔 넣는다 — 늘 지금 글을 본 결과다.
+export type EssayCheck = (text: string, request: Pick<EssayRequest, "maxChars" | "countSpaces">) => string[];
 
 export class EssayConflictError extends Error {}
 
@@ -40,28 +42,28 @@ export function updateEssayAnswer(seq: string, question: string, update: (answer
   return next;
 }
 
-// 내 글 가져오기: AI 없이 직접 쓴 답변을 문항에 저장한다. 같은 문항이 있으면 이전 글은 버전 기록에 남는다.
-export function importEssay(seq: string, input: { question: unknown; maxChars?: unknown; countSpaces?: unknown; answer: unknown }, expectedRevision: string | null): ApplicationDraft {
+// 자기소개서 저장: 대화 세션 등에서 쓴 답변을 문항에 저장한다. 같은 문항이 있으면 이전 글은 버전 기록에 남는다.
+export function importEssay(seq: string, input: { question: unknown; maxChars?: unknown; countSpaces?: unknown; answer: unknown }, expectedRevision: string | null, check?: EssayCheck): ApplicationDraft {
   const request = parseEssayRequest({ question: input.question, maxChars: input.maxChars, countSpaces: input.countSpaces });
   if (typeof input.answer !== "string" || !input.answer.trim() || input.answer.length > 30000)
     throw new Error("가져올 답변을 1~30,000자로 입력해주세요.");
   const text = input.answer.trim();
-  const selection = requireApplicationRole(seq);
+  // 지원 직무를 고르기 전에도 저장할 수 있다. 고른 직무가 있으면 최종본 자료에 함께 남긴다.
+  const selection = getApplicationRole(seq);
   const draft = getCachedApplicationDraft(seq);
   if ((draft?.revision ?? null) !== expectedRevision)
     throw new EssayConflictError("다른 창에서 답변이 바뀌었습니다. 지원 도우미를 다시 열어주세요.");
   const previous = draft?.essayAnswers.find((a) => isUserAnswer(a, request.question));
   const now = Date.now();
   const imported: EssayAnswer = {
-    ...request, guidance: previous?.guidance ?? "", answer: text,
-    intent: "직접 작성한 답변입니다. 문단 다시 쓰기나 첨삭 받기로 다듬을 수 있습니다.",
-    evidence: [], missingInfo: [], reviewNotes: [], status: "draft", source: "user_question", generatedAt: now,
-    targetRole: selection.role, roleRevision: selection.revision, origin: "imported",
+    ...request, guidance: previous?.guidance ?? "", answer: text, intent: "",
+    evidence: [], missingInfo: [], reviewNotes: check?.(text, request) ?? [], status: "draft", source: "user_question", generatedAt: now,
+    targetRole: selection.role || undefined, roleRevision: selection.revision || undefined, origin: "imported",
     versions: previous ? withVersion(previous, text, "user_import", "직접 쓴 글 가져오기")
       : [{ id: randomUUID(), answer: text, kind: "user_import", note: "", createdAt: now }],
   };
   const next: ApplicationDraft = {
-    seq, personalFields: draft?.personalFields ?? [], notesForUser: draft?.notesForUser ?? [], outlines: draft?.outlines,
+    seq, personalFields: draft?.personalFields ?? [], notesForUser: draft?.notesForUser ?? [],
     essayAnswers: [...(draft?.essayAnswers ?? []).filter((a) => !isUserAnswer(a, request.question)), imported],
     model: draft?.model ?? "", generatedAt: draft?.generatedAt ?? now, revision: randomUUID(),
   };
@@ -76,42 +78,19 @@ function suggestionDetail(s: EssaySuggestion, text: string) {
 }
 
 export type EssayAnswerAction =
-  | { action: "accept-revision" }
-  | { action: "discard-revision" }
   | { action: "apply-suggestion"; suggestionId: string }
   | { action: "dismiss-suggestion"; suggestionId: string }
   | { action: "close-feedback" }
-  | { action: "dismiss-needs-info" }
   | { action: "restore-version"; versionId: string };
 
 // 화면의 즉시 처리 동작들. 모두 AI 호출 없이 저장된 결과만 다룬다.
-export function applyEssayAnswerAction(seq: string, question: string, input: EssayAnswerAction, expectedRevision: string | null): ApplicationDraft {
+export function applyEssayAnswerAction(seq: string, question: string, input: EssayAnswerAction, expectedRevision: string | null, check?: EssayCheck): ApplicationDraft {
   const signals: Parameters<typeof recordEditSignals>[0] = [];
   const events: EssayEventInput[] = [];
   const log = (event: Omit<EssayEventInput, "seq" | "question">) => events.push({ seq, question, ...event });
+  const notes = (answer: EssayAnswer, text: string) => checkedNotes(answer, text, check);
   const draft = updateEssayAnswer(seq, question, (answer) => {
     switch (input.action) {
-      case "accept-revision": {
-        const pending = answer.pendingRevision;
-        if (!pending) throw new Error("반영할 수정본이 없습니다.");
-        if (answer.answer !== pending.baseText)
-          throw new Error("수정을 요청한 뒤 글이 바뀌어 비교 결과가 맞지 않습니다. 버리고 다시 요청해주세요.");
-        signals.push(...changedPairs(pending.baseText, pending.answer).slice(0, 3).map((p) => ({ kind: "accepted" as const, category: "문단 다시 쓰기", ...p })));
-        log({ type: "revision_accepted", threadId: pending.threadId, textBefore: pending.baseText, textAfter: pending.answer,
-          detail: { instruction: pending.instruction, proposedAt: pending.createdAt } });
-        return {
-          ...answer, answer: pending.answer, evidence: pending.evidence, reviewNotes: pending.reviewNotes,
-          status: "draft", missingInfo: [], evidenceStale: false, pendingRevision: undefined,
-          versions: withVersion(answer, pending.answer, "ai_revision", pending.instruction.slice(0, 80)),
-        };
-      }
-      case "discard-revision": {
-        const pending = answer.pendingRevision;
-        if (pending) log({ type: "revision_discarded", threadId: pending.threadId, textBefore: answer.answer, detail: {
-          instruction: pending.instruction, proposedAnswer: pending.answer, changeSummary: pending.changeSummary, proposedAt: pending.createdAt,
-        } });
-        return { ...answer, pendingRevision: undefined };
-      }
       case "apply-suggestion": {
         const suggestion = answer.feedback?.suggestions.find((s) => s.id === input.suggestionId && s.status === "pending");
         if (!suggestion || !answer.feedback) throw new Error("반영할 제안을 찾을 수 없습니다.");
@@ -125,7 +104,7 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
         signals.push({ kind: "accepted", category: suggestion.category, before: suggestion.original, after: suggestion.replacement });
         log({ type: "suggestion_applied", threadId: answer.feedback.threadId, textBefore: answer.answer, textAfter: text, detail: suggestionDetail(suggestion, answer.answer) });
         return {
-          ...answer, answer: text, evidenceStale: true,
+          ...answer, answer: text, ...notes(answer, text),
           versions: withVersion(answer, text, "suggestion", suggestion.category),
           feedback: { ...answer.feedback, suggestions: answer.feedback.suggestions.map((s) => (s.id === suggestion.id ? { ...s, status: "applied" as const } : s)) },
         };
@@ -147,10 +126,6 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
         } });
         return { ...answer, feedback: undefined };
       }
-      case "dismiss-needs-info":
-        if (answer.revisionNeedsInfo) log({ type: "needs_info_dismissed", threadId: answer.revisionNeedsInfo.threadId,
-          detail: { instruction: answer.revisionNeedsInfo.instruction, questions: answer.revisionNeedsInfo.questions } });
-        return { ...answer, revisionNeedsInfo: undefined };
       case "restore-version": {
         const versions = answer.versions ?? [];
         const index = versions.findIndex((v) => v.id === input.versionId);
@@ -160,10 +135,12 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
           versionId: versions[index].id, versionNumber: index + 1, versionKind: versions[index].kind, versionNote: versions[index].note, versionCreatedAt: versions[index].createdAt,
         } });
         return {
-          ...answer, answer: text, status: "draft", missingInfo: [], evidenceStale: true,
+          ...answer, answer: text, status: "draft", missingInfo: [], ...notes(answer, text),
           versions: withVersion(answer, text, "restore", `${index + 1}번째 버전 복원`),
         };
       }
+      default:
+        throw new Error("지원하지 않는 동작입니다.");
     }
   }, expectedRevision);
   recordEditSignals(signals);
@@ -172,10 +149,34 @@ export function applyEssayAnswerAction(seq: string, question: string, input: Ess
 }
 
 // 직접 고친 답변을 저장할 때: 버전을 남기고, 바뀐 문장 쌍을 수정 성향 신호로, 전후 전문을 작성 기록으로 남긴다.
-export function recordManualEdit(seq: string, previous: EssayAnswer, text: string): EssayAnswer {
+export function recordManualEdit(seq: string, previous: EssayAnswer, text: string, check?: EssayCheck): EssayAnswer {
   if (previous.answer === text) return previous;
   recordEditSignals(changedPairs(previous.answer, text).slice(0, 3).map((p) => ({ kind: "manual" as const, category: "", ...p })));
   logEssayEvent({ seq, question: previous.question, type: "manual_edit", textBefore: previous.answer, textAfter: text,
     detail: { fromVersionKind: previous.versions?.at(-1)?.kind ?? (previous.origin === "imported" ? "user_import" : "ai_draft") } });
-  return { ...previous, answer: text, evidenceStale: true, versions: withVersion(previous, text, "user_edit") };
+  return { ...previous, answer: text, ...checkedNotes(previous, text, check), versions: withVersion(previous, text, "user_edit") };
+}
+
+// 점검이 있으면 검토 메모를 지금 글의 점검 결과로 바꾸고, 없으면 예전 메모가 지난 글의 것임을 표시한다.
+function checkedNotes(answer: EssayAnswer, text: string, check?: EssayCheck): Pick<EssayAnswer, "reviewNotes" | "evidenceStale"> {
+  return check ? { reviewNotes: check(text, answer), evidenceStale: false } : { reviewNotes: answer.reviewNotes, evidenceStale: true };
+}
+
+// 최종본으로 저장: 지금 저장된 본문을 과거 자소서 자료(data/essay-bank.json)에 바로 넣는다. 파일로 다시 올릴 필요가 없다.
+// 같은 공고·문항은 하나만 남기고 새 글로 바꾼다. 화면의 고친 내용은 먼저 저장한 뒤 부른다(expectedRevision으로 확인).
+export function saveFinalAnswer(seq: string, question: string, expectedRevision: string | null) {
+  const draft = getCachedApplicationDraft(seq);
+  if ((draft?.revision ?? null) !== expectedRevision)
+    throw new EssayConflictError("다른 창에서 답변이 바뀌었습니다. 지원 도우미를 다시 열어주세요.");
+  const answer = findEssayAnswer(seq, question);
+  if (!answer.answer.trim()) throw new Error("저장할 본문이 없습니다.");
+  const role = answer.targetRole || getApplicationRole(seq).role;
+  const entry = saveFinalEssay({ seq, company: getJobBySeq(seq)?.company ?? "", role, question, answer: answer.answer });
+  logEssayEvent({ seq, question, type: "saved_to_bank", textBefore: answer.answer, detail: { company: entry.company, role, entryId: entry.id } });
+  return entry;
+}
+
+// 이 공고에서 최종본으로 저장한 답변(화면의 "최종본 저장됨" 표시용).
+export function finalSummaries(seq: string) {
+  return listFinalEssays(seq).map((e) => ({ question: e.question, answer: e.answer, savedAt: e.createdAt }));
 }

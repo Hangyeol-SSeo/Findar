@@ -98,7 +98,7 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
           <h3 className="text-sm font-semibold text-gray-700">경험 카드 <span className="font-normal text-gray-400">확인 {confirmedCount} / {state.cards.length}</span></h3>
           <p className="mt-1 text-xs leading-5 text-gray-500">
             이력서·지원 정보의 경험 항목과 올린 과거 자료를 사건 단위로 정리한 카드입니다. 같은 경험은 하나로 묶습니다. 읽어 보고 사실과 맞는 카드만 <b>확인</b>해주세요.
-            <b>확인한 카드만 자기소개서 작성에 쓰이고</b>, 작성할 때도 문항 요구에 맞는 카드만 고르며 맞는 카드가 없으면 쓰지 않습니다.
+            <b>확인한 카드는 자기소개서 자료로 그대로 쓰이고</b>, 확인하지 않은 카드는 ‘미확인’으로 표시해 참고만 합니다. 지원 도우미에서 최종본으로 저장한 글도 카드를 다시 만들면 들어갑니다.
             {state.coversProfile && <> 이력서 경험도 이제 카드로만 쓰입니다.</>}
           </p>
         </div>

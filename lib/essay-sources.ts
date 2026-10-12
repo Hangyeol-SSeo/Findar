@@ -33,7 +33,7 @@ export interface EssaySourceFile {
 export const isEssaySourceKind = (value: unknown): value is EssaySourceKind => ESSAY_SOURCE_KINDS.includes(value as EssaySourceKind);
 export const essaySourceKey = (file: Pick<EssaySourceFile, "kind" | "name">) => `${file.kind}/${file.name}`;
 
-// 업로드할 때 사용자가 적은 "이 글을 낸 회사·직무". AI 추출보다 우선하는 출처 정보라, 다른 회사 이름 가리기(essay-writer)가
+// 업로드할 때 사용자가 적은 "이 글을 낸 회사·직무". AI 추출보다 우선하는 출처 정보라, 다른 회사 이름 가리기(essay-review)가
 // 모델이 회사명을 놓쳐도 동작한다. data/essay-sources/meta.json에 파일 키별로 둔다.
 export interface EssaySourceMeta { company: string; role: string }
 const META_PATH = join(ROOT, "meta.json");
