@@ -22,10 +22,11 @@ export interface AIModelSettingsResponse {
 export const AI_MODEL_IDS = {
   SONNET: "claude-sonnet-5-5",
   OPUS: "claude-opus-5-5",
-  SONNET_4_6: "claude-sonnet-4-6",
-  HAIKU: "claude-haiku-4-5-20251001",
+  HAIKU: "claude-haiku-5-5",
   FREERIDE_CODING: "freeride/coding",
   LEGACY_SONNET_5: "claude-sonnet-5",
+  LEGACY_SONNET_4_6: "claude-sonnet-4-6",
+  LEGACY_HAIKU_4_5: "claude-haiku-4-5-20251001",
   GPT_6_LUNA: "gpt-6-luna",
   GPT_6_1_SOL: "gpt-6.1-sol",
   LEGACY_GPT_6_SOL: "gpt-6-sol",
@@ -37,8 +38,7 @@ export const DEFAULT_JOB_AI_MODEL = AI_MODEL_IDS.HAIKU;
 export const CLAUDE_MODELS: AIModelOption[] = [
   { id: AI_MODEL_IDS.SONNET, label: "Claude Sonnet 5.5" },
   { id: AI_MODEL_IDS.OPUS, label: "Claude Opus 5.5" },
-  { id: AI_MODEL_IDS.SONNET_4_6, label: "Claude Sonnet 4.6" },
-  { id: AI_MODEL_IDS.HAIKU, label: "Claude Haiku 4.5" },
+  { id: AI_MODEL_IDS.HAIKU, label: "Claude Haiku 5.5" },
 ];
 
 export const CODEX_MODELS: AIModelOption[] = [

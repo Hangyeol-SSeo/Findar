@@ -70,6 +70,13 @@ function load(relative) {
     assert.equal(migrated.settings[feature], AI_MODEL_IDS.SONNET, `saved ${feature} must migrate`);
   assert.equal(migrated.settings.matching, AI_MODEL_IDS.FREERIDE_CODING, 'other saved selections must survive');
   assert.equal(migrated.options.profile.some(option => option.id === AI_MODEL_IDS.LEGACY_SONNET_5), false, 'old model must not remain selectable');
+  // Sonnet 4.6은 목록에서 빠졌고 Haiku 4.5는 5.5로 바뀌었다: 저장된 선택은 현재 모델로 옮겨진다.
+  fs.writeFileSync(file, JSON.stringify({ ...current.settings, summarization: AI_MODEL_IDS.LEGACY_HAIKU_4_5, profile: AI_MODEL_IDS.LEGACY_SONNET_4_6 }));
+  const removed = readAIModelSettings();
+  assert.equal(removed.settings.summarization, AI_MODEL_IDS.HAIKU);
+  assert.equal(AI_MODEL_IDS.HAIKU, 'claude-haiku-5-5');
+  assert.equal(removed.settings.profile, AI_MODEL_IDS.SONNET);
+  assert.equal(removed.options.profile.some(option => [AI_MODEL_IDS.LEGACY_SONNET_4_6, AI_MODEL_IDS.LEGACY_HAIKU_4_5].includes(option.id)), false);
 
   const selected = { ...current.settings, summarization: AI_MODEL_IDS.SONNET, applicationDraft: AI_MODEL_IDS.OPUS };
   writeAIModelSettings(selected);
@@ -77,12 +84,12 @@ function load(relative) {
   assert.equal(getJobAIConfiguration('summarization').provider, 'claude', 'Claude selection must bypass the FreeRide gateway');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), selected);
   const saved = fs.readFileSync(file, 'utf8');
-  for (const invalid of [null, [], {}, { ...selected, extra: 'x' }, { ...selected, profile: AI_MODEL_IDS.FREERIDE_CODING }, { ...selected, companyResearch: AI_MODEL_IDS.FREERIDE_CODING }, { ...selected, matching: 'unsupported' }, { ...selected, profile: AI_MODEL_IDS.LEGACY_SONNET_5 }]) {
+  for (const invalid of [null, [], {}, { ...selected, extra: 'x' }, { ...selected, profile: AI_MODEL_IDS.FREERIDE_CODING }, { ...selected, companyResearch: AI_MODEL_IDS.FREERIDE_CODING }, { ...selected, matching: 'unsupported' }, { ...selected, profile: AI_MODEL_IDS.LEGACY_SONNET_5 }, { ...selected, profile: AI_MODEL_IDS.LEGACY_SONNET_4_6 }]) {
     assert.throws(() => writeAIModelSettings(invalid));
     assert.equal(fs.readFileSync(file, 'utf8'), saved, 'invalid settings must leave the saved selection intact');
   }
-  writeAIModelSettings({ ...selected, applicationDraft: AI_MODEL_IDS.SONNET_4_6 });
-  assert.equal(getAIModelId('applicationDraft'), AI_MODEL_IDS.SONNET_4_6, 'updates must apply without reloading the module');
+  writeAIModelSettings({ ...selected, applicationDraft: AI_MODEL_IDS.HAIKU });
+  assert.equal(getAIModelId('applicationDraft'), AI_MODEL_IDS.HAIKU, 'updates must apply without reloading the module');
   const { GET, PUT } = load('app/api/settings/models/route.ts');
   assert.equal((await GET()).headers.get('cache-control'), 'no-store');
   const request = (body, origin = 'http://localhost:3000') => new Request('http://localhost:3000/api/settings/models', {

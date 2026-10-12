@@ -90,7 +90,7 @@ function load(name) {
   assert.equal(listStaleSections('model-fixture', ['overview']).length, 1, 'a new model must permit refreshing fresh cached research');
   selectedModel = result.model;
   assert.equal(listStaleSections('model-fixture', ['overview']).length, 0);
-  selectedModel = AI_MODEL_IDS.SONNET_4_6;
+  selectedModel = AI_MODEL_IDS.OPUS;
   const updated = await researchSection('other-fixture', 'Fixture', 'overview');
   assert.equal(updated.model, selectedModel);
   assert.equal(options.effort, 'medium');

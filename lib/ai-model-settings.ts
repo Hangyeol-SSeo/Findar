@@ -7,7 +7,9 @@ function settingsPath() { return join(process.cwd(), "data", "ai-model-settings.
 function isJobFeature(feature: AIFeature) { return feature === "summarization" || feature === "matching"; }
 function freeRideModel() { return process.env.FREERIDE_MODEL || AI_MODEL_IDS.FREERIDE_CODING; }
 function currentModel(model: string) {
-  if (model === AI_MODEL_IDS.LEGACY_SONNET_5) return AI_MODEL_IDS.SONNET;
+  // 목록에서 뺀 모델을 저장해 둔 선택은 같은 계열의 현재 모델로 옮긴다.
+  if (model === AI_MODEL_IDS.LEGACY_SONNET_5 || model === AI_MODEL_IDS.LEGACY_SONNET_4_6) return AI_MODEL_IDS.SONNET;
+  if (model === AI_MODEL_IDS.LEGACY_HAIKU_4_5) return AI_MODEL_IDS.HAIKU;
   if (model === AI_MODEL_IDS.LEGACY_GPT_6_SOL) return AI_MODEL_IDS.GPT_6_1_SOL;
   return model;
 }
