@@ -8,7 +8,7 @@ import { logEssayEvent, logEssayEvents, type EssayEventInput } from "./essay-log
 import { locateInEssay } from "./essay-log-analysis";
 import { parseEssayRequest, withVersion, type EssayAnswer, type EssayRequest, type EssaySuggestion } from "./essay-contract";
 
-// 저장된 답변을 다루는 동작: 자기소개서 저장, 직접 수정, 첨삭 제안 반영/넘기기, 버전 복원, 최종본 저장.
+// 저장된 답변을 다루는 동작: 자기소개서 저장, 직접 수정, 첨삭 제안 반영/넘기기, 버전 복원, 문항 순서 변경, 최종본 저장.
 // 모두 AI 호출 없이 저장된 결과만 다룬다. 글은 대화 세션에서 쓰고, AI 첨삭은 lib/essay-review.ts가 한다.
 
 // 본문이 바뀔 때마다 도는 점검(lib/essay-review.ts checkEssay). 결과는 검토 메모로 바꿔 넣는다 — 늘 지금 글을 본 결과다.
@@ -42,7 +42,7 @@ export function updateEssayAnswer(seq: string, question: string, update: (answer
   return next;
 }
 
-// 자기소개서 저장: 대화 세션 등에서 쓴 답변을 문항에 저장한다. 같은 문항이 있으면 이전 글은 버전 기록에 남는다.
+// 자기소개서 저장: 대화 세션 등에서 쓴 답변을 문항에 저장한다. 같은 문항이 있으면 그 자리에서 바뀌고 이전 글은 버전 기록에 남는다.
 export function importEssay(seq: string, input: { question: unknown; maxChars?: unknown; countSpaces?: unknown; answer: unknown }, expectedRevision: string | null, check?: EssayCheck): ApplicationDraft {
   const request = parseEssayRequest({ question: input.question, maxChars: input.maxChars, countSpaces: input.countSpaces });
   if (typeof input.answer !== "string" || !input.answer.trim() || input.answer.length > 30000)
@@ -64,7 +64,7 @@ export function importEssay(seq: string, input: { question: unknown; maxChars?: 
   };
   const next: ApplicationDraft = {
     seq, personalFields: draft?.personalFields ?? [], notesForUser: draft?.notesForUser ?? [],
-    essayAnswers: [...(draft?.essayAnswers ?? []).filter((a) => !isUserAnswer(a, request.question)), imported],
+    essayAnswers: previous ? (draft?.essayAnswers ?? []).map((a) => (a === previous ? imported : a)) : [...(draft?.essayAnswers ?? []), imported],
     model: draft?.model ?? "", generatedAt: draft?.generatedAt ?? now, revision: randomUUID(),
   };
   saveApplicationDraft(seq, JSON.stringify(next), next.model);
@@ -81,10 +81,31 @@ export type EssayAnswerAction =
   | { action: "apply-suggestion"; suggestionId: string }
   | { action: "dismiss-suggestion"; suggestionId: string }
   | { action: "close-feedback" }
-  | { action: "restore-version"; versionId: string };
+  | { action: "restore-version"; versionId: string }
+  | { action: "move"; direction: "up" | "down" };
+
+// 문항 순서 바꾸기: 바로 위/아래 문항과 자리를 바꾼다. 이전 방식 공통 답변은 제자리에 둔다.
+function moveEssayAnswer(seq: string, question: string, direction: "up" | "down", expectedRevision: string | null): ApplicationDraft {
+  const draft = getCachedApplicationDraft(seq);
+  if (!draft) throw new Error("해당 문항의 답변을 찾을 수 없습니다.");
+  if ((draft.revision ?? null) !== expectedRevision)
+    throw new EssayConflictError("다른 창에서 답변이 바뀌었습니다. 지원 도우미를 다시 열어주세요.");
+  const slots = draft.essayAnswers.flatMap((a, i) => (a.source === "user_question" ? [i] : []));
+  const from = slots.findIndex((i) => isUserAnswer(draft.essayAnswers[i], question));
+  if (from < 0) throw new Error("해당 문항의 답변을 찾을 수 없습니다.");
+  const to = direction === "up" ? from - 1 : from + 1;
+  if (to < 0 || to >= slots.length) throw new Error(direction === "up" ? "이미 첫 번째 문항입니다." : "이미 마지막 문항입니다.");
+  const essayAnswers = [...draft.essayAnswers];
+  [essayAnswers[slots[from]], essayAnswers[slots[to]]] = [essayAnswers[slots[to]], essayAnswers[slots[from]]];
+  const next: ApplicationDraft = { ...draft, revision: randomUUID(), essayAnswers };
+  saveApplicationDraft(seq, JSON.stringify(next), draft.model);
+  logEssayEvent({ seq, question, type: "answer_moved", detail: { direction, from: from + 1, to: to + 1, total: slots.length } });
+  return next;
+}
 
 // 화면의 즉시 처리 동작들. 모두 AI 호출 없이 저장된 결과만 다룬다.
 export function applyEssayAnswerAction(seq: string, question: string, input: EssayAnswerAction, expectedRevision: string | null, check?: EssayCheck): ApplicationDraft {
+  if (input.action === "move") return moveEssayAnswer(seq, question, input.direction, expectedRevision);
   const signals: Parameters<typeof recordEditSignals>[0] = [];
   const events: EssayEventInput[] = [];
   const log = (event: Omit<EssayEventInput, "seq" | "question">) => events.push({ seq, question, ...event });

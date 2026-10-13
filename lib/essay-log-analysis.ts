@@ -16,7 +16,7 @@ export const ESSAY_EVENT_ACTORS = {
   suggestion_applied: "user", suggestion_dismissed: "user", feedback_closed: "user",
   research_requested: "user", research_scoped: "ai", research_sources_selected: "user", research_collected: "ai",
   research_failed: "system", research_closed: "user",
-  version_restored: "user", saved_to_bank: "user",
+  version_restored: "user", answer_moved: "user", saved_to_bank: "user",
 } as const;
 export type EssayEventType = keyof typeof ESSAY_EVENT_ACTORS;
 export type EssayEventActor = (typeof ESSAY_EVENT_ACTORS)[EssayEventType];
