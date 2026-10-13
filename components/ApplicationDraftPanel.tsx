@@ -16,10 +16,22 @@ const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-w
 // 이 공고에서 "최종본으로 저장"해 과거 자소서 자료에 들어간 글.
 interface FinalEssay { question: string; answer: string; savedAt: number }
 
+// 서버에서 받은 글로 화면을 바꾸되, 아직 저장하지 않은 다른 문항의 수정은 남긴다.
+function keepUnsaved(local: ApplicationDraft | null, saved: ApplicationDraft | null, next: ApplicationDraft): ApplicationDraft {
+  if (!local || !saved) return next;
+  return { ...next, essayAnswers: next.essayAnswers.map((a, i) => {
+    const mine = local.essayAnswers[i], before = saved.essayAnswers[i];
+    return mine && before && mine.question === a.question && before.question === a.question && mine.answer !== before.answer ? { ...a, answer: mine.answer } : a;
+  }) };
+}
+
 // 자기소개서는 대화 세션에서 쓰고, 여기서는 저장·직접 수정·버전 기록·첨삭 받기·최종본 저장만 한다.
 export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: string; roleRevision?: string | null }) {
   const [workspace, setWorkspace] = useState<"essay" | "fill">("essay");
   const [draft, setDraft] = useState<ApplicationDraft | null>(null);
+  // 마지막으로 서버에 저장된 상태. 문항마다 이것과 비교해 저장할 수정이 있는지 판단한다.
+  const [savedDraft, setSavedDraft] = useState<ApplicationDraft | null>(null);
+  const savedRef = useRef<ApplicationDraft | null>(null);
   const [finals, setFinals] = useState<FinalEssay[]>([]);
   const [method, setMethod] = useState<SubmissionMethodInfo | null>(null);
   const [researchNotice, setResearchNotice] = useState<string | null>(null);
@@ -28,7 +40,6 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [dirty, setDirty] = useState(false);
   // 이 공고에서 쓴 실제 AI 사용량(첨삭). 답변이 바뀔 때(작업이 끝날 때)마다 다시 읽는다.
   const [usage, setUsage] = useState<{ calls: number; inputTokens: number; cacheReadTokens: number; outputTokens: number; cacheHitRatio: number } | null>(null);
   useEffect(() => {
@@ -47,8 +58,6 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   const watchedTasks = useRef(new Set<string>());
   const [tasks, setTasks] = useState<ApplicationTask[]>([]);
   const handledTasks = useRef(new Set<string>());
-  const dirtyRef = useRef(false);
-  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   const [extension, setExtension] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [documentResult, setDocumentResult] = useState<{ href: string; filename: string; filled: number; skipped: { label: string; reason: string }[]; note: string } | null>(null);
@@ -61,7 +70,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     fetch(`/api/applications/${seq}/draft`, { signal: abort.signal }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setDraft(data.draft); setFinals(data.finals ?? []); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
+      receiveDraft(data.draft); setFinals(data.finals ?? []); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
     }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
@@ -125,11 +134,11 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
           const document = task.result?.document;
           if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
         }
-        if (reloadDraft && !dirtyRef.current) {
+        if (reloadDraft) {
           const draftResponse = await fetch(`/api/applications/${seq}/draft`, { cache: "no-store", signal: abort.signal });
           if (!draftResponse.ok) throw new Error("첨삭 결과를 불러오지 못했습니다. 지원 도우미를 다시 열어주세요.");
           const current = await draftResponse.json();
-          if (!stopped && !dirtyRef.current) setDraft(current.draft);
+          if (!stopped) receiveDraft(current.draft);
         }
       } catch (e) {
         failures++;
@@ -160,7 +169,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
 
   const reviewTask = tasks.find((t) => t.kind === "revision" && taskActive(t));
   const reviewBusy = busy === "review" || !!reviewTask;
-  const essayBusy = reviewBusy || ["save", "final", "answer-action", "import"].includes(busy);
+  const essayBusy = reviewBusy || busy.startsWith("save") || ["final", "answer-action", "import"].includes(busy);
   const documentBusy = busy === "document";
   function acceptTask(task: ApplicationTask) {
     watchedTasks.current.add(task.id);
@@ -175,11 +184,26 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     if (!response.ok) throw new Error(data.error || "요청에 실패했습니다.");
     return data;
   }
+  function receiveDraft(next: ApplicationDraft) {
+    const saved = savedRef.current;
+    setDraft((local) => keepUnsaved(local, saved, next));
+    savedRef.current = next; setSavedDraft(next);
+  }
+  function isDirty(index: number) {
+    return !!draft && !!savedDraft && draft.essayAnswers[index]?.answer !== savedDraft.essayAnswers[index]?.answer;
+  }
+  function indexOf(question: string) {
+    return draft?.essayAnswers.findIndex((a) => a.source === "user_question" && a.question === question) ?? -1;
+  }
+  // index를 주면 그 문항만, 없으면 모든 문항의 수정을 저장한다. 다른 문항의 저장하지 않은 수정은 화면에 그대로 남는다.
   // 저장 후의 최신 revision을 돌려준다 — 바로 이어지는 동작이 그 값으로 충돌을 검사한다.
-  async function save(): Promise<string | null> {
-    if (!draft || !dirty) return draft?.revision ?? null;
-    const data = await api("draft", draft, "PUT");
-    setDraft(data.draft); setDirty(false);
+  async function save(index?: number): Promise<string | null> {
+    const base = savedRef.current;
+    if (!draft || !base) return base?.revision ?? null;
+    const essayAnswers = base.essayAnswers.map((a, i) => index === undefined || i === index ? { ...a, answer: draft.essayAnswers[i].answer } : a);
+    if (essayAnswers.every((a, i) => a.answer === base.essayAnswers[i].answer)) return base.revision ?? null;
+    const data = await api("draft", { ...base, essayAnswers }, "PUT");
+    receiveDraft(data.draft);
     return data.draft.revision ?? null;
   }
   async function run(label: string, action: () => Promise<void>) {
@@ -192,7 +216,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     let started = false;
     setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
     await run("review", async () => {
-      await save();
+      await save(indexOf(question));
       const data = await api("draft/review", { question, focus });
       acceptTask(data.task);
       started = true;
@@ -203,15 +227,15 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   async function answerAction(question: string, action: AnswerAction) {
     setAnswerErrors((prev) => ({ ...prev, [question]: "" }));
     await run("answer-action", async () => {
-      const revision = await save();
+      const revision = await save(indexOf(question));
       const data = await api("draft/answer-action", { question, revision, ...action });
-      setDraft(data.draft);
+      receiveDraft(data.draft);
     });
   }
-  // 최종본으로 저장: 고친 내용을 먼저 저장하고, 그 본문을 과거 자소서 자료에 넣는다.
+  // 최종본으로 저장: 이 문항의 고친 내용을 먼저 저장하고, 그 본문을 과거 자소서 자료에 넣는다.
   async function saveFinal(question: string) {
     await run("final", async () => {
-      const revision = await save();
+      const revision = await save(indexOf(question));
       const data = await api("draft/final", { question, revision });
       setFinals(data.finals);
       setNotice("최종본을 과거 자소서 자료에 저장했습니다. 다음 자기소개서와 경험 카드에 쓰입니다.");
@@ -222,7 +246,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     await run("import", async () => {
       const revision = await save();
       const data = await api("draft/import", { ...input, revision });
-      setDraft(data.draft);
+      receiveDraft(data.draft);
       imported = true;
       setNotice("자기소개서를 저장했습니다. 고칠 곳은 직접 고치거나 첨삭을 받을 수 있고, 다 되면 ‘최종본으로 저장’을 눌러주세요.");
     });
@@ -230,7 +254,13 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   }
   function editAnswer(index: number, answer: string) {
     setDraft((prev) => prev ? { ...prev, essayAnswers: prev.essayAnswers.map((a, i) => i === index ? { ...a, answer } : a) } : prev);
-    setDirty(true);
+  }
+  function saveButton(index: number) {
+    const dirty = isDirty(index);
+    return <button type="button" disabled={essayBusy || !dirty} className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700 transition hover:bg-blue-100 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+      onClick={() => run(`save-${index}`, async () => { await save(index); setNotice("답변을 저장했습니다."); })}>
+      {busy === `save-${index}` ? "저장 중..." : dirty ? "답변 저장" : "답변 저장됨"}
+    </button>;
   }
   async function fillDocument() {
     if (!file) return;
@@ -333,6 +363,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
       const answer = a as EssayAnswer;
       const count = characterCount(answer.answer, answer.countSpaces);
       const final = finals.find((f) => f.question === answer.question);
+      const dirty = isDirty(index);
       const finalCurrent = !!final && final.answer === answer.answer.trim() && !dirty;
       return <section key={index} className="rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -351,12 +382,13 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
           {answer.reviewNotes.filter((n) => n.startsWith("확인:")).map((n, i) => <li key={i}>{n}</li>)}
         </ul>}
         {answer.reviewNotes.some((n) => !n.startsWith("확인:")) && <details className="text-xs text-gray-500"><summary className="cursor-pointer">문체 점검</summary><div className="mt-2 space-y-1">{answer.reviewNotes.filter((n) => !n.startsWith("확인:")).map((n, i) => <p key={i}>{n}</p>)}{answer.evidenceStale && <p className="text-amber-700">이전 글을 점검한 결과라 지금 글과 다를 수 있습니다. 저장하면 다시 점검합니다.</p>}</div></details>}
-        {answer.answer && <div className="flex flex-wrap items-center gap-3 text-xs">
-          <button type="button" disabled={essayBusy || finalCurrent} className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 transition hover:bg-emerald-100 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+        {answer.status !== "needs_info" && (answer.answer || dirty) && <div className="flex flex-wrap items-center gap-3 text-xs">
+          {saveButton(index)}
+          {answer.answer && <><button type="button" disabled={essayBusy || finalCurrent} className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 transition hover:bg-emerald-100 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
             title="지금 글을 과거 자소서 자료에 저장합니다. 같은 문항을 다시 저장하면 새 글로 바뀝니다." onClick={() => void saveFinal(answer.question)}>
             {busy === "final" ? "저장 중..." : final ? "최종본 다시 저장" : "최종본으로 저장"}
           </button>
-          <button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button>
+          <button disabled={essayBusy} className="text-gray-500" onClick={() => run("copy", async () => { await navigator.clipboard.writeText(answer.answer); setNotice("답변을 복사했습니다."); })}>답변 복사</button></>}
         </div>}
         <EssayReviewTools answer={answer} disabled={essayBusy} reviewing={reviewBusy} error={answerErrors[answer.question] || undefined}
           highlight={highlightQuestion === answer.question}
@@ -364,8 +396,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
           onAction={(action) => void answerAction(answer.question, action)} />
       </section>;
     })}
-    {!!legacyAnswers.length && <details className="rounded-lg border border-gray-200 p-3"><summary className="text-xs text-gray-500 cursor-pointer">이전 방식으로 작성한 답변 {legacyAnswers.length}개 보관됨</summary><p className="my-2 text-xs text-gray-400">자동으로 만든 공통 답변입니다. 실제 문항에 대한 새 답변과 구분해 보관합니다.</p>{legacyAnswers.map(({ a, index }) => <div key={index} className="mt-3"><p className="text-xs font-medium mb-1">{a.question}</p><textarea aria-label={`이전 답변 ${a.question}`} rows={5} value={a.answer} className={inputStyle} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} /></div>)}</details>}
-    {draft && <button className={buttonStyle} disabled={essayBusy || !dirty} onClick={() => run("save", async () => { await save(); setNotice("수정한 답변을 저장했습니다."); })}>{busy === "save" ? "저장 중..." : dirty ? "수정한 답변 저장" : "답변 저장됨"}</button>}
+    {!!legacyAnswers.length && <details className="rounded-lg border border-gray-200 p-3"><summary className="text-xs text-gray-500 cursor-pointer">이전 방식으로 작성한 답변 {legacyAnswers.length}개 보관됨</summary><p className="my-2 text-xs text-gray-400">자동으로 만든 공통 답변입니다. 실제 문항에 대한 새 답변과 구분해 보관합니다.</p>{legacyAnswers.map(({ a, index }) => <div key={index} className="mt-3"><p className="text-xs font-medium mb-1">{a.question}</p><textarea aria-label={`이전 답변 ${a.question}`} rows={5} value={a.answer} className={inputStyle} onChange={(e) => editAnswer(index, e.target.value)} disabled={essayBusy} /><div className="mt-1 text-xs">{saveButton(index)}</div></div>)}</details>}
     </>}
   </div>;
 }
