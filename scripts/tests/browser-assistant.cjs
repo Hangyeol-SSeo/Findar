@@ -83,9 +83,18 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
       else if (url.pathname.endsWith('/fill/web')) { webRequests++; data = { token: 'a'.repeat(64) }; }
       else if (url.pathname.endsWith('/fill/document')) { const document = { total: 3, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' }; const task = { id: 'doc-' + tasks.length, kind: 'document', status: 'completed', done: 1, total: 1, result: { document } }; tasks.push(task); data = { task }; status = 202; }
       else if (url.pathname.endsWith('/draft/import')) {
-        const body = req.postDataJSON(); assert.equal(body.question, '팀의 문제를 해결한 경험을 설명해주세요.');
+        const body = req.postDataJSON(); assert.ok(['팀의 문제를 해결한 경험을 설명해주세요.', '입사 후 포부를 적어주세요.'].includes(body.question));
         const answer = { question: body.question, countSpaces: true, guidance: '', source: 'user_question', intent: '', answer: body.answer, evidence: [], missingInfo: [], reviewNotes: [], status: 'draft', generatedAt: Date.now() };
         saved = { ...saved, revision: 'imported', essayAnswers: [...saved.essayAnswers, answer] }; data = { draft: saved };
+      }
+      else if (url.pathname.endsWith('/draft/answer-action')) {
+        const body = req.postDataJSON(); assert.equal(body.action, 'move'); assert.equal(body.revision, saved.revision);
+        const list = [...saved.essayAnswers];
+        const slots = list.flatMap((a, k) => (a.source === 'user_question' ? [k] : []));
+        const from = slots.findIndex((k) => list[k].question === body.question);
+        const a = slots[from], b = slots[body.direction === 'up' ? from - 1 : from + 1];
+        [list[a], list[b]] = [list[b], list[a]];
+        saved = { ...saved, revision: 'moved', essayAnswers: list }; data = { draft: saved };
       }
       else if (url.pathname.endsWith('/draft/review')) {
         generationRequests++;
@@ -169,12 +178,26 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     failSave = false;
     await saveAnswer.click();
     await page.getByText('답변을 저장했습니다.', { exact: true }).waitFor();
-    await page.locator('section', { has: answerBox }).getByRole('button', { name: '답변 저장됨', exact: true }).waitFor();
     assert.equal(saved.essayAnswers[0].answer, '보존할 답변');
     assert.equal(saved.essayAnswers[1].answer, '사용자가 직접 고친 문장입니다.');
+    await page.locator('section', { has: answerBox }).getByRole('button', { name: '답변 저장됨', exact: true }).waitFor();
+    // 문항 순서 바꾸기: 다른 문항에서 저장하지 않은 수정은 순서가 바뀌어도 그대로 남는다.
+    await page.getByText('자기소개서 저장', { exact: true }).click();
+    await page.getByLabel('지원서 문항', { exact: true }).fill('입사 후 포부를 적어주세요.');
+    await page.getByLabel('내가 쓴 답변', { exact: true }).fill('포부 본문입니다.');
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+    await page.getByText(/자기소개서를 저장했습니다/).waitFor();
+    await answerBox.fill('사용자가 직접 고친 문장입니다. 아직 저장 안 함');
+    assert.equal(await page.getByRole('button', { name: '팀의 문제를 해결한 경험을 설명해주세요. 문항 위로 옮기기' }).isEnabled(), false);
+    await page.getByRole('button', { name: '입사 후 포부를 적어주세요. 문항 위로 옮기기' }).click();
+    await page.waitForFunction(() => decodeURIComponent(document.querySelector('[data-answer-section]')?.dataset.answerSection ?? '') === '입사 후 포부를 적어주세요.');
+    assert.deepEqual(await page.locator('[data-answer-section]').evaluateAll((els) => els.map((el) => decodeURIComponent(el.dataset.answerSection))), ['입사 후 포부를 적어주세요.', '팀의 문제를 해결한 경험을 설명해주세요.']);
+    assert.deepEqual(saved.essayAnswers.map((a) => a.question), ['예전 공통 문항', '입사 후 포부를 적어주세요.', '팀의 문제를 해결한 경험을 설명해주세요.']);
+    assert.equal(await answerBox.inputValue(), '사용자가 직접 고친 문장입니다. 아직 저장 안 함');
+    assert.equal(await saveAnswer.isEnabled(), true);
     fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/ui.png', fullPage: true });
-    console.log('PASS UI essay save without AI, background review, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery');
+    console.log('PASS UI essay save without AI, background review, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery, question reorder keeps unsaved edits');
     await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
     const picker = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).click();

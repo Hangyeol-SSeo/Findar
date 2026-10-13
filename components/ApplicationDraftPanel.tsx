@@ -17,11 +17,15 @@ const buttonStyle = "rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-w
 interface FinalEssay { question: string; answer: string; savedAt: number }
 
 // 서버에서 받은 글로 화면을 바꾸되, 아직 저장하지 않은 다른 문항의 수정은 남긴다.
+// 순서가 바뀌어도 따라가도록 자리 대신 문항으로 맞춘다.
+const answerKey = (a: ApplicationDraft["essayAnswers"][number]) => `${a.source === "user_question" ? "q" : "legacy"}:${a.question}`;
 function keepUnsaved(local: ApplicationDraft | null, saved: ApplicationDraft | null, next: ApplicationDraft): ApplicationDraft {
   if (!local || !saved) return next;
-  return { ...next, essayAnswers: next.essayAnswers.map((a, i) => {
-    const mine = local.essayAnswers[i], before = saved.essayAnswers[i];
-    return mine && before && mine.question === a.question && before.question === a.question && mine.answer !== before.answer ? { ...a, answer: mine.answer } : a;
+  const before = new Map(saved.essayAnswers.map((a) => [answerKey(a), a.answer]));
+  const mine = new Map(local.essayAnswers.map((a) => [answerKey(a), a.answer]));
+  return { ...next, essayAnswers: next.essayAnswers.map((a) => {
+    const text = mine.get(answerKey(a));
+    return text !== undefined && before.has(answerKey(a)) && text !== before.get(answerKey(a)) ? { ...a, answer: text } : a;
   }) };
 }
 
@@ -169,7 +173,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
 
   const reviewTask = tasks.find((t) => t.kind === "revision" && taskActive(t));
   const reviewBusy = busy === "review" || !!reviewTask;
-  const essayBusy = reviewBusy || busy.startsWith("save") || ["final", "answer-action", "import"].includes(busy);
+  const essayBusy = reviewBusy || busy.startsWith("save") || ["final", "answer-action", "import", "move"].includes(busy);
   const documentBusy = busy === "document";
   function acceptTask(task: ApplicationTask) {
     watchedTasks.current.add(task.id);
@@ -230,6 +234,14 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
       const revision = await save(indexOf(question));
       const data = await api("draft/answer-action", { question, revision, ...action });
       receiveDraft(data.draft);
+    });
+  }
+  // 문항 순서 바꾸기: 글은 저장하지 않고 순서만 바꾼다. 저장하지 않은 수정은 화면에 그대로 남는다.
+  async function moveAnswer(question: string, direction: "up" | "down") {
+    await run("move", async () => {
+      const data = await api("draft/answer-action", { question, revision: savedRef.current?.revision ?? null, action: "move", direction });
+      receiveDraft(data.draft);
+      requestAnimationFrame(() => document.querySelector(`[data-answer-section="${encodeURIComponent(question)}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
     });
   }
   // 최종본으로 저장: 이 문항의 고친 내용을 먼저 저장하고, 그 본문을 과거 자소서 자료에 넣는다.
@@ -359,17 +371,24 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
       </div>
       <EssayImportForm disabled={essayBusy} defaultOpen={!currentAnswers.length} onImport={importAnswer} />
     </section>
-    {currentAnswers.map(({ a, index }) => {
+    {currentAnswers.map(({ a, index }, order) => {
       const answer = a as EssayAnswer;
       const count = characterCount(answer.answer, answer.countSpaces);
       const final = finals.find((f) => f.question === answer.question);
       const dirty = isDirty(index);
       const finalCurrent = !!final && final.answer === answer.answer.trim() && !dirty;
-      return <section key={index} className="rounded-xl border border-gray-200 p-4 space-y-3">
+      return <section key={answerKey(answer)} data-answer-section={encodeURIComponent(answer.question)} className="rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <h4 className="whitespace-pre-wrap text-sm font-semibold text-gray-800">{answer.question}</h4>
+          <div className="flex shrink-0 items-center gap-2">
+          {currentAnswers.length > 1 && <div className="flex gap-1">
+            {([["up", "↑", "위로", order === 0], ["down", "↓", "아래로", order === currentAnswers.length - 1]] as const).map(([direction, arrow, label, edge]) =>
+              <button key={direction} type="button" aria-label={`${answer.question} 문항 ${label} 옮기기`} title={`문항 ${label} 옮기기`} disabled={essayBusy || edge}
+                className="rounded border border-gray-200 px-1.5 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-30" onClick={() => void moveAnswer(answer.question, direction)}>{arrow}</button>)}
+          </div>}
           {final && <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${finalCurrent ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
             title={`${new Date(final.savedAt).toLocaleString("ko-KR")}에 저장`}>{finalCurrent ? "최종본 저장됨" : "최종본 저장 후 바뀜"}</span>}
+          </div>
         </div>
         {answer.intent && <p className="text-xs leading-5 text-gray-500">{answer.intent}</p>}
         {roleRevision != null && answer.roleRevision && answer.roleRevision !== roleRevision && <p className="text-xs text-amber-700">지금 고른 지원 직무와 다른 직무 기준으로 저장한 답변입니다.</p>}
