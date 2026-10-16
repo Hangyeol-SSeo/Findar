@@ -73,6 +73,48 @@ export function recentCompanyApplications(
   return tier ? { tier, applications } : null;
 }
 
+// 지원서를 작성 중인 회사. 같은 회사의 다른 공고를 보다가 이미 쓰고 있는 지원서와 겹치지 않게 알려준다.
+// 마감이 지난 작성중 공고는 더 쓸 일이 없으므로 뺀다.
+export interface CompanyDraftingApplication {
+  seq: string;
+  company: string;
+  title: string;
+  deadline: string;
+}
+
+export function indexDraftingCompanyApplications(
+  jobs: { seq: string; company: string; title: string; deadline: string; applicationStatus?: string; expired?: boolean }[]
+): Map<string, CompanyDraftingApplication[]> {
+  const index = new Map<string, CompanyDraftingApplication[]>();
+  for (const job of jobs) {
+    if (job.applicationStatus !== "작성중" || job.expired) continue;
+    const key = normalizeCompanyName(job.company);
+    if (!key) continue;
+    const list = index.get(key) ?? [];
+    list.push({ seq: job.seq, company: job.company, title: job.title, deadline: job.deadline });
+    index.set(key, list);
+  }
+  // 마감이 가까운 순, 마감 미정은 뒤로.
+  const sortKey = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "9999-12-31");
+  for (const list of index.values()) list.sort((a, b) => sortKey(a.deadline).localeCompare(sortKey(b.deadline)));
+  return index;
+}
+
+// 이 공고의 회사에서 작성 중인 다른 공고. 표시 중인 공고 자신은 뺀다.
+export function draftingCompanyApplications(
+  index: Map<string, CompanyDraftingApplication[]>,
+  job: { seq: string; company: string }
+): CompanyDraftingApplication[] {
+  return (index.get(normalizeCompanyName(job.company)) ?? []).filter((a) => a.seq !== job.seq);
+}
+
+// 작성중 상태 색(getApplicationStatusColor의 violet)과 맞춘다.
+export const DRAFTING_COLOR = {
+  stripe: "bg-violet-400",
+  text: "text-violet-600",
+  notice: "bg-violet-50 border-violet-200 text-violet-800",
+};
+
 // 가까울수록 진한 경고색. stripe는 카드 왼쪽 띠와 점, text는 글자, notice는 상세 안내 상자.
 export function recentApplicationTierColor(tier: RecentApplicationTier): { stripe: string; text: string; notice: string } {
   switch (tier) {
