@@ -4,7 +4,7 @@ import { join } from "path";
 import type { JobSummary } from "./summarizer";
 import type { JobMatch } from "./matcher";
 import { categorizePositions } from "./position-categories";
-import { TRACKED_APPLICATION_STATUSES, type ApplicationStatus } from "./application-status";
+import { TRACKED_APPLICATION_STATUSES, applicationAppliedAt, type ApplicationStatus } from "./application-status";
 import { normalizeCompanyName } from "./company-normalize";
 
 const DATA_DIR = join(process.cwd(), "data");
@@ -782,6 +782,9 @@ export function getActiveJobs(): JobWithMatch[] {
 
 export type TrackedApplicationJob = JobWithMatch & {
   submittedAt: number | null;
+  // 제출완료 이후 단계면 지원한 시각(applicationAppliedAt), 아직 지원 전(검토중/작성중)이면 null.
+  // 보드가 이 값으로 "최근 지원한 회사"를 표시한다.
+  appliedAt: number | null;
   applicationUpdatedAt: number;
   expired: boolean;
 };
@@ -793,6 +796,7 @@ const selectTrackedJobsStmt = db.prepare(`
     applications.status AS applicationStatus,
     applications.notes AS applicationNotes,
     applications.submittedAt AS submittedAt,
+    applications.history AS applicationHistory,
     applications.updatedAt AS applicationUpdatedAt
   FROM jobs
   JOIN applications ON applications.seq = jobs.seq
@@ -804,11 +808,18 @@ export function getTrackedApplicationJobs(): TrackedApplicationJob[] {
   const today = todayYmd();
   const rows = selectTrackedJobsStmt.all(...TRACKED_APPLICATION_STATUSES) as (JobRow & {
     submittedAt: number | null;
+    applicationHistory: string | null;
     applicationUpdatedAt: number;
   })[];
   return rows.map((row) => ({
     ...rowToJobWithMatch(row),
     submittedAt: row.submittedAt,
+    appliedAt: applicationAppliedAt({
+      status: row.applicationStatus,
+      submittedAt: row.submittedAt,
+      history: row.applicationHistory ? JSON.parse(row.applicationHistory) : [],
+      updatedAt: row.applicationUpdatedAt,
+    }),
     applicationUpdatedAt: row.applicationUpdatedAt,
     expired: !isJobOpen(row, today),
   }));

@@ -31,6 +31,36 @@ export const TRACKED_APPLICATION_STATUSES: ApplicationStatus[] = [
   "최종합격",
 ];
 
+// 실제로 지원서를 낸 뒤의 단계(검토중/작성중은 아직 지원 전). Google 시트 동기화와
+// "최근 지원한 회사" 표시가 같은 기준을 쓴다.
+export const SUBMITTED_APPLICATION_STATUSES: ApplicationStatus[] = [
+  "제출완료",
+  "서류합격",
+  "면접",
+  "불합격",
+  "최종합격",
+];
+
+export function isSubmittedApplicationStatus(status: string | undefined): status is ApplicationStatus {
+  return !!status && (SUBMITTED_APPLICATION_STATUSES as string[]).includes(status);
+}
+
+// 지원한 시각. submittedAt은 '제출완료'를 거쳐야만 기록되므로, 곧바로 서류합격 등으로 바꾼 경우엔
+// 이력에서 처음 지원 이후 단계가 된 시각을, 그것도 없으면 마지막 변경 시각을 쓴다. 아직 지원 전이면 null.
+export function applicationAppliedAt(application: {
+  status: string;
+  submittedAt: number | null;
+  history: { status: string; at: number }[];
+  updatedAt: number;
+}): number | null {
+  if (!isSubmittedApplicationStatus(application.status)) return null;
+  return (
+    application.submittedAt ??
+    application.history.find((h) => isSubmittedApplicationStatus(h.status))?.at ??
+    application.updatedAt
+  );
+}
+
 export function isTrackedApplicationStatus(status: ApplicationStatus | undefined): boolean {
   return !!status && TRACKED_APPLICATION_STATUSES.includes(status);
 }

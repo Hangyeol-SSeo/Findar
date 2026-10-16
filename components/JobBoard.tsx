@@ -16,6 +16,13 @@ import {
   isTrackedApplicationStatus,
   type ApplicationStatus,
 } from "@/lib/application-status";
+import {
+  daysAgoLabel,
+  indexRecentCompanyApplications,
+  recentApplicationTierColor,
+  recentCompanyApplications,
+  type RecentCompanyApplications,
+} from "@/lib/company-application-recency";
 
 interface JobSummary {
   seq: string;
@@ -41,6 +48,7 @@ interface JobSummary {
   bookmarked?: boolean;
   // 지원 현황(/api/applications/tracked)으로 받은 공고에만 있다.
   submittedAt?: number | null;
+  appliedAt?: number | null;
   expired?: boolean;
 }
 
@@ -134,6 +142,8 @@ export default function JobBoard() {
   const [bookmarkOnly, setBookmarkOnly] = useState(false);
   // 검토중부터 추적하는 공고. 일반 목록(jobs)은 마감이 지나면 서버에서 빠지므로 따로 받아온다.
   const [trackedJobs, setTrackedJobs] = useState<JobSummary[]>([]);
+  // "최근 지원한 회사" 기간 계산 기준 시각. 지원 현황을 다시 받을 때마다 갱신한다.
+  const [recencyNow, setRecencyNow] = useState(() => Date.now());
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<ApplicationStatus | "전체">("전체");
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
@@ -384,7 +394,9 @@ export default function JobBoard() {
     fetch("/api/applications/tracked", { cache: "no-store" })
       .then((r) => r.json())
       .then(({ jobs }: { jobs?: JobSummary[] }) => {
-        if (Array.isArray(jobs)) setTrackedJobs(jobs);
+        if (!Array.isArray(jobs)) return;
+        setTrackedJobs(jobs);
+        setRecencyNow(Date.now());
       })
       .catch(() => {});
   }, []);
@@ -512,6 +524,17 @@ export default function JobBoard() {
     () => trackedJobs.filter((job) => isTrackedApplicationStatus(job.applicationStatus)),
     [trackedJobs]
   );
+
+  // 1/3/6개월 이내에 지원서를 낸 회사 — 같은 회사의 다른 공고에 기간별 색으로 표시한다.
+  const recentApplicationIndex = useMemo(
+    () => indexRecentCompanyApplications(appliedJobs, recencyNow),
+    [appliedJobs, recencyNow]
+  );
+  const recentApplicationsFor = useCallback(
+    (job: JobSummary) => recentCompanyApplications(recentApplicationIndex, job, recencyNow),
+    [recentApplicationIndex, recencyNow]
+  );
+  const selectedRecentApplications = selectedJob ? recentApplicationsFor(selectedJob) : null;
 
   const visibleAppliedJobs = useMemo(
     () =>
@@ -940,6 +963,8 @@ export default function JobBoard() {
                     isSelected={selectedJob?.seq === job.seq}
                     onSelect={setSelectedJob}
                     onHide={hideJob}
+                    recentApplications={recentApplicationsFor(job)}
+                    recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
                     getScoreColor={getScoreColor}
@@ -990,6 +1015,8 @@ export default function JobBoard() {
                     job={job}
                     isSelected={selectedJob?.seq === job.seq}
                     onSelect={setSelectedJob}
+                    recentApplications={recentApplicationsFor(job)}
+                    recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
                     getScoreColor={getScoreColor}
@@ -1100,6 +1127,9 @@ export default function JobBoard() {
                 <span className="shrink-0 text-sm font-medium text-blue-600">
                   {selectedJob.company}
                 </span>
+                {selectedRecentApplications && (
+                  <RecentApplicationBadge recent={selectedRecentApplications} now={recencyNow} />
+                )}
                 <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
               </div>
               <button
@@ -1163,6 +1193,10 @@ export default function JobBoard() {
                   ))}
                 </select>
               </div>
+
+              {selectedRecentApplications && (
+                <RecentApplicationNotice recent={selectedRecentApplications} now={recencyNow} />
+              )}
 
               {typeof selectedJob.matchScore === "number" && (
                 <div className="mb-5 p-4 rounded-xl bg-gradient-to-br from-gray-50 to-white border border-gray-100">
@@ -1326,6 +1360,8 @@ function JobCard({
   getScoreColor,
   getBadgeColor,
   showTracking = false,
+  recentApplications,
+  recencyNow,
 }: {
   job: JobSummary;
   isSelected: boolean;
@@ -1333,6 +1369,8 @@ function JobCard({
   // 지원 현황 보기에서는 숨기기가 의미 없어(숨겨도 계속 보인다) 버튼을 빼기 위해 optional.
   onHide?: (seq: string) => void;
   showTracking?: boolean;
+  recentApplications?: RecentCompanyApplications | null;
+  recencyNow: number;
   onStatusChange: (seq: string, status: ApplicationStatus) => void;
   onToggleBookmark: (seq: string, bookmarked: boolean) => void;
   getScoreColor: (score: number) => string;
@@ -1351,7 +1389,7 @@ function JobCard({
     >
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1.5">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1380,9 +1418,12 @@ function JobCard({
                 {job.matchScore}
               </span>
             )}
-            <span className="text-sm font-medium text-blue-600">
+            <span className="whitespace-nowrap text-sm font-medium text-blue-600">
               {job.company}
             </span>
+            {recentApplications && (
+              <RecentApplicationBadge recent={recentApplications} now={recencyNow} />
+            )}
             <span
               className={`text-xs px-2 py-0.5 rounded-full font-medium ${getBadgeColor(job.positionType)}`}
             >
@@ -1454,6 +1495,49 @@ function JobCard({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function formatAppliedDate(ms: number): string {
+  return new Date(ms).toLocaleDateString("ko-KR");
+}
+
+// 같은 회사에 최근 지원한 공고가 있다는 표시. 기간(1/3/6개월)마다 색이 다르고, 마우스를 올리면 어떤 공고인지 보인다.
+function RecentApplicationBadge({ recent, now }: { recent: RecentCompanyApplications; now: number }) {
+  const title = recent.applications
+    .map((a) => `${formatAppliedDate(a.appliedAt)} (${daysAgoLabel(a.appliedAt, now)}) ${a.status} · ${a.title}`)
+    .join("\n");
+  return (
+    <span
+      title={`이 회사에 최근 지원한 공고\n${title}`}
+      className={`shrink-0 whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium ${recentApplicationTierColor(recent.tier).badge}`}
+    >
+      {recent.tier} 내 지원{recent.applications.length > 1 ? ` ${recent.applications.length}건` : ""}
+    </span>
+  );
+}
+
+function RecentApplicationNotice({ recent, now }: { recent: RecentCompanyApplications; now: number }) {
+  return (
+    <div className={`mb-4 rounded-lg border px-3 py-2.5 text-sm ${recentApplicationTierColor(recent.tier).notice}`}>
+      <div className="font-medium">
+        {recent.tier} 이내에 이 회사에 지원했습니다
+      </div>
+      <p className="mt-0.5 text-xs opacity-80">
+        같은 회사에 짧은 간격으로 여러 공고를 지원하면 찔러보기로 보일 수 있습니다.
+      </p>
+      <ul className="mt-2 space-y-1">
+        {recent.applications.map((a) => (
+          <li key={a.seq} className="flex gap-2 text-xs">
+            <span className="shrink-0 tabular-nums">
+              {formatAppliedDate(a.appliedAt)} · {daysAgoLabel(a.appliedAt, now)}
+            </span>
+            <span className="shrink-0 font-medium">{a.status}</span>
+            <span className="min-w-0 truncate">{a.title}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
