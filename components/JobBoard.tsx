@@ -1128,7 +1128,7 @@ export default function JobBoard() {
                   {selectedJob.company}
                 </span>
                 {selectedRecentApplications && (
-                  <RecentApplicationBadge recent={selectedRecentApplications} now={recencyNow} />
+                  <RecentApplicationMarker recent={selectedRecentApplications} now={recencyNow} />
                 )}
                 <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
               </div>
@@ -1381,15 +1381,21 @@ function JobCard({
   return (
     <div
       onClick={() => onSelect(job)}
-      className={`group bg-white rounded-xl p-5 border transition-all cursor-pointer ${
+      className={`group relative overflow-hidden bg-white rounded-xl p-5 border transition-all cursor-pointer ${
         isSelected
           ? "border-blue-400 shadow-md ring-1 ring-blue-200"
           : "border-gray-100 hover:border-blue-200 hover:shadow-md"
       }`}
     >
+      {recentApplications && (
+        <span
+          aria-hidden
+          className={`absolute inset-y-0 left-0 w-1.5 ${recentApplicationTierColor(recentApplications.tier).stripe}`}
+        />
+      )}
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1.5">
+          <div className="flex items-center gap-2 mb-1.5">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1418,12 +1424,9 @@ function JobCard({
                 {job.matchScore}
               </span>
             )}
-            <span className="whitespace-nowrap text-sm font-medium text-blue-600">
+            <span className="text-sm font-medium text-blue-600">
               {job.company}
             </span>
-            {recentApplications && (
-              <RecentApplicationBadge recent={recentApplications} now={recencyNow} />
-            )}
             <span
               className={`text-xs px-2 py-0.5 rounded-full font-medium ${getBadgeColor(job.positionType)}`}
             >
@@ -1495,6 +1498,9 @@ function JobCard({
           )}
         </div>
       </div>
+      {recentApplications && (
+        <RecentApplicationFooter recent={recentApplications} now={recencyNow} />
+      )}
     </div>
   );
 }
@@ -1503,17 +1509,41 @@ function formatAppliedDate(ms: number): string {
   return new Date(ms).toLocaleDateString("ko-KR");
 }
 
-// 같은 회사에 최근 지원한 공고가 있다는 표시. 기간(1/3/6개월)마다 색이 다르고, 마우스를 올리면 어떤 공고인지 보인다.
-function RecentApplicationBadge({ recent, now }: { recent: RecentCompanyApplications; now: number }) {
-  const title = recent.applications
-    .map((a) => `${formatAppliedDate(a.appliedAt)} (${daysAgoLabel(a.appliedAt, now)}) ${a.status} · ${a.title}`)
-    .join("\n");
+function recentApplicationsTitle(recent: RecentCompanyApplications, now: number): string {
+  const lines = recent.applications.map(
+    (a) => `${formatAppliedDate(a.appliedAt)} (${daysAgoLabel(a.appliedAt, now)}) ${a.status} · ${a.title}`
+  );
+  return `이 회사에 최근 지원한 공고\n${lines.join("\n")}`;
+}
+
+// 같은 회사에 최근 지원한 공고가 있다는 표시. 신입/경력 같은 칩과 헷갈리지 않게 칩 대신
+// 카드 왼쪽 색 띠 + 카드 아래 한 줄로 보여준다. 기간(1/3/6개월)마다 색이 다르다.
+function RecentApplicationFooter({ recent, now }: { recent: RecentCompanyApplications; now: number }) {
+  const latest = recent.applications[0];
+  const color = recentApplicationTierColor(recent.tier);
   return (
-    <span
-      title={`이 회사에 최근 지원한 공고\n${title}`}
-      className={`shrink-0 whitespace-nowrap text-xs px-2 py-0.5 rounded-full font-medium ${recentApplicationTierColor(recent.tier).badge}`}
+    <div
+      title={recentApplicationsTitle(recent, now)}
+      className="mt-3 flex min-w-0 items-center gap-1.5 border-t border-gray-100 pt-2.5 text-xs text-gray-500"
     >
-      {recent.tier} 내 지원{recent.applications.length > 1 ? ` ${recent.applications.length}건` : ""}
+      <span className={`h-2 w-2 shrink-0 rounded-full ${color.stripe}`} />
+      <span className={`shrink-0 font-semibold ${color.text}`}>{recent.tier} 내 지원한 회사</span>
+      <span className="shrink-0">· {daysAgoLabel(latest.appliedAt, now)} {latest.status}</span>
+      <span className="min-w-0 truncate">· {latest.title}</span>
+      {recent.applications.length > 1 && (
+        <span className="shrink-0">외 {recent.applications.length - 1}건</span>
+      )}
+    </div>
+  );
+}
+
+// 패널 헤더용 — 칩 없이 색 점과 글자만.
+function RecentApplicationMarker({ recent, now }: { recent: RecentCompanyApplications; now: number }) {
+  const color = recentApplicationTierColor(recent.tier);
+  return (
+    <span title={recentApplicationsTitle(recent, now)} className={`flex shrink-0 items-center gap-1 text-xs font-semibold ${color.text}`}>
+      <span className={`h-2 w-2 rounded-full ${color.stripe}`} />
+      {recent.tier} 내 지원
     </span>
   );
 }
