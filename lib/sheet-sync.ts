@@ -7,7 +7,7 @@ import {
   markSheetSyncPending,
   recordSheetSyncFailure,
 } from "./db";
-import type { ApplicationStatus } from "./application-status";
+import { applicationAppliedAt, isSubmittedApplicationStatus, type ApplicationStatus } from "./application-status";
 
 // 지원 상태가 바뀌면 사용자의 지원 현황 Google 시트에 한 행씩 기록한다.
 // 시트 쪽에는 scripts/google-sheet-sync.gs(Apps Script 웹 앱)를 배포해 두고, 그 URL과 토큰을
@@ -16,8 +16,6 @@ import type { ApplicationStatus } from "./application-status";
 
 const SEND_TIMEOUT_MS = 30_000;
 
-// 시트에는 실제로 지원서를 낸 뒤의 단계만 적는다(검토중/작성중은 아직 지원 전).
-const SYNCED_STATUSES: ApplicationStatus[] = ["제출완료", "서류합격", "면접", "불합격", "최종합격"];
 
 export interface SheetRowPayload {
   seq: string;
@@ -38,10 +36,6 @@ function sheetSyncConfig(): { url: string; token: string } | null {
 
 export function isSheetSyncConfigured(): boolean {
   return sheetSyncConfig() !== null;
-}
-
-function isSyncedStatus(status: string): status is ApplicationStatus {
-  return (SYNCED_STATUSES as string[]).includes(status);
 }
 
 // 시트의 "단계"/"결과" 열 표기. 불합격은 마지막으로 도달한 단계에서 떨어진 것으로 본다.
@@ -70,12 +64,11 @@ function formatYyMmDd(ms: number): string {
 export function buildSheetRowPayload(seq: string): SheetRowPayload | null {
   const application = getApplication(seq);
   const job = getJobBySeq(seq);
-  if (!application || !job || !isSyncedStatus(application.status)) return null;
+  // 시트에는 실제로 지원서를 낸 뒤의 단계만 적는다(검토중/작성중은 아직 지원 전).
+  if (!application || !job || !isSubmittedApplicationStatus(application.status)) return null;
 
   const history = JSON.parse(application.history) as { status: string; at: number }[];
-  // submittedAt은 '제출완료'를 거쳐야만 기록되므로, 곧바로 서류합격 등으로 바꾼 경우엔 첫 지원 이후 단계 시각을 쓴다.
-  const appliedAt =
-    application.submittedAt ?? history.find((h) => isSyncedStatus(h.status))?.at ?? application.updatedAt;
+  const appliedAt = applicationAppliedAt({ ...application, history }) ?? application.updatedAt;
 
   return {
     seq,
