@@ -73,15 +73,15 @@ export function recentCompanyApplications(
   return tier ? { tier, applications } : null;
 }
 
-// 가까울수록 진한 경고색.
-export function recentApplicationTierColor(tier: RecentApplicationTier): { badge: string; notice: string } {
+// 가까울수록 진한 경고색. stripe는 카드 왼쪽 띠와 점, text는 글자, notice는 상세 안내 상자.
+export function recentApplicationTierColor(tier: RecentApplicationTier): { stripe: string; text: string; notice: string } {
   switch (tier) {
     case "1개월":
-      return { badge: "bg-rose-100 text-rose-700 ring-1 ring-rose-200", notice: "bg-rose-50 border-rose-200 text-rose-800" };
+      return { stripe: "bg-rose-500", text: "text-rose-600", notice: "bg-rose-50 border-rose-200 text-rose-800" };
     case "3개월":
-      return { badge: "bg-orange-100 text-orange-700 ring-1 ring-orange-200", notice: "bg-orange-50 border-orange-200 text-orange-800" };
+      return { stripe: "bg-orange-400", text: "text-orange-600", notice: "bg-orange-50 border-orange-200 text-orange-800" };
     case "6개월":
-      return { badge: "bg-yellow-100 text-yellow-800 ring-1 ring-yellow-200", notice: "bg-yellow-50 border-yellow-200 text-yellow-900" };
+      return { stripe: "bg-yellow-400", text: "text-yellow-700", notice: "bg-yellow-50 border-yellow-200 text-yellow-900" };
   }
 }
 
