@@ -98,3 +98,16 @@ assert.equal(tracked.j3.appliedAt, null);
 assert.equal(tracked.j1.expired, true, 'expired applications still count');
 
 console.log('company-application-recency ok');
+
+// 작성중인 회사: 작성중만, 마감 지난 것·자기 자신은 빼고, 마감 가까운 순.
+const drafting = recency.indexDraftingCompanyApplications([
+  { seq: 'd1', company: '(주)가상증권', title: '마감 미정', deadline: '', applicationStatus: '작성중' },
+  { seq: 'd2', company: '가상증권', title: '곧 마감', deadline: '2026-10-20', applicationStatus: '작성중' },
+  { seq: 'd3', company: '가상증권', title: '마감 지남', deadline: '2026-10-01', applicationStatus: '작성중', expired: true },
+  { seq: 'd4', company: '가상증권', title: '검토중', deadline: '2026-10-30', applicationStatus: '검토중' },
+  { seq: 'd5', company: '가상증권', title: '제출함', deadline: '2026-10-30', applicationStatus: '제출완료' },
+]);
+assert.deepEqual(recency.draftingCompanyApplications(drafting, { seq: 'x', company: '가상증권 주식회사' }).map(a => a.seq), ['d2', 'd1']);
+assert.deepEqual(recency.draftingCompanyApplications(drafting, { seq: 'd2', company: '가상증권' }).map(a => a.seq), ['d1']);
+assert.deepEqual(recency.draftingCompanyApplications(drafting, { seq: 'x', company: '없는회사' }), []);
+console.log('drafting companies ok');

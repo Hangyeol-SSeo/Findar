@@ -17,10 +17,14 @@ import {
   type ApplicationStatus,
 } from "@/lib/application-status";
 import {
+  DRAFTING_COLOR,
   daysAgoLabel,
+  draftingCompanyApplications,
+  indexDraftingCompanyApplications,
   indexRecentCompanyApplications,
   recentApplicationTierColor,
   recentCompanyApplications,
+  type CompanyDraftingApplication,
   type RecentCompanyApplications,
 } from "@/lib/company-application-recency";
 
@@ -535,6 +539,13 @@ export default function JobBoard() {
     [recentApplicationIndex, recencyNow]
   );
   const selectedRecentApplications = selectedJob ? recentApplicationsFor(selectedJob) : null;
+  // 지원서를 작성 중인 회사 — 같은 회사의 다른 공고에 표시한다.
+  const draftingIndex = useMemo(() => indexDraftingCompanyApplications(appliedJobs), [appliedJobs]);
+  const draftingApplicationsFor = useCallback(
+    (job: JobSummary) => draftingCompanyApplications(draftingIndex, job),
+    [draftingIndex]
+  );
+  const selectedDraftingApplications = selectedJob ? draftingApplicationsFor(selectedJob) : [];
 
   const visibleAppliedJobs = useMemo(
     () =>
@@ -964,6 +975,7 @@ export default function JobBoard() {
                     onSelect={setSelectedJob}
                     onHide={hideJob}
                     recentApplications={recentApplicationsFor(job)}
+                    draftingApplications={draftingApplicationsFor(job)}
                     recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
@@ -1016,6 +1028,7 @@ export default function JobBoard() {
                     isSelected={selectedJob?.seq === job.seq}
                     onSelect={setSelectedJob}
                     recentApplications={recentApplicationsFor(job)}
+                    draftingApplications={draftingApplicationsFor(job)}
                     recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
@@ -1130,6 +1143,9 @@ export default function JobBoard() {
                 {selectedRecentApplications && (
                   <RecentApplicationMarker recent={selectedRecentApplications} now={recencyNow} />
                 )}
+                {selectedDraftingApplications.length > 0 && (
+                  <DraftingApplicationMarker drafting={selectedDraftingApplications} />
+                )}
                 <ApplicationRole key={selectedJob.seq} seq={selectedJob.seq} positions={selectedJob.positions} onSaved={setRoleRevision} />
               </div>
               <button
@@ -1196,6 +1212,9 @@ export default function JobBoard() {
 
               {selectedRecentApplications && (
                 <RecentApplicationNotice recent={selectedRecentApplications} now={recencyNow} />
+              )}
+              {selectedDraftingApplications.length > 0 && (
+                <DraftingApplicationNotice drafting={selectedDraftingApplications} />
               )}
 
               {typeof selectedJob.matchScore === "number" && (
@@ -1361,6 +1380,7 @@ function JobCard({
   getBadgeColor,
   showTracking = false,
   recentApplications,
+  draftingApplications = [],
   recencyNow,
 }: {
   job: JobSummary;
@@ -1370,6 +1390,7 @@ function JobCard({
   onHide?: (seq: string) => void;
   showTracking?: boolean;
   recentApplications?: RecentCompanyApplications | null;
+  draftingApplications?: CompanyDraftingApplication[];
   recencyNow: number;
   onStatusChange: (seq: string, status: ApplicationStatus) => void;
   onToggleBookmark: (seq: string, bookmarked: boolean) => void;
@@ -1378,6 +1399,12 @@ function JobCard({
 }) {
   const status = jobApplicationStatus(job);
   const bookmarked = jobBookmarked(job);
+  // 띠 색은 최근 지원(찔러보기 경고)을 우선하고, 없으면 작성중 색.
+  const stripe = recentApplications
+    ? recentApplicationTierColor(recentApplications.tier).stripe
+    : draftingApplications.length > 0
+      ? DRAFTING_COLOR.stripe
+      : null;
   return (
     <div
       onClick={() => onSelect(job)}
@@ -1387,12 +1414,7 @@ function JobCard({
           : "border-gray-100 hover:border-blue-200 hover:shadow-md"
       }`}
     >
-      {recentApplications && (
-        <span
-          aria-hidden
-          className={`absolute inset-y-0 left-0 w-1.5 ${recentApplicationTierColor(recentApplications.tier).stripe}`}
-        />
-      )}
+      {stripe && <span aria-hidden className={`absolute inset-y-0 left-0 w-1.5 ${stripe}`} />}
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
@@ -1498,8 +1520,11 @@ function JobCard({
           )}
         </div>
       </div>
-      {recentApplications && (
-        <RecentApplicationFooter recent={recentApplications} now={recencyNow} />
+      {(recentApplications || draftingApplications.length > 0) && (
+        <div className="mt-3 space-y-1 border-t border-gray-100 pt-2.5">
+          {recentApplications && <RecentApplicationFooter recent={recentApplications} now={recencyNow} />}
+          {draftingApplications.length > 0 && <DraftingApplicationFooter drafting={draftingApplications} />}
+        </div>
       )}
     </div>
   );
@@ -1524,7 +1549,7 @@ function RecentApplicationFooter({ recent, now }: { recent: RecentCompanyApplica
   return (
     <div
       title={recentApplicationsTitle(recent, now)}
-      className="mt-3 flex min-w-0 items-center gap-1.5 border-t border-gray-100 pt-2.5 text-xs text-gray-500"
+      className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500"
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${color.stripe}`} />
       <span className={`shrink-0 font-semibold ${color.text}`}>{recent.tier} 내 지원한 회사</span>
@@ -1545,6 +1570,55 @@ function RecentApplicationMarker({ recent, now }: { recent: RecentCompanyApplica
       <span className={`h-2 w-2 rounded-full ${color.stripe}`} />
       {recent.tier} 내 지원
     </span>
+  );
+}
+
+function deadlineLabel(deadline: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? `~${deadline}` : "마감 미정";
+}
+
+function draftingApplicationsTitle(drafting: CompanyDraftingApplication[]): string {
+  return `이 회사에 작성 중인 지원서\n${drafting.map((a) => `${deadlineLabel(a.deadline)} · ${a.title}`).join("\n")}`;
+}
+
+function DraftingApplicationFooter({ drafting }: { drafting: CompanyDraftingApplication[] }) {
+  const first = drafting[0];
+  return (
+    <div title={draftingApplicationsTitle(drafting)} className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${DRAFTING_COLOR.stripe}`} />
+      <span className={`shrink-0 font-semibold ${DRAFTING_COLOR.text}`}>작성중인 회사</span>
+      <span className="shrink-0">· {deadlineLabel(first.deadline)}</span>
+      <span className="min-w-0 truncate">· {first.title}</span>
+      {drafting.length > 1 && <span className="shrink-0">외 {drafting.length - 1}건</span>}
+    </div>
+  );
+}
+
+function DraftingApplicationMarker({ drafting }: { drafting: CompanyDraftingApplication[] }) {
+  return (
+    <span title={draftingApplicationsTitle(drafting)} className={`flex shrink-0 items-center gap-1 text-xs font-semibold ${DRAFTING_COLOR.text}`}>
+      <span className={`h-2 w-2 rounded-full ${DRAFTING_COLOR.stripe}`} />
+      작성중
+    </span>
+  );
+}
+
+function DraftingApplicationNotice({ drafting }: { drafting: CompanyDraftingApplication[] }) {
+  return (
+    <div className={`mb-4 rounded-lg border px-3 py-2.5 text-sm ${DRAFTING_COLOR.notice}`}>
+      <div className="font-medium">이 회사에 작성 중인 지원서가 있습니다</div>
+      <p className="mt-0.5 text-xs opacity-80">
+        같은 회사에 여러 공고를 동시에 지원하면 찔러보기로 보일 수 있습니다. 어느 공고에 낼지 먼저 정하세요.
+      </p>
+      <ul className="mt-2 space-y-1">
+        {drafting.map((a) => (
+          <li key={a.seq} className="flex gap-2 text-xs">
+            <span className="shrink-0 tabular-nums">{deadlineLabel(a.deadline)}</span>
+            <span className="min-w-0 truncate">{a.title}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
