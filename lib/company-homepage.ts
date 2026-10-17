@@ -35,8 +35,8 @@ export type HomepageResult =
   | { status: "ok"; url: string; title: string; text: string; pages: HomepagePage[]; images: HomepageImage[] }
   | { status: "unavailable"; url: string; reason: string };
 
-// 채용 대행·채용 게시판 주소는 회사 홈페이지가 아니다.
-const JOB_BOARD_HOST = /(?:^|\.)(?:greetinghr\.com|recruiter\.co\.kr|saramin\.co\.kr|jobkorea\.co\.kr|incruit\.com|wanted\.co\.kr|ninehire\.com|career\.co\.kr|jobplanet\.co\.kr|catch\.co\.kr|kofia\.or\.kr|forms\.gle|google\.com|naver\.com|notion\.site)$/i;
+// 채용 대행·채용 게시판 주소는 회사 홈페이지가 아니다(에픽투자일임: 사람인 단축 주소 saram.in 첫 화면을 홈페이지로 읽었다).
+const JOB_BOARD_HOST = /(?:^|\.)(?:greetinghr\.com|recruiter\.co\.kr|saramin\.co\.kr|jobkorea\.co\.kr|incruit\.com|wanted\.co\.kr|ninehire\.com|career\.co\.kr|jobplanet\.co\.kr|catch\.co\.kr|kofia\.or\.kr|forms\.gle|google\.com|naver\.com|notion\.site|saram\.in|albamon\.com|careerlink\.kr|applyin\.co\.kr|myworkdayjobs\.com|lever\.co|greenhouse\.io|grnh\.se|fairyhr\.com|jumpit\.co\.kr|rocketpunch\.com|peoplenjob\.com)$/i;
 // 지원 이메일이 개인 메일이면 회사 도메인이 아니다.
 const PUBLIC_MAIL = /^(?:gmail\.com|naver\.com|daum\.net|hanmail\.net|nate\.com|kakao\.com|hotmail\.com|outlook\.com|live\.com|yahoo\.com|yahoo\.co\.kr|icloud\.com|me\.com|korea\.com|empas\.com|dreamwiz\.com|paran\.com|chol\.com|kofia\.or\.kr)$/i;
 

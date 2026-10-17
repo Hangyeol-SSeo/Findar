@@ -897,6 +897,33 @@ function backfillCategories(): void {
 
 backfillCategories();
 
+// 예전 DART 매칭은 회사 이름 안에 DART 상호가 들어 있기만 해도 연결해, "DS투자증권"·"에픽투자일임"이 한 글자 상호 "자"에,
+// "금융투자협회"가 "융"에 묶였다(lib/dart.ts findCorpCode). 그 fuzzy 매칭으로 만든 지배구조·재무 분석은 다른 법인의 대표이사·
+// 임원·재무를 공시 사실로 쓴 것이라, 일부 확인(partial)으로 낮추고 안내를 붙여 새로고침 대상으로 돌린다. 매칭은 지워 다시 찾게 한다.
+// 새 분석은 contentJson.dartMatch를 남기므로 건드리지 않는다. 반복 실행돼도 안전하다.
+export const DART_MISMATCH_NOTICE = "※ DART에서 이름만 비슷한 다른 법인을 연결해 만든 분석입니다. 대표이사·임원·재무 수치가 이 회사의 것이 아닐 수 있으니 다시 조사해주세요.";
+function invalidateFuzzyDartSections(): void {
+  const companies = db.prepare(`SELECT normalizedName FROM companies WHERE dartMatchConfidence = 'fuzzy'`).all() as { normalizedName: string }[];
+  if (companies.length === 0) return;
+  const sections = db.prepare(`SELECT sectionType, content, contentJson FROM company_sections WHERE normalizedName = ? AND sectionType IN ('governance_structure', 'financials')`);
+  const mark = db.prepare(`UPDATE company_sections SET status = 'partial', content = ? WHERE normalizedName = ? AND sectionType = ?`);
+  let marked = 0;
+  db.transaction(() => {
+    for (const { normalizedName } of companies) {
+      for (const row of sections.all(normalizedName) as { sectionType: string; content: string; contentJson: string | null }[]) {
+        const json = row.contentJson ? JSON.parse(row.contentJson) as { dartMatch?: unknown } | null : null;
+        if (json?.dartMatch || row.content.startsWith(DART_MISMATCH_NOTICE)) continue;
+        mark.run(`${DART_MISMATCH_NOTICE}\n\n${row.content}`, normalizedName, row.sectionType);
+        marked++;
+      }
+    }
+    db.prepare(`UPDATE companies SET dartCorpCode = NULL, dartMatchConfidence = NULL WHERE dartMatchConfidence = 'fuzzy'`).run();
+  })();
+  console.log(`[migrate] cleared ${companies.length} fuzzy DART matches, marked ${marked} sections for re-research`);
+}
+
+invalidateFuzzyDartSections();
+
 // A single target per posting, independent of scraped positions and application status.
 export function getApplicationRole(seq: string): { role: string; revision: string } {
   return (db.prepare("SELECT role, revision FROM application_roles WHERE seq = ?").get(seq) as { role: string; revision: string } | undefined) ?? { role: "", revision: "" };

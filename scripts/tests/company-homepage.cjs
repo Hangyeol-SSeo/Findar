@@ -12,6 +12,7 @@ const { homepageCandidates, emailDomainUrls, isPublicHost, extractHomepageText, 
 // 채용 대행 주소와 형식이 틀린 값은 건너뛰고, 순서를 지키며 첫 화면(origin)만 남긴다.
 assert.deepEqual(homepageCandidates(['https://acme.career.greetinghr.com/o/123', 'www.masteram.co.kr/recruit', 'https://www.masteram.co.kr', 'https://other.example.com']), ['https://www.masteram.co.kr/', 'https://other.example.com/']);
 assert.deepEqual(homepageCandidates(['https://www.saramin.co.kr/zf_user/jobs', '', 'http://localhost:3000', 'https://192.168.0.10/', 'http://127.0.0.1']), []);
+assert.deepEqual(homepageCandidates(['https://saram.in/abc', 'https://kbam.careerlink.kr/', 'https://db.wd3.myworkdayjobs.com/x', 'https://grnh.se/1', 'https://hana-aamc.applyin.co.kr/']), [], 'ATS and short job-board links are not homepages');
 // 지원 이메일 도메인: 많이 나온 순, 개인 메일과 협회 주소는 뺀다.
 assert.deepEqual(emailDomainUrls(['지원: kej1205@heungkuksec.co.kr', '문의 hr@heungkuksec.co.kr 또는 someone@gmail.com', 'help@kofia.or.kr', 'recruit@www.other.co.kr']),
   ['https://www.heungkuksec.co.kr/', 'https://heungkuksec.co.kr/', 'https://www.other.co.kr/']);

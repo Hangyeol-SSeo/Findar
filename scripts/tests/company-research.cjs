@@ -13,7 +13,7 @@ function load(name) {
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(`lib/${name}.ts`, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, {
-    exports, process: { env: {} }, console: { info() {}, error() {} },
+    exports, URL, process: { env: {} }, console: { info() {}, error() {} },
     require(id) {
       if (id === './ai-query') return { query: async function* (args) {
         calls++; options = args.options; prompt = args.prompt;
@@ -32,6 +32,7 @@ function load(name) {
         HOMEPAGE_UNVERIFIED: '※ 회사 홈페이지를 확인하지 못했습니다',
         emailDomainUrls: (texts) => texts.flatMap((t) => (t.match(/@([\w.-]+)/) ? [`https://www.${t.match(/@([\w.-]+)/)[1]}/`] : [])),
         findHomepage: async (list) => { homepageFetches++; candidates = list; return homepage; },
+        homepageCandidates: (urls) => [...new Set(urls.map((u) => `https://${u.replace(/^https?:\/\//, '').split('/')[0]}/`))],
       };
       if (id === './homepage-image-text') return { readHomepageImageTexts: async (images, model) => { if (images.length) imageReads.push({ count: images.length, model }); return images.map((_, i) => imageTexts[i]); } };
       if (id === './research-page-tool') return {
@@ -167,6 +168,23 @@ function load(name) {
   await researchSection('gov-unavailable', 'Fixture', 'governance_structure');
   assert.match(prompt, /\[회사 홈페이지\] 홈페이지\(https:\/\/www\.example-am\.co\.kr\/\)를 서버에서 읽지 못했다\(HTTP 503\)\. 필요하면 read_page/);
   assert.ok(!prompt.includes('첫 줄에'), 'governance does not require the unverified marker');
+  // 회사 식별 단서: 도메인(홈페이지·지원 메일)과 정확히 일치한 DART의 대표·주소.
+  assert.match(prompt, /\[회사 식별 단서 — "Fixture"과 이름이 같거나 비슷한 다른 회사가 많다\]/);
+  assert.match(prompt, /공식 도메인\(홈페이지·지원 메일\): example-am\.co\.kr, example-sec\.co\.kr/);
+  assert.match(prompt, /대표이사\(DART\): 홍길동/); assert.match(prompt, /본점 주소\(DART\): 서울특별시 영등포구 국제금융로2길 32/);
+  assert.equal(JSON.parse(JSON.stringify(saved.at(-1)[2].contentJson)).dartMatch, 'exact');
+  // 이름만 비슷한(fuzzy) 법인의 공시는 지배구조·재무에 쓰지 않는다. 지배구조는 DART 없이 조사하고, 재무는 AI 호출 없이 partial.
+  dartConfidence = 'fuzzy';
+  const fuzzyGov = await researchSection('gov-fuzzy', 'Fixture', 'governance_structure');
+  assert.ok(!prompt.includes('홍길동') && !prompt.includes('임원 현황'), 'a fuzzy match must not reach the prompt as DART fact');
+  assert.match(prompt, /정확히 같은 이름의 법인을 찾지 못했습니다\(이름이 비슷한 다른 법인의 공시는 쓰지 않습니다\)/);
+  assert.equal(JSON.parse(JSON.stringify(fuzzyGov.contentJson)).dartMatch, 'none');
+  assert.ok(!fuzzyGov.sources.some((s) => s.title.includes('DART')));
+  const callsBefore = calls;
+  const fuzzyFin = await researchSection('fin-fuzzy', 'Fixture', 'financials');
+  assert.equal(calls, callsBefore); assert.equal(fuzzyFin.status, 'partial');
+  assert.match(fuzzyFin.content, /정확히 같은 이름의 법인을 찾지 못했습니다/);
+  dartConfidence = 'exact';
   homepage = { status: 'ok', url: 'https://www.example-am.co.kr/', title: '예시자산운용', text: '[첫 화면] IPO 투자자문 · 펀드운용 · 투자일임 공모주 펀드를 운용합니다.',
     pages: [{ title: '예시자산운용', url: 'https://www.example-am.co.kr/' }], images: [] };
   imageTexts = [];
@@ -209,5 +227,7 @@ function load(name) {
   await researchSection('news-fixture', 'Fixture', 'news');
   assert.equal(homepageFetches, fetchesBefore);
   assert.ok(!prompt.includes('회사 홈페이지') && !prompt.includes('채용공고 —'), 'news research must not include the basics block');
+  // 뉴스도 식별 단서는 받는다(동명 회사 기사를 거르도록). 홈페이지는 읽지 않는다.
+  assert.match(prompt, /\[회사 식별 단서 — "Fixture"/); assert.match(prompt, /회사를 끝내 특정하지 못하면 그렇게 밝혀/);
   console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility, homepage/DART/posting grounding, old-method sections refreshed, research notice');
 })().catch(error => { console.error(error); process.exitCode = 1; });
