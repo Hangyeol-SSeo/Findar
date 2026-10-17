@@ -1,10 +1,13 @@
 import * as cheerio from "cheerio";
+import type { InputImage } from "./codex-ai";
 
 // 회사 리서치의 1차 근거인 회사 홈페이지를 서버에서 직접 읽는다. 모델의 WebFetch만 믿었더니 홈페이지를 열지 못한 채
 // 검색 결과로 사업을 추정해, IPO 전문 운용사를 "국내 주식 롱쇼트 운용사"로 잘못 쓰고 다른 공고의 문구까지 섞인 일이 있었다.
 // 주소 후보는 KOFIA 공고의 "사이트바로가기"(jobs.siteUrl), DART 기업개황의 홈페이지, 공고에 적힌 지원 이메일의 도메인 순이다.
 // 첫 화면은 대개 메뉴와 최근 게시물뿐이라(흥국증권: 프레임셋 → /index.do, 회사개요·CEO·경영정보는 하위 페이지), 프레임·
-// 리다이렉트를 따라가고 회사개요·사업영역 같은 하위 페이지 몇 개를 함께 읽는다. AI 호출 없음.
+// 리다이렉트를 따라가고 회사개요·사업영역 같은 하위 페이지 몇 개를 함께 읽는다. 하위 페이지 본문이 이미지로만 된 경우
+// (한국자산평가 인재상·미션·핵심가치: alt는 "한국자산평가 인재상"뿐)를 위해 본문 이미지도 내려받아 둔다 — 글자는
+// lib/homepage-image-text.ts가 읽는다. 이 파일은 AI 호출 없음.
 
 export const HOMEPAGE_UNVERIFIED = "※ 회사 홈페이지를 확인하지 못했습니다";
 const ROOT_TEXT_LIMIT = 2500;
@@ -15,10 +18,21 @@ const MAX_CANDIDATES = 3;
 const MIN_TEXT = 200;
 const MAX_BYTES = 2_000_000;
 const CACHE_MS = 10 * 60 * 1000;
+const MAX_IMAGES = 6;
+const MAX_IMAGE_CANDIDATES = 10;
+const MAX_IMAGES_PER_PAGE = 3;
+// 아이콘·글머리표·구분선은 수 KB다. 모델 입력 한도(장당 5MB, 한 변 8000px) 안에서만 보낸다.
+const MIN_IMAGE_BYTES = 6_000;
+const MAX_IMAGE_BYTES = 4_500_000;
+const MIN_IMAGE_SIDE = 120;
+const MAX_IMAGE_SIDE = 8000;
+const ALT_IS_TEXT = 80;
 
 export interface HomepagePage { title: string; url: string }
+// 하위 페이지 본문에 든 이미지. data는 base64.
+export interface HomepageImage { page: string; pageUrl: string; url: string; alt: string; mediaType: InputImage["mediaType"]; data: string }
 export type HomepageResult =
-  | { status: "ok"; url: string; title: string; text: string; pages: HomepagePage[] }
+  | { status: "ok"; url: string; title: string; text: string; pages: HomepagePage[]; images: HomepageImage[] }
   | { status: "unavailable"; url: string; reason: string };
 
 // 채용 대행·채용 게시판 주소는 회사 홈페이지가 아니다.
@@ -116,6 +130,88 @@ export function subpageLinks(html: string, base: string): HomepagePage[] {
   return found.sort((a, b) => a.rank - b.rank).slice(0, MAX_SUBPAGES).map(({ title, url }) => ({ title, url }));
 }
 
+// 하위 페이지 본문(머리·메뉴·바닥 제외)의 이미지 후보. 파일 이름이나 크기 속성으로 장식임이 드러나는 것은 뺀다.
+const DECORATION = /(?:logo|icon|ico_|btn|button|bullet|arrow|blank|spacer|^dot|line|bar_|tab_|bg_|sns|quick|loading|top_|_top\.)/i;
+export function contentImages(html: string, base: string): { url: string; alt: string }[] {
+  const $ = cheerio.load(html);
+  $(CHROME).remove();
+  const found: { url: string; alt: string }[] = [];
+  $("img[src]").each((_, el) => {
+    const src = $(el).attr("src")?.trim() ?? "";
+    const file = src.split(/[?#]/)[0].split("/").pop() ?? "";
+    if (!src || /^data:/i.test(src) || /\.svg$/i.test(file) || DECORATION.test(file)) return;
+    const width = Number($(el).attr("width")), height = Number($(el).attr("height"));
+    if ((width && width < MIN_IMAGE_SIDE) || (height && height < 40)) return;
+    try {
+      const url = new URL(src, base);
+      url.hash = "";
+      const alt = ($(el).attr("alt") ?? "").replace(/\s+/g, " ").trim();
+      // alt에 문장이 다 적힌 이미지(흥국증권 CEO 인사말)는 본문 텍스트로 이미 읽었다.
+      if (alt.length < ALT_IS_TEXT && (url.protocol === "https:" || url.protocol === "http:") && isPublicHost(url.hostname) && !found.some((f) => f.url === url.toString()))
+        found.push({ url: url.toString(), alt });
+    } catch { /* 잘못된 주소 */ }
+  });
+  return found;
+}
+
+// 파일 앞부분으로 형식과 가로·세로를 읽는다(헤더의 content-type은 틀린 경우가 있다). WebP는 크기를 읽지 않는다.
+export function sniffImage(bytes: Uint8Array): { mediaType: InputImage["mediaType"]; width?: number; height?: number } | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length > 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47)
+    return { mediaType: "image/png", width: view.getUint32(16), height: view.getUint32(20) };
+  if (bytes.length > 10 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46)
+    return { mediaType: "image/gif", width: view.getUint16(6, true), height: view.getUint16(8, true) };
+  if (bytes.length > 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP")
+    return { mediaType: "image/webp" };
+  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    for (let i = 2; i + 9 < bytes.length;) {
+      if (bytes[i] !== 0xff) { i++; continue; }
+      const marker = bytes[i + 1];
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker))
+        return { mediaType: "image/jpeg", height: view.getUint16(i + 5), width: view.getUint16(i + 7) };
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0xff) { i += marker === 0xff ? 1 : 2; continue; }
+      i += 2 + view.getUint16(i + 2);
+    }
+    return { mediaType: "image/jpeg" };
+  }
+  return null;
+}
+
+async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<InputImage | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(url, { redirect: "follow", signal: controller.signal, headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "Accept": "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.5",
+    } });
+    if (!res.ok || (res.url && !isPublicHost(new URL(res.url).hostname))) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length < MIN_IMAGE_BYTES || bytes.length > MAX_IMAGE_BYTES) return null;
+    const image = sniffImage(bytes);
+    if (!image) return null;
+    const { width, height } = image;
+    if (width !== undefined && height !== undefined && (Math.min(width, height) < 40 || Math.max(width, height) < MIN_IMAGE_SIDE || Math.max(width, height) > MAX_IMAGE_SIDE)) return null;
+    return { mediaType: image.mediaType, data: Buffer.from(bytes).toString("base64") };
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
+
+// 하위 페이지들의 본문 이미지를 페이지 순서대로 모아 내려받는다. 두 페이지 이상에 똑같이 나오는 이미지(인증 마크 등)는
+// 사이트 공통 요소라 뺀다.
+async function collectImages(pages: { title: string; url: string; html: string }[], fetchImpl: typeof fetch, timeoutMs: number): Promise<HomepageImage[]> {
+  const perPage = pages.map((p) => ({ ...p, images: contentImages(p.html, p.url) }));
+  const seen = new Map<string, number>();
+  for (const p of perPage) for (const image of p.images) seen.set(image.url, (seen.get(image.url) ?? 0) + 1);
+  const candidates = perPage.flatMap((p) => p.images.filter((image) => seen.get(image.url) === 1).slice(0, MAX_IMAGES_PER_PAGE)
+    .map((image) => ({ ...image, page: p.title, pageUrl: p.url }))).slice(0, MAX_IMAGE_CANDIDATES);
+  const loaded = await Promise.all(candidates.map(async (c) => {
+    const image = await fetchImage(c.url, fetchImpl, timeoutMs);
+    return image ? { ...c, ...image } : null;
+  }));
+  return loaded.filter((image): image is HomepageImage => image !== null).slice(0, MAX_IMAGES);
+}
+
 // 국내 홈페이지에는 EUC-KR이 아직 많아, 헤더나 meta의 charset으로 디코딩한다.
 function decode(bytes: ArrayBuffer, contentType: string): string {
   const head = new TextDecoder("latin1").decode(bytes.slice(0, 4096));
@@ -162,12 +258,15 @@ async function crawl(url: string, fetchImpl: typeof fetch, timeoutMs: number): P
     const sub = await fetchPage(link.url, fetchImpl, timeoutMs);
     if (sub.status !== "ok") return null;
     const { text } = extractHomepageText(sub.html, { stripChrome: true, limit: SUBPAGE_TEXT_LIMIT });
-    return text.length >= 50 ? { ...link, url: sub.url, text } : null;
-  }))).filter((s): s is HomepagePage & { text: string } => s !== null);
+    // 본문 글자가 거의 없어도 이미지에 내용이 있을 수 있어 남긴다(인재상 페이지가 이미지 한 장인 경우).
+    return text.length >= 50 || contentImages(sub.html, sub.url).length ? { ...link, url: sub.url, text, html: sub.html } : null;
+  }))).filter((s): s is HomepagePage & { text: string; html: string } => s !== null);
+  const images = await collectImages(subpages, fetchImpl, timeoutMs);
   return {
     status: "ok", url: page.url, title: root.title,
     text: [`[첫 화면 — ${page.url}]\n${root.text}`, ...subpages.map((s) => `[${s.title} — ${s.url}]\n${s.text}`)].join("\n\n"),
     pages: [{ title: root.title || "첫 화면", url: page.url }, ...subpages.map(({ title, url }) => ({ title, url }))],
+    images,
   };
 }
 

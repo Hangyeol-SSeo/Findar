@@ -5,7 +5,7 @@ const ts = require('typescript');
 let selectedModel;
 let calls = 0, saved = [], existing = [], options, prompt, errorResult = false;
 let homepage = null, resultText = '검증된 분석 [공식 자료](https://example.com/report)', homepageFetches = 0, candidates = [];
-let siteUrls = [], postings = [], dartOn = false, dartConfidence = 'exact';
+let siteUrls = [], postings = [], dartOn = false, dartConfidence = 'exact', imageTexts = [], imageReads = [];
 const modules = {};
 function load(name) {
   if (modules[name]) return modules[name];
@@ -33,6 +33,7 @@ function load(name) {
         emailDomainUrls: (texts) => texts.flatMap((t) => (t.match(/@([\w.-]+)/) ? [`https://www.${t.match(/@([\w.-]+)/)[1]}/`] : [])),
         findHomepage: async (list) => { homepageFetches++; candidates = list; return homepage; },
       };
+      if (id === './homepage-image-text') return { readHomepageImageTexts: async (images, model) => { if (images.length) imageReads.push({ count: images.length, model }); return images.map((_, i) => imageTexts[i]); } };
       if (id === './ai-model-settings') return { getAIModelId: () => selectedModel };
       if (id === './dart') return {
         isDartConfigured: () => dartOn,
@@ -117,6 +118,17 @@ function load(name) {
     { title: '공식 자료', url: 'https://example.com/report' },
   ]);
   assert.equal(withSite.status, 'ok');
+  assert.ok(!prompt.includes('<homepage_images>'), 'no image block without images');
+  // 본문이 이미지로만 된 하위 페이지(인재상 등)는 판독한 글자를 붙인다. 글자 없는 사진은 빼고, 판독 실패는 미확인으로 알린다.
+  const image = (page, alt) => ({ page, pageUrl: `https://www.example-am.co.kr/${page}`, url: `https://www.example-am.co.kr/${alt}.jpg`, alt, mediaType: 'image/jpeg', data: 'AAAA' });
+  homepage = { ...homepage, images: [image('인재상', '예시 인재상'), image('회사소개', '사옥 사진'), image('회사소개', '예시 핵심 가치')] };
+  imageTexts = ['열린 마음의 인재\n긍정적이고 적극적인 사고로 유연하게 소통하며', '', null];
+  await researchSection('image-fixture', 'Fixture', 'culture');
+  assert.deepEqual(imageReads, [{ count: 3, model: selectedModel }], 'image text is read with the research model');
+  assert.ok(prompt.includes('<homepage_images>') && prompt.includes('[이미지 — 인재상 (https://www.example-am.co.kr/인재상) · alt "예시 인재상"]\n열린 마음의 인재'));
+  assert.ok(!prompt.includes('사옥 사진'), 'images without text are left out');
+  assert.match(prompt, /alt "예시 핵심 가치"\]\n\(판독 실패/);
+  homepage = { ...homepage, images: [] }; imageTexts = [];
   // 이름만 비슷한(fuzzy) DART 회사의 주소·홈페이지는 쓰지 않는다.
   dartConfidence = 'fuzzy';
   await researchSection('fuzzy-fixture', 'Fixture', 'overview');

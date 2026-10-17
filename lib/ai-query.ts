@@ -1,10 +1,12 @@
-import { query as queryClaude, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query as queryClaude, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isCodexModel } from "./ai-model-types";
-import { runCodex, type CodexUsage } from "./codex-ai";
+import { runCodex, type CodexUsage, type InputImage } from "./codex-ai";
 import { getAIAbortSignal, throwIfAIAborted } from "./ai-operation";
 
 type QueryInput = Parameters<typeof queryClaude>[0] & {
   inputFiles?: string[];
+  // 텍스트 프롬프트 앞에 붙일 이미지(base64). 회사 홈페이지의 글자 이미지를 읽을 때 쓴다.
+  inputImages?: InputImage[];
   webToolLimit?: number;
   // Codex 호출 제한 시간. 자기소개서 작성처럼 긴 요청은 기본값(240초)보다 길게 준다.
   timeoutMs?: number;
@@ -29,10 +31,12 @@ export async function* query(input: QueryInput): AsyncGenerator<SDKMessage | Cod
   const abort = () => controller.abort(taskSignal?.reason);
   taskSignal?.addEventListener("abort", abort, { once: true });
   try {
-    const { inputFiles, webToolLimit, timeoutMs, ...claudeInput } = input;
+    const { inputFiles, inputImages, webToolLimit, timeoutMs, ...claudeInput } = input;
     claudeInput.options = { ...claudeInput.options, abortController: controller };
     const model = input.options?.model || "";
+    if (inputImages?.length && typeof input.prompt !== "string") throw new Error("이미지는 텍스트 프롬프트와 함께 보내야 합니다.");
     if (!isCodexModel(model)) {
+      if (inputImages?.length) claudeInput.prompt = imageMessage(input.prompt as string, inputImages);
       for await (const message of queryClaude(claudeInput)) {
         throwIfAIAborted();
         yield message;
@@ -44,7 +48,7 @@ export async function* query(input: QueryInput): AsyncGenerator<SDKMessage | Cod
     const tools = input.options?.allowedTools || [];
     let codexUsage: CodexUsage | undefined;
     const result = await runCodex({
-      model, prompt: input.prompt, systemPrompt, inputFiles,
+      model, prompt: input.prompt, systemPrompt, inputFiles, inputImages,
       signal: controller.signal,
       effort: input.options?.effort === "high" ? "high" : "medium",
       webSearch: tools.includes("WebSearch") || tools.includes("WebFetch"),
@@ -58,4 +62,15 @@ export async function* query(input: QueryInput): AsyncGenerator<SDKMessage | Cod
     throwIfAIAborted();
     throw error;
   } finally { taskSignal?.removeEventListener("abort", abort); }
+}
+
+async function* imageMessage(text: string, images: InputImage[]): AsyncGenerator<SDKUserMessage> {
+  yield {
+    type: "user",
+    parent_tool_use_id: null,
+    message: { role: "user", content: [
+      ...images.map((image) => ({ type: "image" as const, source: { type: "base64" as const, media_type: image.mediaType, data: image.data } })),
+      { type: "text" as const, text },
+    ] },
+  };
 }

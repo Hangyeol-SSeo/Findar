@@ -9,7 +9,7 @@ const envKeys = ['FINDAR_CODEX_PATH', 'FINDAR_CODEX_TEST_MODE', 'FINDAR_CODEX_TE
 const original = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
 const oldCwd = process.cwd();
 const cache = new Map();
-let claudeCalls = 0;
+let claudeCalls = 0, claudeInput;
 let claudeReady;
 function load(relative) {
   const file = path.resolve(root, relative);
@@ -19,12 +19,12 @@ function load(relative) {
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true,
   } }).outputText;
   const req = id => id === '@anthropic-ai/claude-agent-sdk' ? { async *query(input) {
-    claudeCalls++;
+    claudeCalls++; claudeInput = input;
     if (input.prompt === 'cancel-fixture') {
       claudeReady(input.options.abortController.signal);
       await new Promise((_, reject) => input.options.abortController.signal.addEventListener('abort', () => reject(input.options.abortController.signal.reason), { once: true }));
     }
-    assert.ok(!Object.hasOwn(input, 'inputFiles'), 'provider-specific inputs must not reach Claude');
+    assert.ok(!Object.hasOwn(input, 'inputFiles') && !Object.hasOwn(input, 'inputImages'), 'provider-specific inputs must not reach Claude');
     yield { type: 'result', subtype: 'success', is_error: false, result: 'claude-result' };
   } } : id.startsWith('@/') ? load(id.slice(2) + '.ts')
     : id.startsWith('.') ? load(path.relative(root, path.resolve(path.dirname(file), id + '.ts'))) : require(id);
@@ -45,7 +45,8 @@ if (args[0] === 'login') {
 let input = '';
 process.stdin.on('data', part => input += part);
 process.stdin.on('end', () => {
-  fs.writeFileSync(process.env.FINDAR_CODEX_TEST_TRACE, JSON.stringify({args, input, cwd: process.cwd(),
+  const images = args.flatMap((a, i) => a === '--image' ? [fs.readFileSync(args[i + 1]).toString('base64')] : []);
+  fs.writeFileSync(process.env.FINDAR_CODEX_TEST_TRACE, JSON.stringify({args, images, input, cwd: process.cwd(),
     api: process.env.OPENAI_API_KEY, codexApi: process.env.CODEX_API_KEY}));
   const emit = value => console.log(JSON.stringify(value));
   if (mode === 'hang') { setInterval(() => {}, 1000); return; }
@@ -114,6 +115,21 @@ function pdfFile(name, text) {
   await runCodex({ ...request, inputFiles: [file] });
   assert.ok(JSON.parse(fs.readFileSync(tracePath, 'utf8')).input.includes('All source pages must be read.'));
   await assert.rejects(runCodex({ ...request, inputFiles: [pdfFile('blank.pdf', '')] }), /텍스트/);
+  // 이미지는 빈 작업 폴더의 파일로 --image에 붙인다. 다음 옵션 앞에 둬야 프롬프트 자리("-")를 삼키지 않는다.
+  const png = Buffer.from('89504e470d0a1a0a00', 'hex').toString('base64');
+  await runCodex({ ...request, inputImages: [{ mediaType: 'image/png', data: png }, { mediaType: 'image/jpeg', data: png }] });
+  const imageTrace = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
+  assert.deepEqual(imageTrace.images, [png, png]);
+  assert.deepEqual(imageTrace.args.slice(0, 5).map((a) => a.replace(/^.*\/(image-\d\.\w+)$/, '$1')), ['exec', '--image', 'image-1.png', '--image', 'image-2.jpg']);
+  assert.equal(imageTrace.args[5], '--ignore-user-config'); assert.equal(imageTrace.args.at(-1), '-');
+  assert.ok(imageTrace.args.includes('features.view_image=false'), 'the model still has no image tool');
+  // Claude에는 이미지 블록과 텍스트를 한 사용자 메시지로 보낸다.
+  for await (const _message of query({ prompt: '글자를 옮겨', inputImages: [{ mediaType: 'image/png', data: png }], options: { model: AI_MODEL_IDS.SONNET } })) { /* drain */ }
+  const sent = []; for await (const m of claudeInput.prompt) sent.push(m);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].message.content.map((b) => b.type), ['image', 'text']);
+  assert.equal(sent[0].message.content[0].source.data, png); assert.equal(sent[0].message.content[1].text, '글자를 옮겨');
+  claudeCalls--;
   for (const model of [AI_MODEL_IDS.GPT_6_LUNA, AI_MODEL_IDS.GPT_6_1_SOL, AI_MODEL_IDS.SONNET]) {
     const messages = [];
     for await (const message of query({ prompt: 'fixture', inputFiles: [], options: { model, allowedTools: [] } })) messages.push(message);
