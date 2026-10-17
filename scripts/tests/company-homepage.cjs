@@ -97,6 +97,10 @@ assert.equal(sniffImage(Buffer.from('<html>not an image</html>')), null);
   await fetchHomepage('https://cache.example.com/', { fetchImpl: counting });
   await fetchHomepage('https://cache.example.com/', { fetchImpl: counting });
   assert.equal(count, 1);
+  // 동시에 들어온 요청도 진행 중인 것을 함께 쓴다(개요·지배구조 섹션을 동시에 새로고침할 때).
+  count = 0;
+  await Promise.all([fetchHomepage('https://concurrent.example.com/', { fetchImpl: counting }), fetchHomepage('https://concurrent.example.com/', { fetchImpl: counting })]);
+  assert.equal(count, 1);
   // 프레임셋 → 실제 첫 화면 → 회사 정보 하위 페이지(머리·메뉴·바닥 제외)를 읽어 페이지 이름을 붙여 합친다.
   const site = {
     'https://www.portal.example.com/': '<html><head><title>예시증권</title></head><frameset><frame src="/index.do"></frameset></html>',

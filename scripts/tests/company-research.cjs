@@ -34,10 +34,16 @@ function load(name) {
         findHomepage: async (list) => { homepageFetches++; candidates = list; return homepage; },
       };
       if (id === './homepage-image-text') return { readHomepageImageTexts: async (images, model) => { if (images.length) imageReads.push({ count: images.length, model }); return images.map((_, i) => imageTexts[i]); } };
+      if (id === './research-page-tool') return {
+        READ_PAGE_TOOL: 'mcp__findar__read_page', READ_FAILED: '[읽기 실패]', BLOCKED_SITES_NOTE: 'thevc.kr·잡플래닛',
+        isBlockedResearchHost: (url) => /thevc\.kr|jobplanet/.test(url), researchPageServer: () => ({ type: 'sdk', name: 'findar' }),
+      };
       if (id === './ai-model-settings') return { getAIModelId: () => selectedModel };
       if (id === './dart') return {
         isDartConfigured: () => dartOn,
         findCorpCode: async () => ({ corpCode: '0001', confidence: dartConfidence }),
+        fetchKeyFinancials: async () => ({ bsnsYear: '2025', fsDiv: 'OFS', figures: [{ label: '자산총계', thisYearAmount: '100', lastYearAmount: '90' }], sourceRceptNo: '2026' }),
+        fetchExecutives: async () => [{ name: '홍길동', position: '대표이사', tenurePeriod: '3년' }],
         fetchCompanyOverview: async () => ({ ceoName: '홍길동', address: '서울특별시 영등포구 국제금융로2길 32', homepageUrl: 'www.example-sec.co.kr', establishedDate: '20001107', industryCode: '66' }),
       };
       return load(id.slice(2));
@@ -62,6 +68,10 @@ function load(name) {
     assert.match(result.hookSpecificOutput.updatedInput.prompt, /1500자/);
   }
   assert.equal((await hook({ hook_event_name: 'PreToolUse', tool_name: 'WebFetch' })).hookSpecificOutput.permissionDecision, 'deny');
+  // 페이지 읽기 도구(read_page)를 함께 주고, 같은 예산 훅을 실패 이벤트에도 건다.
+  assert.ok(Array.from(options.allowedTools).includes('mcp__findar__read_page') && options.mcpServers.findar);
+  assert.equal(options.hooks.PostToolUse[0].hooks[0], hook); assert.equal(options.hooks.PostToolUseFailure[0].hooks[0], hook);
+  assert.match(prompt, /read_page로 읽어/); assert.match(prompt, /thevc\.kr·잡플래닛는 자동 접근을 막는 사이트라 열지 마/);
   const grounded = { basis: { homepage: 'https://example.com/', dart: false, postings: 1 } };
   existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '기존 분석', contentJson: grounded }];
   assert.equal(listStaleSections('fixture', ['overview']).length, 0);
@@ -129,6 +139,37 @@ function load(name) {
   assert.ok(!prompt.includes('사옥 사진'), 'images without text are left out');
   assert.match(prompt, /alt "예시 핵심 가치"\]\n\(판독 실패/);
   homepage = { ...homepage, images: [] }; imageTexts = [];
+  // 예산: read_page와 WebFetch가 페이지 읽기 5회를 함께 쓴다. 차단 사이트는 예산을 쓰지 않고 막고, 열지 못한 페이지는 돌려준다(최대 4회).
+  await researchSection('budget-fixture', 'Fixture', 'news');
+  const budget = options.hooks.PreToolUse[0].hooks[0];
+  const pre = (tool_name, url) => budget({ hook_event_name: 'PreToolUse', tool_name, tool_input: { url } }).then((r) => r.hookSpecificOutput?.permissionDecision ?? 'allow');
+  for (let i = 0; i < 3; i++) assert.equal(await pre('mcp__findar__read_page', 'https://www.thevc.kr/x'), 'deny');
+  assert.equal(await pre('mcp__findar__read_page', 'https://a.example.com/'), 'allow');
+  assert.equal(await pre('WebFetch', 'https://b.example.com/'), 'allow');
+  await budget({ hook_event_name: 'PostToolUse', tool_name: 'mcp__findar__read_page', tool_response: { content: [{ type: 'text', text: '[읽기 실패] HTTP 404' }] } });
+  await budget({ hook_event_name: 'PostToolUseFailure', tool_name: 'WebFetch', error: 'Request failed with status code 403' });
+  await budget({ hook_event_name: 'PostToolUse', tool_name: 'mcp__findar__read_page', tool_response: { content: [{ type: 'text', text: '주소: https://a.example.com/' }] } });
+  for (let i = 0; i < 5; i++) assert.equal(await pre('mcp__findar__read_page', `https://c${i}.example.com/`), 'allow', 'two failed reads were refunded');
+  assert.equal(await pre('mcp__findar__read_page', 'https://d.example.com/'), 'deny');
+  for (let i = 0; i < 5; i++) await budget({ hook_event_name: 'PostToolUseFailure', tool_name: 'WebFetch', error: 'x' });
+  assert.equal(await pre('WebFetch', 'https://e.example.com/'), 'allow', 'only two more refunds remained');
+  assert.equal(await pre('WebFetch', 'https://f.example.com/'), 'deny', 'refunds are capped at 4');
+  // 지배구조·재무도 홈페이지 원문(이미지 글자 포함)과 공고를 참고 자료로 받는다. 홈페이지를 못 읽어도 미확인 표시는 요구하지 않는다.
+  dartOn = true;
+  homepage = { ...homepage, images: [image('경영공시', '주주 현황')] }; imageTexts = ['최대주주 홍길동 60%'];
+  await researchSection('gov-fixture', 'Fixture', 'governance_structure');
+  assert.ok(prompt.includes('공모주 펀드를 운용합니다') && prompt.includes('최대주주 홍길동 60%') && prompt.includes('임원 현황'));
+  assert.match(prompt, /주주 구성·임직원 수는 위 홈페이지 원문/);
+  await researchSection('fin-fixture', 'Fixture', 'financials');
+  assert.ok(prompt.includes('공모주 펀드를 운용합니다') && prompt.includes('자산총계: 100'));
+  assert.match(prompt, /운용자산\(AUM\)/);
+  homepage = { status: 'unavailable', url: 'https://www.example-am.co.kr/', reason: 'HTTP 503' };
+  await researchSection('gov-unavailable', 'Fixture', 'governance_structure');
+  assert.match(prompt, /\[회사 홈페이지\] 홈페이지\(https:\/\/www\.example-am\.co\.kr\/\)를 서버에서 읽지 못했다\(HTTP 503\)\. 필요하면 read_page/);
+  assert.ok(!prompt.includes('첫 줄에'), 'governance does not require the unverified marker');
+  homepage = { status: 'ok', url: 'https://www.example-am.co.kr/', title: '예시자산운용', text: '[첫 화면] IPO 투자자문 · 펀드운용 · 투자일임 공모주 펀드를 운용합니다.',
+    pages: [{ title: '예시자산운용', url: 'https://www.example-am.co.kr/' }], images: [] };
+  imageTexts = [];
   // 이름만 비슷한(fuzzy) DART 회사의 주소·홈페이지는 쓰지 않는다.
   dartConfidence = 'fuzzy';
   await researchSection('fuzzy-fixture', 'Fixture', 'overview');

@@ -213,7 +213,7 @@ async function collectImages(pages: { title: string; url: string; html: string }
 }
 
 // 국내 홈페이지에는 EUC-KR이 아직 많아, 헤더나 meta의 charset으로 디코딩한다.
-function decode(bytes: ArrayBuffer, contentType: string): string {
+export function decode(bytes: ArrayBuffer, contentType: string): string {
   const head = new TextDecoder("latin1").decode(bytes.slice(0, 4096));
   const charset = (contentType.match(/charset=([\w-]+)/i)?.[1] ?? head.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] ?? "utf-8").toLowerCase();
   try { return new TextDecoder(charset).decode(bytes); }
@@ -270,17 +270,18 @@ async function crawl(url: string, fetchImpl: typeof fetch, timeoutMs: number): P
   };
 }
 
-const cache = new Map<string, { at: number; result: HomepageResult }>();
+const cache = new Map<string, { at: number; result: Promise<HomepageResult> }>();
 
-// 개요·인재상 섹션이 연달아 같은 홈페이지를 쓰므로 잠시 재사용한다. https가 안 되면 http로 한 번 더 시도한다.
-export async function fetchHomepage(url: string, { fetchImpl = fetch, timeoutMs = 15_000 }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<HomepageResult> {
+// 리서치 섹션들이 같은 홈페이지를 연달아·동시에 쓰므로 진행 중인 요청까지 잠시 재사용한다. https가 안 되면 http로 한 번 더 시도한다.
+export function fetchHomepage(url: string, { fetchImpl = fetch, timeoutMs = 15_000 }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<HomepageResult> {
   const hit = cache.get(url);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.result;
-  let result = await crawl(url, fetchImpl, timeoutMs);
-  if (result.status !== "ok" && url.startsWith("https://")) {
+  const result = (async () => {
+    const first = await crawl(url, fetchImpl, timeoutMs);
+    if (first.status === "ok" || !url.startsWith("https://")) return first;
     const fallback = await crawl(url.replace(/^https:/, "http:"), fetchImpl, timeoutMs);
-    if (fallback.status === "ok") result = fallback;
-  }
+    return fallback.status === "ok" ? fallback : first;
+  })();
   cache.set(url, { at: Date.now(), result });
   return result;
 }
