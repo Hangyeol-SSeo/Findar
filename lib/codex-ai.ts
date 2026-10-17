@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -64,6 +64,7 @@ export interface CodexRequest {
   prompt: string;
   systemPrompt?: string;
   inputFiles?: string[];
+  inputImages?: InputImage[];
   signal?: AbortSignal;
   effort?: "medium" | "high";
   webSearch?: boolean;
@@ -72,6 +73,9 @@ export interface CodexRequest {
   // 턴이 끝날 때 Codex가 알려 주는 토큰 사용량(캐시 적중 포함). 사용량 기록용.
   onUsage?: (usage: CodexUsage) => void;
 }
+
+export interface InputImage { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string }
+const IMAGE_EXTENSIONS: Record<InputImage["mediaType"], string> = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" };
 
 export interface CodexUsage { inputTokens: number | null; cachedInputTokens: number | null; outputTokens: number | null }
 
@@ -87,8 +91,16 @@ export async function runCodex(request: CodexRequest): Promise<string> {
   // An empty working directory isolates project rules/config from analysis requests.
   const directory = await mkdtemp(join(tmpdir(), "findar-codex-"));
   try {
+    // 이미지는 빈 작업 폴더에 파일로 두고 --image로 첫 프롬프트에 붙인다(모델의 view_image 도구는 계속 꺼 둔다).
+    const imageArgs: string[] = [];
+    for (const [index, image] of (request.inputImages || []).entries()) {
+      const file = join(directory, `image-${index + 1}.${IMAGE_EXTENSIONS[image.mediaType]}`);
+      await writeFile(file, Buffer.from(image.data, "base64"));
+      imageArgs.push("--image", file);
+    }
     return await new Promise<string>((resolve, reject) => {
-      const args = ["exec", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check",
+      // --image는 값을 여러 개 받으므로 다음 옵션(--ignore-user-config) 앞에 둬야 프롬프트 자리("-")를 삼키지 않는다.
+      const args = ["exec", ...imageArgs, "--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check",
         "--sandbox", "read-only", "--color", "never", "--json", "--model", request.model,
         "-c", 'forced_login_method="chatgpt"', "-c", 'model_provider="openai"',
         "-c", "features.shell_tool=false", "-c", "features.unified_exec=false", "-c", "features.apps=false",

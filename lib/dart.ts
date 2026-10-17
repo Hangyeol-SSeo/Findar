@@ -104,20 +104,33 @@ export interface CorpCodeMatch {
   confidence: "exact" | "fuzzy";
 }
 
-// 정확히 같은 정규화 이름이 있으면 그걸 쓰고, 없으면 포함 관계로 가장 근접한 이름을 고른다.
-// (예: "삼성증권" 검색 시 회사명 문자열에 "삼성증권"이 포함된 최단 길이 항목을 고름)
+// 영문 약어 상호는 DART와 KOFIA 공고가 서로 다르게 적는 경우가 많다(DS투자증권 ↔ 디에스투자증권, 케이비자산운용 ↔ KB자산운용).
+const LETTER_NAMES: Record<string, string> = {
+  A: "에이", B: "비", C: "씨", D: "디", E: "이", F: "에프", G: "지", H: "에이치", I: "아이", J: "제이", K: "케이", L: "엘", M: "엠",
+  N: "엔", O: "오", P: "피", Q: "큐", R: "알", S: "에스", T: "티", U: "유", V: "브이", W: "더블유", X: "엑스", Y: "와이", Z: "제트",
+};
+export function hangulizeLatin(name: string): string {
+  return name.replace(/[A-Za-z]+/g, (word) => [...word.toUpperCase()].map((c) => LETTER_NAMES[c] ?? c).join(""));
+}
+
+// 같은 정규화 이름(그다음 영문 약어를 한글로 바꾼 이름)이 있으면 exact. 없으면 DART 상호가 이 이름을 품고 길이가 거의 같은
+// 항목(예: 앞에 "한국"이 붙은 상호)을 fuzzy로 돌려준다 — fuzzy는 다른 회사일 수 있어 리서치는 쓰지 않는다.
+// 예전에는 반대 방향(이 이름 안에 DART 상호가 들어 있음)도 받아, "DS투자증권"이 한 글자 상호 "자"(대표 이춘모)에,
+// "금융투자협회"가 "융"에 묶였고 지배구조 분석이 그 대표이사를 공시 사실로 썼다.
+const FUZZY_EXTRA_CHARS = 4;
+const FUZZY_MIN_SHARE = 0.6;
 export async function findCorpCode(rawName: string): Promise<CorpCodeMatch | null> {
   if (!isDartConfigured()) return null;
   const target = normalizeCompanyName(rawName);
   if (!target) return null;
 
   const entries = await ensureCorpCodeIndex();
-  const exact = entries.find((e) => e.normalizedName === target);
+  // 양쪽 모두 영문을 한글로 바꿔 비교한다: KOFIA "케이비자산운용" ↔ DART "KB자산운용", KOFIA "DS투자증권" ↔ DART "디에스투자증권".
+  const hangul = hangulizeLatin(target);
+  const exact = entries.find((e) => e.normalizedName === target) ?? entries.find((e) => hangulizeLatin(e.normalizedName) === hangul);
   if (exact) return { corpCode: exact.corpCode, corpName: exact.corpName, confidence: "exact" };
-
-  const candidates = entries.filter(
-    (e) => e.normalizedName.includes(target) || target.includes(e.normalizedName)
-  );
+  const candidates = entries.filter((e) => e.normalizedName.includes(target)
+    && e.normalizedName.length - target.length <= FUZZY_EXTRA_CHARS && target.length >= e.normalizedName.length * FUZZY_MIN_SHARE);
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => a.normalizedName.length - b.normalizedName.length);
   const best = candidates[0];

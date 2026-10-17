@@ -5,7 +5,7 @@ const ts = require('typescript');
 let selectedModel;
 let calls = 0, saved = [], existing = [], options, prompt, errorResult = false;
 let homepage = null, resultText = '검증된 분석 [공식 자료](https://example.com/report)', homepageFetches = 0, candidates = [];
-let siteUrls = [], postings = [], dartOn = false, dartConfidence = 'exact';
+let siteUrls = [], postings = [], dartOn = false, dartConfidence = 'exact', imageTexts = [], imageReads = [];
 const modules = {};
 function load(name) {
   if (modules[name]) return modules[name];
@@ -13,7 +13,7 @@ function load(name) {
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(`lib/${name}.ts`, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, {
-    exports, process: { env: {} }, console: { info() {}, error() {} },
+    exports, URL, process: { env: {} }, console: { info() {}, error() {} },
     require(id) {
       if (id === './ai-query') return { query: async function* (args) {
         calls++; options = args.options; prompt = args.prompt;
@@ -32,11 +32,19 @@ function load(name) {
         HOMEPAGE_UNVERIFIED: '※ 회사 홈페이지를 확인하지 못했습니다',
         emailDomainUrls: (texts) => texts.flatMap((t) => (t.match(/@([\w.-]+)/) ? [`https://www.${t.match(/@([\w.-]+)/)[1]}/`] : [])),
         findHomepage: async (list) => { homepageFetches++; candidates = list; return homepage; },
+        homepageCandidates: (urls) => [...new Set(urls.map((u) => `https://${u.replace(/^https?:\/\//, '').split('/')[0]}/`))],
+      };
+      if (id === './homepage-image-text') return { readHomepageImageTexts: async (images, model) => { if (images.length) imageReads.push({ count: images.length, model }); return images.map((_, i) => imageTexts[i]); } };
+      if (id === './research-page-tool') return {
+        READ_PAGE_TOOL: 'mcp__findar__read_page', READ_FAILED: '[읽기 실패]', BLOCKED_SITES_NOTE: 'thevc.kr·잡플래닛',
+        isBlockedResearchHost: (url) => /thevc\.kr|jobplanet/.test(url), researchPageServer: () => ({ type: 'sdk', name: 'findar' }),
       };
       if (id === './ai-model-settings') return { getAIModelId: () => selectedModel };
       if (id === './dart') return {
         isDartConfigured: () => dartOn,
         findCorpCode: async () => ({ corpCode: '0001', confidence: dartConfidence }),
+        fetchKeyFinancials: async () => ({ bsnsYear: '2025', fsDiv: 'OFS', figures: [{ label: '자산총계', thisYearAmount: '100', lastYearAmount: '90' }], sourceRceptNo: '2026' }),
+        fetchExecutives: async () => [{ name: '홍길동', position: '대표이사', tenurePeriod: '3년' }],
         fetchCompanyOverview: async () => ({ ceoName: '홍길동', address: '서울특별시 영등포구 국제금융로2길 32', homepageUrl: 'www.example-sec.co.kr', establishedDate: '20001107', industryCode: '66' }),
       };
       return load(id.slice(2));
@@ -61,6 +69,10 @@ function load(name) {
     assert.match(result.hookSpecificOutput.updatedInput.prompt, /1500자/);
   }
   assert.equal((await hook({ hook_event_name: 'PreToolUse', tool_name: 'WebFetch' })).hookSpecificOutput.permissionDecision, 'deny');
+  // 페이지 읽기 도구(read_page)를 함께 주고, 같은 예산 훅을 실패 이벤트에도 건다.
+  assert.ok(Array.from(options.allowedTools).includes('mcp__findar__read_page') && options.mcpServers.findar);
+  assert.equal(options.hooks.PostToolUse[0].hooks[0], hook); assert.equal(options.hooks.PostToolUseFailure[0].hooks[0], hook);
+  assert.match(prompt, /read_page로 읽어/); assert.match(prompt, /thevc\.kr·잡플래닛는 자동 접근을 막는 사이트라 열지 마/);
   const grounded = { basis: { homepage: 'https://example.com/', dart: false, postings: 1 } };
   existing = [{ sectionType: 'overview', status: 'ok', generatedAt: Date.now(), content: '기존 분석', contentJson: grounded }];
   assert.equal(listStaleSections('fixture', ['overview']).length, 0);
@@ -117,6 +129,65 @@ function load(name) {
     { title: '공식 자료', url: 'https://example.com/report' },
   ]);
   assert.equal(withSite.status, 'ok');
+  assert.ok(!prompt.includes('<homepage_images>'), 'no image block without images');
+  // 본문이 이미지로만 된 하위 페이지(인재상 등)는 판독한 글자를 붙인다. 글자 없는 사진은 빼고, 판독 실패는 미확인으로 알린다.
+  const image = (page, alt) => ({ page, pageUrl: `https://www.example-am.co.kr/${page}`, url: `https://www.example-am.co.kr/${alt}.jpg`, alt, mediaType: 'image/jpeg', data: 'AAAA' });
+  homepage = { ...homepage, images: [image('인재상', '예시 인재상'), image('회사소개', '사옥 사진'), image('회사소개', '예시 핵심 가치')] };
+  imageTexts = ['열린 마음의 인재\n긍정적이고 적극적인 사고로 유연하게 소통하며', '', null];
+  await researchSection('image-fixture', 'Fixture', 'culture');
+  assert.deepEqual(imageReads, [{ count: 3, model: selectedModel }], 'image text is read with the research model');
+  assert.ok(prompt.includes('<homepage_images>') && prompt.includes('[이미지 — 인재상 (https://www.example-am.co.kr/인재상) · alt "예시 인재상"]\n열린 마음의 인재'));
+  assert.ok(!prompt.includes('사옥 사진'), 'images without text are left out');
+  assert.match(prompt, /alt "예시 핵심 가치"\]\n\(판독 실패/);
+  homepage = { ...homepage, images: [] }; imageTexts = [];
+  // 예산: read_page와 WebFetch가 페이지 읽기 5회를 함께 쓴다. 차단 사이트는 예산을 쓰지 않고 막고, 열지 못한 페이지는 돌려준다(최대 4회).
+  await researchSection('budget-fixture', 'Fixture', 'news');
+  const budget = options.hooks.PreToolUse[0].hooks[0];
+  const pre = (tool_name, url) => budget({ hook_event_name: 'PreToolUse', tool_name, tool_input: { url } }).then((r) => r.hookSpecificOutput?.permissionDecision ?? 'allow');
+  for (let i = 0; i < 3; i++) assert.equal(await pre('mcp__findar__read_page', 'https://www.thevc.kr/x'), 'deny');
+  assert.equal(await pre('mcp__findar__read_page', 'https://a.example.com/'), 'allow');
+  assert.equal(await pre('WebFetch', 'https://b.example.com/'), 'allow');
+  await budget({ hook_event_name: 'PostToolUse', tool_name: 'mcp__findar__read_page', tool_response: { content: [{ type: 'text', text: '[읽기 실패] HTTP 404' }] } });
+  await budget({ hook_event_name: 'PostToolUseFailure', tool_name: 'WebFetch', error: 'Request failed with status code 403' });
+  await budget({ hook_event_name: 'PostToolUse', tool_name: 'mcp__findar__read_page', tool_response: { content: [{ type: 'text', text: '주소: https://a.example.com/' }] } });
+  for (let i = 0; i < 5; i++) assert.equal(await pre('mcp__findar__read_page', `https://c${i}.example.com/`), 'allow', 'two failed reads were refunded');
+  assert.equal(await pre('mcp__findar__read_page', 'https://d.example.com/'), 'deny');
+  for (let i = 0; i < 5; i++) await budget({ hook_event_name: 'PostToolUseFailure', tool_name: 'WebFetch', error: 'x' });
+  assert.equal(await pre('WebFetch', 'https://e.example.com/'), 'allow', 'only two more refunds remained');
+  assert.equal(await pre('WebFetch', 'https://f.example.com/'), 'deny', 'refunds are capped at 4');
+  // 지배구조·재무도 홈페이지 원문(이미지 글자 포함)과 공고를 참고 자료로 받는다. 홈페이지를 못 읽어도 미확인 표시는 요구하지 않는다.
+  dartOn = true;
+  homepage = { ...homepage, images: [image('경영공시', '주주 현황')] }; imageTexts = ['최대주주 홍길동 60%'];
+  await researchSection('gov-fixture', 'Fixture', 'governance_structure');
+  assert.ok(prompt.includes('공모주 펀드를 운용합니다') && prompt.includes('최대주주 홍길동 60%') && prompt.includes('임원 현황'));
+  assert.match(prompt, /주주 구성·임직원 수는 위 홈페이지 원문/);
+  await researchSection('fin-fixture', 'Fixture', 'financials');
+  assert.ok(prompt.includes('공모주 펀드를 운용합니다') && prompt.includes('자산총계: 100'));
+  assert.match(prompt, /운용자산\(AUM\)/);
+  homepage = { status: 'unavailable', url: 'https://www.example-am.co.kr/', reason: 'HTTP 503' };
+  await researchSection('gov-unavailable', 'Fixture', 'governance_structure');
+  assert.match(prompt, /\[회사 홈페이지\] 홈페이지\(https:\/\/www\.example-am\.co\.kr\/\)를 서버에서 읽지 못했다\(HTTP 503\)\. 필요하면 read_page/);
+  assert.ok(!prompt.includes('첫 줄에'), 'governance does not require the unverified marker');
+  // 회사 식별 단서: 도메인(홈페이지·지원 메일)과 정확히 일치한 DART의 대표·주소.
+  assert.match(prompt, /\[회사 식별 단서 — "Fixture"과 이름이 같거나 비슷한 다른 회사가 많다\]/);
+  assert.match(prompt, /공식 도메인\(홈페이지·지원 메일\): example-am\.co\.kr, example-sec\.co\.kr/);
+  assert.match(prompt, /대표이사\(DART\): 홍길동/); assert.match(prompt, /본점 주소\(DART\): 서울특별시 영등포구 국제금융로2길 32/);
+  assert.equal(JSON.parse(JSON.stringify(saved.at(-1)[2].contentJson)).dartMatch, 'exact');
+  // 이름만 비슷한(fuzzy) 법인의 공시는 지배구조·재무에 쓰지 않는다. 지배구조는 DART 없이 조사하고, 재무는 AI 호출 없이 partial.
+  dartConfidence = 'fuzzy';
+  const fuzzyGov = await researchSection('gov-fuzzy', 'Fixture', 'governance_structure');
+  assert.ok(!prompt.includes('홍길동') && !prompt.includes('임원 현황'), 'a fuzzy match must not reach the prompt as DART fact');
+  assert.match(prompt, /정확히 같은 이름의 법인을 찾지 못했습니다\(이름이 비슷한 다른 법인의 공시는 쓰지 않습니다\)/);
+  assert.equal(JSON.parse(JSON.stringify(fuzzyGov.contentJson)).dartMatch, 'none');
+  assert.ok(!fuzzyGov.sources.some((s) => s.title.includes('DART')));
+  const callsBefore = calls;
+  const fuzzyFin = await researchSection('fin-fuzzy', 'Fixture', 'financials');
+  assert.equal(calls, callsBefore); assert.equal(fuzzyFin.status, 'partial');
+  assert.match(fuzzyFin.content, /정확히 같은 이름의 법인을 찾지 못했습니다/);
+  dartConfidence = 'exact';
+  homepage = { status: 'ok', url: 'https://www.example-am.co.kr/', title: '예시자산운용', text: '[첫 화면] IPO 투자자문 · 펀드운용 · 투자일임 공모주 펀드를 운용합니다.',
+    pages: [{ title: '예시자산운용', url: 'https://www.example-am.co.kr/' }], images: [] };
+  imageTexts = [];
   // 이름만 비슷한(fuzzy) DART 회사의 주소·홈페이지는 쓰지 않는다.
   dartConfidence = 'fuzzy';
   await researchSection('fuzzy-fixture', 'Fixture', 'overview');
@@ -156,5 +227,7 @@ function load(name) {
   await researchSection('news-fixture', 'Fixture', 'news');
   assert.equal(homepageFetches, fetchesBefore);
   assert.ok(!prompt.includes('회사 홈페이지') && !prompt.includes('채용공고 —'), 'news research must not include the basics block');
+  // 뉴스도 식별 단서는 받는다(동명 회사 기사를 거르도록). 홈페이지는 읽지 않는다.
+  assert.match(prompt, /\[회사 식별 단서 — "Fixture"/); assert.match(prompt, /회사를 끝내 특정하지 못하면 그렇게 밝혀/);
   console.log('PASS deduplication, tool budgets, TTL, failed refresh preservation, live model selection, model snapshot, Haiku effort compatibility, homepage/DART/posting grounding, old-method sections refreshed, research notice');
 })().catch(error => { console.error(error); process.exitCode = 1; });

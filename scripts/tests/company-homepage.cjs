@@ -7,11 +7,12 @@ const mod = { exports: {} };
 new Function('require', 'module', 'exports', ts.transpileModule(fs.readFileSync('lib/company-homepage.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText)(require, mod, mod.exports);
-const { homepageCandidates, emailDomainUrls, isPublicHost, extractHomepageText, redirectTarget, subpageLinks, fetchHomepage, findHomepage } = mod.exports;
+const { homepageCandidates, emailDomainUrls, isPublicHost, extractHomepageText, redirectTarget, subpageLinks, fetchHomepage, findHomepage, contentImages, sniffImage } = mod.exports;
 
 // 채용 대행 주소와 형식이 틀린 값은 건너뛰고, 순서를 지키며 첫 화면(origin)만 남긴다.
 assert.deepEqual(homepageCandidates(['https://acme.career.greetinghr.com/o/123', 'www.masteram.co.kr/recruit', 'https://www.masteram.co.kr', 'https://other.example.com']), ['https://www.masteram.co.kr/', 'https://other.example.com/']);
 assert.deepEqual(homepageCandidates(['https://www.saramin.co.kr/zf_user/jobs', '', 'http://localhost:3000', 'https://192.168.0.10/', 'http://127.0.0.1']), []);
+assert.deepEqual(homepageCandidates(['https://saram.in/abc', 'https://kbam.careerlink.kr/', 'https://db.wd3.myworkdayjobs.com/x', 'https://grnh.se/1', 'https://hana-aamc.applyin.co.kr/']), [], 'ATS and short job-board links are not homepages');
 // 지원 이메일 도메인: 많이 나온 순, 개인 메일과 협회 주소는 뺀다.
 assert.deepEqual(emailDomainUrls(['지원: kej1205@heungkuksec.co.kr', '문의 hr@heungkuksec.co.kr 또는 someone@gmail.com', 'help@kofia.or.kr', 'recruit@www.other.co.kr']),
   ['https://www.heungkuksec.co.kr/', 'https://heungkuksec.co.kr/', 'https://www.other.co.kr/']);
@@ -46,6 +47,24 @@ const menu = `<a href="/jsp/company/b_idea.jsp">회사개요</a><a href="/jsp/co
 assert.deepEqual(subpageLinks(menu, 'https://www.heungkuksec.co.kr/index.do').map((l) => l.title), ['회사개요', '사업영역', '연혁', 'CEO']);
 assert.ok(subpageLinks(menu, 'https://www.heungkuksec.co.kr/index.do').every((l) => l.url.startsWith('https://www.heungkuksec.co.kr/')));
 
+// 본문 이미지 후보: 머리·메뉴·바닥과 장식(로고·아이콘·버튼·글머리표), 작게 지정된 것, SVG·data URI, 문장이 alt에 다 있는 것은 뺀다.
+const imagePage = `<div id="header"><img src="/img/logo.png" alt="회사"></div><div id="content"><img src="/image/company/company03_01.jpg" alt="한국자산평가 인재상">
+  <img src="/images/ico_arrow.gif"><img src="/img/btn_more.png"><img src="/img/dot.gif"><img src="/img/photo.jpg" width="40" height="40"><img src="data:image/png;base64,AAAA">
+  <img src="/img/chart.svg"><img src="//cdn.example.net/vision.png?v=2" alt="비전"><img src="http://10.0.0.1/x.jpg"><img src="/image/company/company03_01.jpg">
+  <img src="/img/ceo.png" alt="${'안녕하십니까. 저희 회사는 '.repeat(8)}"><!-- <img src="/img/old.jpg"> --></div><div class="footer"><img src="/img/cert.jpg"></div>`;
+assert.deepEqual(contentImages(imagePage, 'https://www.koreaap.com/kor/company03_01.html'), [
+  { url: 'https://www.koreaap.com/image/company/company03_01.jpg', alt: '한국자산평가 인재상' },
+  { url: 'https://cdn.example.net/vision.png?v=2', alt: '비전' },
+]);
+// 형식과 크기는 파일 앞부분으로 읽는다.
+const png = (w, h, size = 8000) => { const b = Buffer.alloc(size); Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(b); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+const gif = (w, h, size = 8000) => { const b = Buffer.alloc(size); b.write('GIF89a'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return b; };
+const jpeg = (w, h, size = 8000) => { const b = Buffer.alloc(size); Buffer.from('ffd8ffe000104a46494600010100000100010000', 'hex').copy(b); Buffer.from('ffc0001108', 'hex').copy(b, 20); b.writeUInt16BE(h, 25); b.writeUInt16BE(w, 27); return b; };
+assert.deepEqual(sniffImage(png(1080, 300)), { mediaType: 'image/png', width: 1080, height: 300 });
+assert.deepEqual(sniffImage(gif(900, 290)), { mediaType: 'image/gif', width: 900, height: 290 });
+assert.deepEqual(sniffImage(jpeg(760, 380)), { mediaType: 'image/jpeg', width: 760, height: 380 });
+assert.equal(sniffImage(Buffer.from('<html>not an image</html>')), null);
+
 (async () => {
   // EUC-KR 페이지는 meta charset을 보고 디코딩한다. ("운용" = BF EE BF EB)
   const eucKr = new Uint8Array([...new TextEncoder().encode(`<html><head><meta charset="euc-kr"><title>t</title></head><body>${'a'.repeat(250)}`), 0xbf, 0xee, 0xbf, 0xeb, ...new TextEncoder().encode('</body></html>')]).buffer;
@@ -79,6 +98,10 @@ assert.ok(subpageLinks(menu, 'https://www.heungkuksec.co.kr/index.do').every((l)
   await fetchHomepage('https://cache.example.com/', { fetchImpl: counting });
   await fetchHomepage('https://cache.example.com/', { fetchImpl: counting });
   assert.equal(count, 1);
+  // 동시에 들어온 요청도 진행 중인 것을 함께 쓴다(개요·지배구조 섹션을 동시에 새로고침할 때).
+  count = 0;
+  await Promise.all([fetchHomepage('https://concurrent.example.com/', { fetchImpl: counting }), fetchHomepage('https://concurrent.example.com/', { fetchImpl: counting })]);
+  assert.equal(count, 1);
   // 프레임셋 → 실제 첫 화면 → 회사 정보 하위 페이지(머리·메뉴·바닥 제외)를 읽어 페이지 이름을 붙여 합친다.
   const site = {
     'https://www.portal.example.com/': '<html><head><title>예시증권</title></head><frameset><frame src="/index.do"></frameset></html>',
@@ -96,6 +119,24 @@ assert.ok(subpageLinks(menu, 'https://www.heungkuksec.co.kr/index.do').every((l)
   assert.ok(crawled.text.includes('고객을 존중하는 경영을 실천합니다.') && !crawled.text.includes(' 점 '), 'image alt sentences are read, short alts are dropped');
   assert.deepEqual(crawled.pages.map((p) => p.title), ['예시증권', '회사개요', '사업영역'], 'pages that failed to load are left out');
 
+  assert.deepEqual(crawled.images, [], 'no content images on these pages');
+
+  // 본문이 이미지 한 장뿐인 하위 페이지(한국자산평가 인재상)도 남기고, 본문 이미지를 내려받는다. 여러 하위 페이지에 똑같이
+  // 나오는 이미지(인증 마크), 아이콘처럼 작은 파일, 이미지가 아닌 응답은 뺀다.
+  const imageSite = {
+    'https://www.kap.example.com/': `<html><head><title>예시평가</title></head><body><p>${'채권평가와 펀드평가를 합니다. '.repeat(12)}</p><a href="/kor/talent.html">인재상 및 복지제도</a><a href="/kor/about.html">회사 소개</a></body></html>`,
+    'https://www.kap.example.com/kor/talent.html': '<html><body><h2>인재상</h2><img src="/image/talent.jpg" alt="예시평가 인재상"><img class="content-img" src="/image/iso.jpg" alt="ISO27001"></body></html>',
+    'https://www.kap.example.com/kor/about.html': `<html><body><p>${'회사 소개 본문입니다. '.repeat(6)}</p><img src="/image/values.png" alt="핵심 가치"><img src="/image/tiny.png" alt="작은 그림"><img src="/image/fake.jpg" alt="가짜"><img src="/image/iso.jpg" alt="ISO27001"></body></html>`,
+  };
+  const imageFiles = { 'https://www.kap.example.com/image/talent.jpg': jpeg(1080, 300), 'https://www.kap.example.com/image/values.png': png(760, 380), 'https://www.kap.example.com/image/iso.jpg': jpeg(600, 400),
+    'https://www.kap.example.com/image/tiny.png': png(760, 380, 900), 'https://www.kap.example.com/image/fake.jpg': Buffer.from('<html>'.repeat(2000)) };
+  const withImages = await fetchHomepage('https://www.kap.example.com/', { fetchImpl: async (url) => imageSite[url] ? response(utf8(imageSite[url]), { url })
+    : imageFiles[url] ? response(imageFiles[url].buffer.slice(imageFiles[url].byteOffset, imageFiles[url].byteOffset + imageFiles[url].length), { url, contentType: 'image/jpeg' }) : response(utf8(''), { url, status: 404 }) });
+  assert.equal(withImages.status, 'ok');
+  assert.deepEqual(withImages.pages.map((p) => p.title), ['예시평가', '인재상 및 복지제도', '회사 소개'], 'an image-only subpage is kept');
+  assert.deepEqual(withImages.images.map((i) => [i.page, i.alt, i.mediaType]), [['인재상 및 복지제도', '예시평가 인재상', 'image/jpeg'], ['회사 소개', '핵심 가치', 'image/png']]);
+  assert.equal(Buffer.from(withImages.images[0].data, 'base64').length, 8000);
+
   // 후보를 차례로 시도해 처음 읽힌 홈페이지를 쓴다. 후보가 없으면 null.
   const order = [];
   const found = await findHomepage(['https://down.example.com', 'www.up.example.com'], { fetchImpl: async (url) => {
@@ -108,5 +149,5 @@ assert.ok(subpageLinks(menu, 'https://www.heungkuksec.co.kr/index.do').every((l)
   assert.equal(await findHomepage([]), null);
   const allDown = await findHomepage(['https://gone.example.com'], { fetchImpl: async (url) => response(utf8(''), { url, status: 500 }) });
   assert.equal(allDown.status, 'unavailable');
-  console.log('PASS homepage candidates (posting, email domain), private-host guard, frames/redirects, company subpages without site chrome, EUC-KR decoding, http fallback, candidate fallback, cache');
+  console.log('PASS homepage candidates (posting, email domain), private-host guard, frames/redirects, company subpages without site chrome, content images, EUC-KR decoding, http fallback, candidate fallback, cache');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
