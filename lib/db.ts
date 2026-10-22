@@ -6,6 +6,7 @@ import type { JobMatch } from "./matcher";
 import { categorizePositions } from "./position-categories";
 import { TRACKED_APPLICATION_STATUSES, applicationAppliedAt, type ApplicationStatus } from "./application-status";
 import { normalizeCompanyName } from "./company-normalize";
+import type { Memo, MemoIndex, MemoScope } from "./memo-types";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DATA_DIR, "findar.db");
@@ -136,6 +137,18 @@ db.exec(`
     createdAt INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_ai_usage_key ON ai_usage(key, createdAt);
+
+  -- 사용자가 직접 쓰는 메모(lib/memo-types.ts). scope='job'은 key=seq, scope='company'는 key=normalizeCompanyName().
+  -- jobs와 따로 둬서 재크롤링(upsertJob)이 덮어쓰지 않는다. 빈 메모는 행을 지운다.
+  CREATE TABLE IF NOT EXISTS memos (
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    displayName TEXT NOT NULL DEFAULT '',
+    text TEXT NOT NULL,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    PRIMARY KEY (scope, key)
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -967,4 +980,45 @@ export function listAIUsage(filter: { key?: string; since?: number; limit?: numb
   params.push(Math.min(Math.max(filter.limit ?? 200, 1), 2000));
   return db.prepare(`SELECT key, feature, provider, model, mode, promptChars, inputTokens, cacheReadTokens, cacheCreationTokens, outputTokens, costUsd, createdAt
     FROM ai_usage ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY createdAt DESC, id DESC LIMIT ?`).all(...params) as AIUsageRow[];
+}
+
+interface MemoRow {
+  scope: MemoScope;
+  key: string;
+  displayName: string;
+  text: string;
+  updatedAt: number;
+}
+
+export function getAllMemos(): MemoIndex {
+  const index: MemoIndex = { job: {}, company: {} };
+  const rows = db.prepare(`SELECT scope, key, displayName, text, updatedAt FROM memos`).all() as MemoRow[];
+  for (const row of rows) {
+    if (row.scope === "job") index.job[row.key] = { text: row.text, updatedAt: row.updatedAt };
+    else if (row.scope === "company") index.company[row.key] = { text: row.text, updatedAt: row.updatedAt, displayName: row.displayName };
+  }
+  return index;
+}
+
+export function getMemo(scope: MemoScope, key: string): Memo | null {
+  const row = db.prepare(`SELECT text, updatedAt FROM memos WHERE scope = ? AND key = ?`).get(scope, key) as Memo | undefined;
+  return row ?? null;
+}
+
+// 공백뿐인 메모는 지운다(null 반환). 회사 메모의 key는 호출하는 쪽이 normalizeCompanyName()으로 만든다.
+export function saveMemo(scope: MemoScope, key: string, text: string, displayName = ""): Memo | null {
+  if (!text.trim()) {
+    db.prepare(`DELETE FROM memos WHERE scope = ? AND key = ?`).run(scope, key);
+    return null;
+  }
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO memos (scope, key, displayName, text, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope, key) DO UPDATE SET
+      text = excluded.text,
+      displayName = CASE WHEN excluded.displayName = '' THEN memos.displayName ELSE excluded.displayName END,
+      updatedAt = excluded.updatedAt
+  `).run(scope, key, displayName, text, now, now);
+  return { text, updatedAt: now };
 }
