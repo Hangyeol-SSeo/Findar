@@ -4,7 +4,7 @@ import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
 import { recordAIUsage } from "./ai-usage";
 import { requireApplicationRole } from "./application-role";
-import { getApplicationRole, getCompanySections, getJobBySeq, listEssayEventRows } from "./db";
+import { getApplicationRole, getCompanySections, getJobBySeq, getMemo, listEssayEventRows } from "./db";
 import { getCachedProfile } from "./profile";
 import { readApplicantProfile } from "./applicant-profile";
 import { readNarrativeProfile } from "./narrative-profile";
@@ -197,6 +197,8 @@ export function essayContextDocument(seq: string, opts: { baseUrl: string; resea
   const finals = listFinalEssays(seq);
   const answers = (getCachedApplicationDraft(seq)?.essayAnswers ?? []).filter((a): a is EssayAnswer => a.source === "user_question" && !!a.answer.trim());
   const section = (title: string, body: string) => (body.trim() ? `## ${title}\n${body.trim()}` : "");
+  const jobMemo = getMemo("job", seq);
+  const companyMemo = getMemo("company", normalizeCompanyName(job.company));
   const limit = (a: { maxChars?: number; countSpaces: boolean }) => (a.maxChars ? ` (${a.maxChars.toLocaleString()}자 이내, 공백 ${a.countSpaces ? "포함" : "제외"})` : "");
   return [
     `# Findar 자기소개서 자료 — ${job.company} / ${job.title} (seq=${seq})`,
@@ -205,6 +207,10 @@ export function essayContextDocument(seq: string, opts: { baseUrl: string; resea
     section("작성 기준 (사용자가 실제 첨삭에서 요구한 것)", ESSAY_GUIDE.replace(/^\[자기소개서 작성 기준\]\n/, "")),
     section("공고", ctx.job),
     section("회사 자료 (회사 리서치의 개요·인재상, 잘라서 줌)", [opts.researchNotice ? `주의: ${opts.researchNotice}` : "", ctx.companyText.replace(/^#+\s*/gm, "")].filter(Boolean).join("\n\n")),
+    section("사용자 메모 (본인이 직접 적은 기록. 글감이 될 수 있지만 확인되지 않은 소문·추측이 섞여 있을 수 있다)", [
+      jobMemo ? `### 이 공고 메모\n${jobMemo.text.trim()}` : "",
+      companyMemo ? `### ${job.company} 회사 메모\n${companyMemo.text.trim()}` : "",
+    ].filter(Boolean).join("\n\n")),
     section("지원자 기본 정보", ctx.facts),
     section("가치관·지원 방향 (본인이 직접 쓴 것)", ctx.values),
     section("경험 자료 (경험 카드·서사. ‘(미확인)’은 사용자가 아직 사실 확인을 하지 않은 카드)",

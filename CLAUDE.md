@@ -40,6 +40,7 @@ Tables, keyed off the crawler's `seq` (job posting id) or a normalized company n
 - **`companies`** / **`company_sections`** — company research cache, see below.
 - **`application_drafts`** — one cached AI-drafted application per `seq` (see below).
 - **`essay_events`** — append-only essay writing/revision log (see "Essay writing log" below).
+- **`memos`** — user-written memos, no AI (`lib/memo-types.ts`). `scope='job'` is keyed by `seq` (공고 메모), `scope='company'` by `normalizeCompanyName()` (회사 메모, shared by every posting of that company — the server normalizes from the display name, clients never do). Its own table so a recrawl never clobbers it; a blank memo deletes the row. `GET /api/memos` returns all of them at once (`{job, company}`) because the board shows them on every card; `PUT /api/memos` (`{scope:"job", seq, text}` / `{scope:"company", company, text}`, same-origin, ≤`MEMO_MAX_CHARS`). Edited in 공고 상세 (`components/MemoPanel.tsx`, autosave after typing stops plus a keepalive flush when the posting changes or the page closes), shown as one-line footers on cards, matched by the board search, and included in the 대화로 쓰기 essay-context document as "사용자 메모". Covered by `scripts/tests/memos.cjs`.
 - **`ai_usage`** — per-call token/cache usage and cost (`recordAIUsage`), readable via `GET /api/ai-usage?seq=&days=` and shown as one line in the draft panel. (An old `ai_conversations` table may still exist in existing databases; nothing uses it.).
 - Experience cards live in `data/experience-cards.json` (JSON file, not a table — see "Vendored external skills" below).
 
@@ -80,7 +81,7 @@ Per-job evaluation of *what to put on the resume*: every resume/applicant-profil
 ### Client: `components/JobBoard.tsx` + `app/page.tsx` + `app/profile/page.tsx` + `app/settings/page.tsx`
 
 `app/page.tsx` dynamically imports `JobBoard` with `ssr: false`. The board manually parses SSE frames (`res.body.getReader()`), dedupes `summarize-progress` jobs by `seq`, and replaces the whole array on `done`. The job detail side panel has four tabs, each backed by its own component:
-- **공고 상세** — inline in `JobBoard.tsx` (match score, application-status `<select>`, apply links: `siteUrl` — the company's real apply link, scraped but previously never rendered — shown as the primary CTA when present, KOFIA's own posting as a secondary link).
+- **공고 상세** — inline in `JobBoard.tsx` (match score, application-status `<select>`, 공고 메모/회사 메모 (`MemoPanel`), apply links: `siteUrl` — the company's real apply link, scraped but previously never rendered — shown as the primary CTA when present, KOFIA's own posting as a secondary link).
 - **회사 리서치** — `components/CompanyResearchPanel.tsx`.
 - **이력 구성** — `components/ResumeTailoringPanel.tsx`.
 - **지원 도우미** — `components/ApplicationDraftPanel.tsx`.

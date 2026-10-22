@@ -44,6 +44,7 @@ const stubs = {
     getApplicationDraftRow: () => (draftRow ? { draftJson: draftRow } : undefined),
     saveApplicationDraft: (_seq, json) => { draftRow = json; },
     getApplicationRole: () => role,
+    getMemo: (scope, key) => (scope === 'company' && key === '가상증권' ? { text: '설명회: IPO 인력 충원', updatedAt: 1 } : null),
   },
   './profile': { getCachedProfile: () => ({ projects: [{ name: '북블라', role: '개발', summary: '매칭 앱' }], careerGoals: '' }) },
   './applicant-profile': { readApplicantProfile: () => ({ workExperiences: [], education: [{ schoolName: '가상대학교', schoolLevel: '대학교', major: '소프트웨어', status: '졸업', endDate: '2026-02' }],
@@ -161,6 +162,7 @@ const check = (t, r) => review.checkEssay('S', t, r);
   assert.ok(doc.includes('### (미확인) ') && !doc.includes('다른증권') && !doc.includes('가상대학교'), 'materials are labeled and names redacted');
   assert.ok(doc.includes('### 입사 후 포부 (500자 이내, 공백 포함)\n포부 본문입니다.'));
   assert.ok(doc.includes('/api/applications/S/draft/import'));
+  assert.ok(doc.includes('### 가상증권 회사 메모\n설명회: IPO 인력 충원') && !doc.includes('### 이 공고 메모'), 'user memos are included when present');
   assert.equal(prompts.length, 2, 'the context document makes no AI call');
   // 8) 문항 순서: 위아래 자리만 바꾸고(이전 방식 답변은 제자리), 같은 문항을 다시 저장해도 자리를 지킨다.
   draftRow = JSON.stringify({ ...draft(), essayAnswers: [{ question: '예전 공통 문항', answer: '보존' }, ...draft().essayAnswers] });

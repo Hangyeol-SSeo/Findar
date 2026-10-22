@@ -7,6 +7,9 @@ import ApplicationDraftPanel from "./ApplicationDraftPanel";
 import ApplicationRole from "./ApplicationRole";
 import ResumeTailoringPanel from "./ResumeTailoringPanel";
 import CategoryTooltip from "./CategoryTooltip";
+import MemoPanel, { type MemoSaved } from "./MemoPanel";
+import { normalizeCompanyName } from "@/lib/company-normalize";
+import type { Memo, MemoIndex } from "@/lib/memo-types";
 import { categorizePositions } from "@/lib/position-categories";
 import { CRAWL_PAGES } from "@/lib/config";
 import {
@@ -149,6 +152,7 @@ export default function JobBoard() {
   // "최근 지원한 회사" 기간 계산 기준 시각. 지원 현황을 다시 받을 때마다 갱신한다.
   const [recencyNow, setRecencyNow] = useState(() => Date.now());
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<ApplicationStatus | "전체">("전체");
+  const [memos, setMemos] = useState<MemoIndex>({ job: {}, company: {} });
   const [progress, setProgress] = useState<Progress>({
     phase: "idle",
     message: "",
@@ -409,6 +413,38 @@ export default function JobBoard() {
     loadTrackedJobs();
   }, [loadTrackedJobs]);
 
+  useEffect(() => {
+    fetch("/api/memos", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((index: MemoIndex) => {
+        if (index?.job && index?.company) setMemos(index);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleMemoSaved = useCallback<MemoSaved>((scope, key, memo) => {
+    setMemos((prev) => {
+      const next = { job: { ...prev.job }, company: { ...prev.company } };
+      if (scope === "job") {
+        if (memo) next.job[key] = memo;
+        else delete next.job[key];
+      } else if (memo) {
+        next.company[key] = { ...memo, displayName: prev.company[key]?.displayName ?? "" };
+      } else {
+        delete next.company[key];
+      }
+      return next;
+    });
+  }, []);
+
+  const memosFor = useCallback(
+    (job: JobSummary): JobMemos => ({
+      job: memos.job[job.seq] ?? null,
+      company: memos.company[normalizeCompanyName(job.company)] ?? null,
+    }),
+    [memos]
+  );
+
   const hideJob = useCallback((seq: string) => {
     setHiddenSeqs((prev) => new Set([...prev, seq]));
     fetch("/api/jobs/hide", {
@@ -517,10 +553,11 @@ export default function JobBoard() {
         job.company.toLowerCase().includes(q) ||
         job.title.toLowerCase().includes(q) ||
         job.positions.some((p) => p.toLowerCase().includes(q)) ||
-        job.jdSummary.toLowerCase().includes(q);
+        job.jdSummary.toLowerCase().includes(q) ||
+        Object.values(memosFor(job)).some((m) => m?.text.toLowerCase().includes(q));
       return matchType && matchPosition && matchSearch;
     },
-    [filter, positionFilter, searchQuery]
+    [filter, positionFilter, searchQuery, memosFor]
   );
 
   // 상태를 방금 미지원으로 되돌린 공고는 서버 재조회 전까지 여기서 걸러낸다.
@@ -816,7 +853,7 @@ export default function JobBoard() {
             <div className="mb-4 rounded-xl border border-gray-100 bg-white p-4 space-y-3">
               <input
                 type="text"
-                placeholder="회사명, 직무, 키워드 검색..."
+                placeholder="회사명, 직무, 키워드, 메모 검색..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -976,6 +1013,7 @@ export default function JobBoard() {
                     onHide={hideJob}
                     recentApplications={recentApplicationsFor(job)}
                     draftingApplications={draftingApplicationsFor(job)}
+                    memos={memosFor(job)}
                     recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
@@ -1029,6 +1067,7 @@ export default function JobBoard() {
                     onSelect={setSelectedJob}
                     recentApplications={recentApplicationsFor(job)}
                     draftingApplications={draftingApplicationsFor(job)}
+                    memos={memosFor(job)}
                     recencyNow={recencyNow}
                     onStatusChange={updateApplicationStatus}
                     onToggleBookmark={toggleBookmark}
@@ -1217,6 +1256,16 @@ export default function JobBoard() {
                 <DraftingApplicationNotice drafting={selectedDraftingApplications} />
               )}
 
+              {/* 공고가 바뀌면 다시 마운트돼 남은 입력을 저장하고 새 공고의 메모를 연다. */}
+              <MemoPanel
+                key={selectedJob.seq}
+                seq={selectedJob.seq}
+                company={selectedJob.company}
+                jobMemo={memosFor(selectedJob).job}
+                companyMemo={memosFor(selectedJob).company}
+                onSaved={handleMemoSaved}
+              />
+
               {typeof selectedJob.matchScore === "number" && (
                 <div className="mb-5 p-4 rounded-xl bg-gradient-to-br from-gray-50 to-white border border-gray-100">
                   <div className="flex items-center gap-3 mb-2">
@@ -1381,6 +1430,7 @@ function JobCard({
   showTracking = false,
   recentApplications,
   draftingApplications = [],
+  memos,
   recencyNow,
 }: {
   job: JobSummary;
@@ -1391,6 +1441,7 @@ function JobCard({
   showTracking?: boolean;
   recentApplications?: RecentCompanyApplications | null;
   draftingApplications?: CompanyDraftingApplication[];
+  memos: JobMemos;
   recencyNow: number;
   onStatusChange: (seq: string, status: ApplicationStatus) => void;
   onToggleBookmark: (seq: string, bookmarked: boolean) => void;
@@ -1520,12 +1571,34 @@ function JobCard({
           )}
         </div>
       </div>
-      {(recentApplications || draftingApplications.length > 0) && (
+      {(recentApplications || draftingApplications.length > 0 || memos.job || memos.company) && (
         <div className="mt-3 space-y-1 border-t border-gray-100 pt-2.5">
           {recentApplications && <RecentApplicationFooter recent={recentApplications} now={recencyNow} />}
           {draftingApplications.length > 0 && <DraftingApplicationFooter drafting={draftingApplications} />}
+          {memos.job && <MemoFooter label="공고 메모" memo={memos.job} />}
+          {memos.company && <MemoFooter label="회사 메모" memo={memos.company} />}
         </div>
       )}
+    </div>
+  );
+}
+
+interface JobMemos {
+  job: Memo | null;
+  company: Memo | null;
+}
+
+// 카드에는 메모 첫 줄만 보여 주고, 전체는 마우스를 올렸을 때 보인다.
+function MemoFooter({ label, memo }: { label: string; memo: Memo }) {
+  const firstLine = memo.text.trim().split("\n")[0];
+  return (
+    <div title={memo.text} className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+      <svg aria-hidden className="h-3.5 w-3.5 shrink-0 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>
+      <span className="shrink-0 font-semibold text-gray-600">{label}</span>
+      <span className="truncate">{firstLine}</span>
     </div>
   );
 }
