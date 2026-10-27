@@ -61,11 +61,11 @@ const entryOf = () => bank.getCachedEssayBank().entries.find((e) => e.answer ===
     await cards.ensureExperienceCards();
     assert.equal(status(name).companyUnknown, true);
     const [card] = cards.getExperienceCardStatus().cards;
-    cards.setCardConfirmed(card.id, true);
+    cards.setCardExcluded(card.id, true);
     assert.equal(cards.getExperienceCardStatus().stale, false);
     const before = calls;
 
-    // 회사·직무를 적으면: 재분석 필요로 바뀌지 않고, 항목·카드 출처가 바로 바뀌며, 카드 확인은 유지된다.
+    // 회사·직무를 적으면: 재분석 필요로 바뀌지 않고, 항목·카드 출처가 바로 바뀌며, 뺀 카드는 계속 빠져 있다.
     cards.syncCardOrigins(() => bank.setEssaySourceMeta('cover_letter', name, sources.parseEssaySourceMeta('가상방산', '임베디드 SW')));
     assert.equal(calls, before, 'no model call on a meta edit');
     assert.equal(status(name).status, 'ready');
@@ -74,7 +74,7 @@ const entryOf = () => bank.getCachedEssayBank().entries.find((e) => e.answer ===
     let after = cards.getExperienceCardStatus();
     assert.equal(after.stale, false, 'cards stay fresh, no rebuild needed');
     assert.deepEqual(after.cards[0].origins.map((o) => [o.company, o.context]), [['가상방산', '임베디드 SW 직무 지원 · 2024 하반기']]);
-    assert.equal(cards.getConfirmedCards().length, 1, 'confirmation survives');
+    assert.equal(cards.getIncludedCards().length, 0, 'exclusion survives');
 
     // 직무를 바꾸면 이전 머리말이 쌓이지 않고 교체된다. 둘 다 비우면 모델이 읽은 값으로 돌아간다.
     cards.syncCardOrigins(() => bank.setEssaySourceMeta('cover_letter', name, sources.parseEssaySourceMeta('가상방산', '시스템 SW')));
@@ -117,7 +117,7 @@ const entryOf = () => bank.getCachedEssayBank().entries.find((e) => e.answer ===
     await replacementExtraction;
     assert.equal(status(fresh).status, 'ready', 'new work recovers from cancelled shared extraction');
 
-    console.log('PASS editing company/role of already-uploaded sources: no re-analysis or card rebuild, entries and card origins updated in place, confirmation kept, role prefix replaced, clearing restores model values, entries analyzed before this feature');
+    console.log('PASS editing company/role of already-uploaded sources: no re-analysis or card rebuild, entries and card origins updated in place, exclusion kept, role prefix replaced, clearing restores model values, entries analyzed before this feature');
   } catch (error) { console.error(error); process.exitCode = 1; }
   finally { fs.rmSync(work, { recursive: true, force: true }); }
 })();

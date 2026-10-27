@@ -10,9 +10,8 @@ import { join } from "path";
 // 그 자체가 된다.
 //
 // core(고정 소수 필드, applicant-profile.ts 스타일 전체교체)와 episodes(essay-bank.ts
-// 스타일 성장형 append 목록)를 한 파일에 같이 둔다. profile.ts가 careerGoals를
-// profile-overrides.json으로 분리한 이유(이력서 재추출과 무관해야 한다는 캐시-무효화
-// 필요성)가 여기엔 아예 없으므로, 굳이 두 파일로 쪼갤 이유가 없다.
+// 스타일 성장형 append 목록)를 한 파일에 같이 둔다. 둘 다 이력서 재추출과 무관한
+// 사용자 작성 자료라 캐시를 따로 무효화할 일이 없으므로, 굳이 두 파일로 쪼갤 이유가 없다.
 const DATA_DIR = join(process.cwd(), "data");
 const NARRATIVE_PROFILE_PATH = join(DATA_DIR, "narrative-profile.json");
 

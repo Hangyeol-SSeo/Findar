@@ -1,6 +1,6 @@
 import { after } from "next/server";
 import { isSameOrigin } from "@/lib/request-origin";
-import { ensureExperienceCards, getExperienceCardStatus, setCardConfirmed } from "@/lib/experience-cards";
+import { ensureExperienceCards, getExperienceCardStatus, setCardExcluded } from "@/lib/experience-cards";
 
 export const runtime = "nodejs";
 export const maxDuration = 1800;
@@ -18,13 +18,13 @@ export async function POST(request: Request) {
   return Response.json(getExperienceCardStatus(), { status: 202 });
 }
 
-// 사용자 확인/확인 취소 — 확인하지 않은 카드는 자기소개서 자료에 "(미확인)"으로 표시된다.
+// 카드 빼기/다시 넣기 — 카드는 모두 자기소개서 자료에 들어가고, 뺀 카드만 빠진다.
 export async function PATCH(request: Request) {
   if (!isSameOrigin(request)) return Response.json({ error: "Findar 화면에서 요청해주세요." }, { status: 403 });
   try {
-    const { id, confirmed } = await request.json();
-    if (typeof id !== "string" || typeof confirmed !== "boolean") throw new Error("요청을 확인해주세요.");
-    setCardConfirmed(id, confirmed);
+    const { id, excluded } = await request.json();
+    if (typeof id !== "string" || typeof excluded !== "boolean") throw new Error("요청을 확인해주세요.");
+    setCardExcluded(id, excluded);
     return Response.json(getExperienceCardStatus());
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "처리하지 못했습니다." }, { status: 400 });

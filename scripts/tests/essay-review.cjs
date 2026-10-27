@@ -27,6 +27,7 @@ const job = { company: '가상증권', title: '[가상증권] 리스크관리팀
 const card = { id: 'EXP-01', context: '창업팀에서 결제 오류를 추적한 일', personal_actions: ['결제 기록과 지급 기록을 대조함'], decision: [], observed_details: [],
   team_result: ['미지급 건 0건'], result_limitations: [], evidence: [{ quote: '결제 기록과 지급 기록을 하나씩 대조했습니다' }], origins: [{ company: '다른증권', context: '', question: '', kind: 'cover_letter' }] };
 const card2 = { ...card, id: 'EXP-02', context: '다른증권 지원서에 쓴 도서관 근로 경험', personal_actions: ['서가를 돌며 잘못 꽂힌 책을 바로잡음'], team_result: [], evidence: [] };
+const card3 = { ...card, id: 'EXP-03', context: '필름 동아리 상영회 준비', excluded: true, origins: [{ company: '뺀카드증권', context: '', question: '', kind: 'cover_letter' }] };
 const stubs = {
   './ai-query': { async *query({ prompt }) {
     prompts.push(prompt);
@@ -46,12 +47,12 @@ const stubs = {
     getApplicationRole: () => role,
     getMemo: (scope, key) => (scope === 'company' && key === '가상증권' ? { text: '설명회: IPO 인력 충원', updatedAt: 1 } : null),
   },
-  './profile': { getCachedProfile: () => ({ projects: [{ name: '북블라', role: '개발', summary: '매칭 앱' }], careerGoals: '' }) },
+  './profile': { getCachedProfile: () => ({ projects: [{ name: '북블라', role: '개발', summary: '매칭 앱' }] }) },
   './applicant-profile': { readApplicantProfile: () => ({ workExperiences: [], education: [{ schoolName: '가상대학교', schoolLevel: '대학교', major: '소프트웨어', status: '졸업', endDate: '2026-02' }],
     projects: [], activities: [], certifications: [{ name: '투자자산운용사', issuedDate: '2026-05-21' }], languageTests: [] }) },
   './narrative-profile': { readNarrativeProfile: () => ({ core: { coreValues: '오래 할 수 있는 일', workCriteria: '', futureDirection: '', opennessToNewFields: '' },
     episodes: [{ id: 'ep1', title: '투자 손실 뒤 공부', situation: '급등주로 손실을 봤다', reasoning: '알기 전에는 투자하지 않는다', lesson: '', tags: [], createdAt: 1 }] }) },
-  './experience-cards': { cardsCoverProfile: () => true, getAllCards: () => [card, card2], getConfirmedCards: () => [card] },
+  './experience-cards': { cardsCoverProfile: () => true, getAllCards: () => [card, card2, card3], getIncludedCards: () => [card, card2] },
   './essay-log': { logEssayEvent: (e) => events.push(e), logEssayEvents: (list) => events.push(...list), newEssayThread: () => 'thread' },
   './essay-log-analysis': { locateInEssay: () => null },
 };
@@ -73,11 +74,12 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
 const check = (t, r) => review.checkEssay('S', t, r);
 
 (async () => {
-  // 1) 첨삭 자료: 확인 전 카드도 표시를 달아 넣고, 다른 회사·학교·프로젝트 이름은 미리 가린다. 회사 자료는 잘라서 보낸다.
+  // 1) 첨삭 자료: 사용자가 뺀 카드만 빼고 모두 넣고(뺀 카드의 출처 회사도 가린다), 다른 회사·학교·프로젝트 이름은 미리 가린다. 회사 자료는 잘라서 보낸다.
   const ctx = review.buildEssayContext('S');
   assert.deepEqual(ctx.materials.map((m) => m.id), ['card.EXP-01', 'card.EXP-02', 'episode.ep1']);
   assert.ok(ctx.materials[1].text.includes('[비공개 명칭]') && !ctx.materials.some((m) => m.text.includes('다른증권')), 'other company names are redacted');
-  assert.ok(ctx.materials[1].label.startsWith('(미확인) ') && ctx.materials[1].text.includes('아직 확인하지 않은 카드'));
+  assert.ok(!ctx.materials.some((m) => m.label.includes('미확인') || m.text.includes('확인하지 않은')), 'cards carry no confirmation label');
+  assert.ok(ctx.forbiddenNames.includes('뺀카드증권'), 'an excluded card still redacts its source company');
   assert.ok(!ctx.facts.includes('가상대학교') && ctx.facts.includes('투자자산운용사(2026-05-21 취득)'));
   assert.ok(ctx.companyText.length < 2700 && !ctx.companyText.includes('뉴스'), 'company text is capped and limited to overview/culture');
 
@@ -159,7 +161,7 @@ const check = (t, r) => review.checkEssay('S', t, r);
   const doc = review.essayContextDocument('S', { baseUrl: 'http://localhost:3000', researchNotice: '회사 리서치가 오래됐습니다.' });
   assert.ok(doc.startsWith('# Findar 자기소개서 자료 — 가상증권'));
   assert.ok(doc.includes('아직 고르지 않음') && doc.includes('주의: 회사 리서치가 오래됐습니다.'));
-  assert.ok(doc.includes('### (미확인) ') && !doc.includes('다른증권') && !doc.includes('가상대학교'), 'materials are labeled and names redacted');
+  assert.ok(doc.includes('### 창업팀에서 결제 오류를 추적한 일') && !doc.includes('필름 동아리') && !doc.includes('다른증권') && !doc.includes('가상대학교'), 'included cards are listed, excluded ones left out, names redacted');
   assert.ok(doc.includes('### 입사 후 포부 (500자 이내, 공백 포함)\n포부 본문입니다.'));
   assert.ok(doc.includes('/api/applications/S/draft/import'));
   assert.ok(doc.includes('### 가상증권 회사 메모\n설명회: IPO 인력 충원') && !doc.includes('### 이 공고 메모'), 'user memos are included when present');

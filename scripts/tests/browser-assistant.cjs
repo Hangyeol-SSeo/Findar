@@ -70,7 +70,6 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
       if (url.origin === downloadOrigin) return route.continue();
       if (url.pathname === '/api/jobs') data = { jobs: [job], hasProfile: true };
       else if (url.pathname === '/api/jobs/hide') data = { jobs: [] };
-      else if (url.pathname === '/api/profile/overrides') data = { careerGoals: '' };
       else if (url.pathname === '/api/profile/applicant') {
         if (req.method() === 'PUT') { profilePayload = req.postDataJSON(); data = { ok: true }; }
         else data = { profile: profilePayload };
