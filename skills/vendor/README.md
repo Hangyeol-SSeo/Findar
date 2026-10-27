@@ -25,6 +25,7 @@
 |---|---|---|---|---|
 | `humanizer/` | https://github.com/daleseo/korean-skills (`skills/humanizer`) | `ae12ba27982ebeff03b46dc738365aaa34260d9a` | MIT (`humanizer/LICENSE`) | 초안을 다 쓰고 독자 테스트로 흐름을 고친 뒤, 말투만 다듬을 때 |
 | `essay-blind-read/` | Findar 자체. jasoseo-plugin의 비개발 독자 테스트 방식을 옮김 | — | — | 초안을 다 쓴 뒤, 맥락 없는 독자에게 읽혀 흐름이 끊긴 곳을 찾을 때 |
+| `essay-ai-check/` | Findar 자체. 기준값은 KatFishNet(ACL 2025), 쉼표 지표 정의는 논문을 따름. 스크립트는 새로 씀 | — | — | 제출 전, 기업의 AI 작성 판별(무하유 GPT킬러 등)에 걸릴 신호를 재고 문단마다 본인 글이 있는지 볼 때 |
 
 `humanizer/`도 받은 그대로 두고 고치지 않는다. 갱신할 때는 위 커밋을 바꿔 다시 받는다.
 
