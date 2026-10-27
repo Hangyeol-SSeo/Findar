@@ -12,7 +12,6 @@ let onQuery = () => {};
 const stubs = {
   './ai-model-settings': { getAIModelId: () => 'fixture' },
   './applicant-profile': { readApplicantProfile: () => ({ updatedAt: 1, workExperiences: [], education: [], activities: [], awards: [], certifications: [], languageTests: [], foreignLanguageSkills: [], research: [], skillsNote: '', specialties: '', hobbies: '', religion: '', projects: [] }) },
-  './profile': { readCareerGoals: () => '' },
   './resume-inventory': { currentResumeHash: () => 'resume', ensureResumeInventory: async () => ({ items: [{ id: 'r1', source: 'resume', section: '경험', title: '분석', period: '', detail: '자료를 비교했습니다.' }] }) },
   '@anthropic-ai/claude-agent-sdk': { async *query(args) { prompt = args.prompt; onQuery(); yield { type: 'result', subtype: 'success', result: JSON.stringify({ focus: '분석', summary: '검토', evaluations: [], sectionOrder: [], watchouts: [] }) }; } },
 };

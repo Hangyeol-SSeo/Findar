@@ -8,7 +8,6 @@ import { remapMatchProfileHash } from "./db";
 
 const DATA_DIR = join(process.cwd(), "data");
 const PROFILE_PATH = join(DATA_DIR, "profile.json");
-const OVERRIDES_PATH = join(DATA_DIR, "profile-overrides.json");
 
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -32,9 +31,6 @@ export interface Profile {
   // 비개발/비IT 금융 직군(리스크관리, 퀀트 등)에도 적용 가능한 전이 가능 강점.
   // 기존 profile.json 캐시엔 없을 수 있으므로 optional — 소비하는 쪽에서 ?? [] 처리.
   transferableStrengths?: string[];
-  // 이력서로는 추론 불가능한, 사용자가 /profile#direction에서 직접 쓰는 지원 의도/방향.
-  // 이력서 재추출과 무관하게 매번 최신 값을 병합하므로 optional.
-  careerGoals?: string;
 }
 
 function readCachedProfile(): Profile | null {
@@ -96,22 +92,6 @@ function migrateLegacyResumeDir(): void {
 }
 
 migrateLegacyResumeDir();
-
-// careerGoals는 이력서 추출(sourcesHash)과 무관한 별도 저장소에 둔다 — 사용자가
-// /profile#direction에서 언제든 바꿀 수 있어야 하고, 그때마다 이력서를 재분석할 필요는 없으므로.
-export function readCareerGoals(): string {
-  if (!existsSync(OVERRIDES_PATH)) return "";
-  try {
-    const parsed = JSON.parse(readFileSync(OVERRIDES_PATH, "utf-8"));
-    return typeof parsed.careerGoals === "string" ? parsed.careerGoals : "";
-  } catch {
-    return "";
-  }
-}
-
-export function writeCareerGoals(careerGoals: string): void {
-  writeFileSync(OVERRIDES_PATH, JSON.stringify({ careerGoals }, null, 2));
-}
 
 async function extractProfile(
   pdfPaths: string[],
@@ -189,11 +169,6 @@ export interface ProfileResult {
   error?: string;
 }
 
-function withCareerGoals(profile: Profile | null): Profile | null {
-  if (!profile) return profile;
-  return { ...profile, careerGoals: readCareerGoals() };
-}
-
 // 같은 이력서에 대한 추출이 동시에 두 번 돌지 않도록(공고 새로고침 + 설정 화면의 "지금 분석")
 // 진행 중인 추출을 해시별로 공유한다.
 const state = globalThis as typeof globalThis & { findarProfileInflight?: Map<string, Promise<ProfileResult>> };
@@ -212,7 +187,7 @@ export async function ensureProfile(opts?: {
   const key = JSON.stringify([currentHash, model]);
   const cached = readCachedProfile();
   if (cached && cached.sourcesHash === currentHash && cached.model === model) {
-    return { profile: withCareerGoals(cached), status: "cached" };
+    return { profile: cached, status: "cached" };
   }
 
   const running = inflight.get(key);
@@ -245,11 +220,11 @@ async function runExtraction(
   try {
     const profile = await extractProfile(pdfs, currentHash, model);
     writeProfile(profile);
-    return { profile: withCareerGoals(profile), status: "extracted" };
+    return { profile: profile, status: "extracted" };
   } catch (e) {
     console.error("[profile] extraction failed:", e);
     return {
-      profile: withCareerGoals(cached),
+      profile: cached,
       status: "error",
       error: (e as Error).message,
     };
@@ -257,7 +232,7 @@ async function runExtraction(
 }
 
 export function getCachedProfile(): Profile | null {
-  return withCareerGoals(readCachedProfile());
+  return readCachedProfile();
 }
 
 // 설정 화면용: AI 호출 없이 현재 업로드된 파일과 캐시된 분석 결과가 일치하는지만 확인한다.

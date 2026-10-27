@@ -5,7 +5,6 @@ import { getAIModelId } from "./ai-model-settings";
 import { createHash } from "crypto";
 import { getApplicationRole, getJobBySeq, getResumeTailoringRow, saveResumeTailoring } from "./db";
 import { readApplicantProfile } from "./applicant-profile";
-import { readCareerGoals } from "./profile";
 import { currentResumeHash, ensureResumeInventory } from "./resume-inventory";
 import {
   buildApplicantItems,
@@ -20,11 +19,12 @@ import {
 // FreeRide를 거치지 않고 Anthropic API를 직접 쓰며, 사용자가 버튼을 눌렀을 때만 실행된다.
 const MODEL_CALL_TIMEOUT_MS = 300_000;
 
-// 평가 입력(이력서 파일, 지원 정보, 지원 방향)이 바뀌었는지 판정하는 해시. AI 호출 없이 계산된다.
+// 평가 입력(이력서 파일, 지원 정보, 지원 직무)이 바뀌었는지 판정하는 해시. AI 호출 없이 계산된다.
+// 세 번째 빈 칸은 없앤 지원 방향 자리다. 지우면 기존 평가가 모두 "바뀜"으로 보이므로 남겨 둔다.
 function computeInputsHash(seq: string): string {
   const applicant = readApplicantProfile();
   return createHash("sha256")
-    .update(`${currentResumeHash()}\n${applicant.updatedAt}\n${readCareerGoals()}\n${JSON.stringify(getApplicationRole(seq))}`)
+    .update(`${currentResumeHash()}\n${applicant.updatedAt}\n\n${JSON.stringify(getApplicationRole(seq))}`)
     .digest("hex");
 }
 
@@ -52,7 +52,7 @@ const RULES = `너는 금융권 채용 서류를 많이 검토해본 커리어 �
 - 공고의 모집 직무, 업무 내용, 자격 요건, 우대사항, 채용 유형(신입/경력/인턴)을 기준으로 삼는다. 공고에 없는 요구를 지어내지 않는다.
 - 신입 지원이면 고등학교·학부 저학년 시절의 사소한 활동은 대개 축소/제외, 경력 지원이면 학생 시절 활동과 무관한 아르바이트는 축소/제외. 직무와 직결되지 않는 10년 이상 지난 이력은 대개 축소/제외.
 - 같은 경험이 여러 항목(이력서 항목 r*, 지원 정보 항목 a.*)에 중복되면 하나의 평가로 묶어 itemIds에 모두 넣는다.
-- 지원자가 밝힌 방향이 있으면 참고하되, 판정 근거는 공고와의 관계로 설명한다.
+- 판정 근거는 공고와의 관계로 설명한다.
 - 모든 항목을 좋게 포장하지 마라. 빼는 게 나은 항목은 분명하게 제외라고 말하는 것이 이 평가의 가치다.
 
 정직성 규칙(반드시 지킬 것):
@@ -146,15 +146,11 @@ export async function evaluateResumeTailoring(
     자격요건: job.qualifications,
     원문: job.rawContent,
   });
-  const careerGoals = readCareerGoals().trim();
   const prompt = `${RULES}
 ${APPLICATION_ROLE_RULES}
 
 [공고]
 ${jobBlock}
-
-[지원자가 밝힌 방향]
-${careerGoals || "없음"}
 
 [이력 항목]
 ${JSON.stringify(compactItems(items))}

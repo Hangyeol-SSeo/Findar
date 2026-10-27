@@ -105,7 +105,7 @@ function load(relative) {
   const { summarizeJob } = load('lib/summarizer.ts');
   const { matchJob } = load('lib/matcher.ts');
   const job = { seq: 'fixture', company: '예시', title: '분석', content: '공개 채용 조건', positions: [], qualifications: [] };
-  const profile = { name: 'fixture', experienceYears: '신입', skills: [], domains: [], projects: [], transferableStrengths: [], narrative: '', careerGoals: '' };
+  const profile = { name: 'fixture', experienceYears: '신입', skills: [], domains: [], projects: [], transferableStrengths: [], narrative: '' };
   await summarizeJob(job);
   assert.equal(calls.at(-1).model, AI_MODEL_IDS.SONNET);
   assert.equal(calls.at(-1).env, undefined);

@@ -48,12 +48,12 @@ same(valid.map((c) => [c.id, c.event_id]), [['EXP-01', 'EVT-01'], ['EXP-02', 'EV
 same(valid[0].personal_actions, ['인터뷰 8건 중 5건 직접 진행']);
 same(valid[0].droppedItems, ['인터뷰 20건 분석'], 'a number not in the quotes must be dropped');
 same(valid[0].precision, { interview_count: 'exact' });
-assert.equal(valid[0].user_confirmed, false, 'extracted cards start unconfirmed');
+assert.ok(!valid[0].excluded && !('user_confirmed' in valid[0]), 'extracted cards are included by default, with no confirmation gate');
 same(valid[1].evidence[0].kind, 'cover_letter');
 
-// 확인 해시는 확인 여부와 무관하고 내용이 바뀌면 달라진다.
-const hash = cards.cardContentHash(valid[0]);
-assert.equal(cards.cardContentHash({ ...valid[0], user_confirmed: true, approval: { content_hash: 'x' } }), hash);
-assert.notEqual(cards.cardContentHash({ ...valid[0], personal_actions: ['다른 행동'] }), hash);
+// 다시 만든 카드는 번호·문장이 달라도 근거 구절이 같으면 뺀 상태를 이어받는다.
+const rebuilt = [{ ...valid[1], id: 'EXP-01', context: '다시 쓴 맥락' }, { ...valid[0], id: 'EXP-02', personal_actions: ['다르게 정리한 행동'], evidence: [...valid[0].evidence].reverse() }];
+const carried = cards.carryExclusions([{ ...valid[0], excluded: true }, valid[1]], rebuilt);
+same(carried.map((c) => [c.id, !!c.excluded]), [['EXP-01', false], ['EXP-02', true]]);
 
-console.log('PASS vendor section extraction (fence-aware), card schema only, card quote/number grounding and event grouping, confirmation hash');
+console.log('PASS vendor section extraction (fence-aware), card schema only, card quote/number grounding and event grouping, exclusions carried across rebuilds');

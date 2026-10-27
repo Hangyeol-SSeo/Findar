@@ -16,8 +16,8 @@ import { buildApplicantItems, type ResumeItem } from "./resume-tailoring-contrac
 //  - 올린 과거 자소서·면접 대본과 "자료로 저장"한 답변(essay-bank) — 특정 회사에 맞춰 각색됐을 수 있는 2차 자료
 // 같은 사건이 여러 곳에 나오면 하나로 묶는다. 카드 형식과 규칙은 cover-letter-team의 경험카드 스키마·검증 질문·구체성 규칙
 // 원문(skills/vendor)을 그대로 쓴다. 이력서까지 카드로 정리되면 첨삭 자료에는 원본 이력 대신 카드가 쓰인다(lib/essay-review.ts).
-// 사용자는 설정 화면에서 사실과 맞는 카드를 확인하고, 확인하지 않은 카드는 "(미확인)"으로 표시해 참고만 한다.
-// 카드 내용이 바뀌면 확인은 무효다 — 확인 기록에 내용 해시를 남기고, 다시 만들 때 해시가 같은 카드만 확인을 이어받는다.
+// 카드는 모두 자기소개서 자료에 들어가는 것이 기본이다. 사용자는 사실과 다르거나 쓰고 싶지 않은 카드만 뺀다.
+// 원본 스킬의 확인 게이트(user_confirmed/approval)는 쓰지 않는다. 다시 만들 때는 원문 근거가 같은 카드가 뺀 상태를 이어받는다.
 
 const STORE_PATH = join(process.cwd(), "data", "experience-cards.json");
 const MAX_SOURCE_CHARS = 150_000;
@@ -44,8 +44,8 @@ export interface ExperienceCard {
   evidence: CardEvidence[]; // 원문(과거 자소서·면접 답변)에서 그대로 옮긴 구절
   precision: Record<string, Precision>;
   sensitive: boolean;
-  user_confirmed: boolean;
-  approval: { content_hash: string; actor: "user"; confirmed_at: string } | null;
+  // 사용자가 자기소개서 자료에서 뺀 카드. 예전 파일에는 없을 수 있다.
+  excluded?: boolean;
   // 코드 검사: 원문 구절에 없는 수치가 들어 있어 카드에서 뺀 항목
   droppedItems: string[];
   origins: CardOrigin[];
@@ -70,18 +70,6 @@ function updateStore(change: (store: CardStore) => void): CardStore {
 }
 
 const LIST_FIELDS = ["team_result", "personal_actions", "decision", "observed_details", "constraints", "alternatives_considered", "result_limitations"] as const;
-
-// 원본 계약과 같이 확인 여부·확인 기록을 뺀 내용으로 해시한다. 키 순서를 고정해 같은 내용이면 같은 값이 나오게 한다.
-export function cardContentHash(card: ExperienceCard): string {
-  const content = {
-    event_id: card.event_id, period: card.period, context: card.context,
-    ...Object.fromEntries(LIST_FIELDS.map((k) => [k, card[k]])),
-    evidence: card.evidence.map((e) => ({ entryId: e.entryId, quote: e.quote })),
-    precision: Object.fromEntries(Object.entries(card.precision).sort(([a], [b]) => a.localeCompare(b))),
-    sensitive: card.sensitive,
-  };
-  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
-}
 
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const strList = (value: unknown, limit = 600) => Array.isArray(value)
@@ -157,10 +145,17 @@ export function validateCards(value: unknown, sources: CardSource[]): { cards: E
     cards.push({
       id: `EXP-${String(cards.length + 1).padStart(2, "0")}`, event_id: eventIds.get(rawEvent)!,
       period: str(c.period, 60) || "불명", context: str(c.context), ...lists, evidence, precision,
-      sensitive: c.sensitive === true, user_confirmed: false, approval: null, droppedItems, origins: originsOf(evidence, byId),
+      sensitive: c.sensitive === true, droppedItems, origins: originsOf(evidence, byId),
     });
   }
   return { cards, rejected };
+}
+
+// 다시 만든 카드가 뺀 상태를 이어받는 기준. 사건 번호·문장은 만들 때마다 달라지므로, 원문에서 그대로 옮긴 근거 구절로 같은 경험인지 본다.
+const evidenceKey = (card: ExperienceCard) => JSON.stringify(card.evidence.map((e) => normalize(e.quote)).sort());
+export function carryExclusions(previous: ExperienceCard[], next: ExperienceCard[]): ExperienceCard[] {
+  const excluded = new Set(previous.filter((c) => c.excluded).map(evidenceKey));
+  return next.map((card) => (excluded.has(evidenceKey(card)) ? { ...card, excluded: true } : card));
 }
 
 // 이력서 항목 목록은 이력서를 처음 카드로 만들 때 한 번 추출된다(이력 구성 기능과 같은 캐시). 동기 호출에서는 캐시만 본다.
@@ -180,7 +175,7 @@ async function extractCards(sources: CardSource[], model: string, skill: string)
   if (JSON.stringify(material).length > MAX_SOURCE_CHARS) throw new Error("경험 자료가 너무 많아 한 번에 카드로 정리할 수 없습니다. 오래된 과거 자료를 일부 지우고 다시 시도해주세요.");
   const prompt = `${skill}
 [Findar에서의 적용]
-위 원문은 사용자와 인터뷰하며 카드를 만드는 절차다. 지금은 인터뷰 대신 아래 자료가 회상 자료다. 질문할 수 없으므로 자료에서 확인되지 않는 칸은 빈 리스트로 두고 지어내지 않는다. 사용자가 나중에 설정 화면에서 카드를 보고 확인한다.
+위 원문은 사용자와 인터뷰하며 카드를 만드는 절차다. 지금은 인터뷰 대신 아래 자료가 회상 자료다. 질문할 수 없으므로 자료에서 확인되지 않는 칸은 빈 리스트로 두고 지어내지 않는다. 사용자가 나중에 카드를 보고 쓰지 않을 카드를 뺀다.
 자료의 kind가 이력서·지원 정보인 것은 지원자가 정리한 1차 이력이다. 짧은 항목이라도 그대로 사건 카드로 옮기되, 적힌 것보다 부풀리지 않는다.
 kind가 자기소개서·면접 대본·확정한 답변인 것은 특정 회사에 맞춰 각색된 글일 수 있다. 공고 표현에 맞춘 해석·포부·자기평가("~역량을 길렀습니다", "~에 기여하겠습니다")는 사실 칸에 넣지 않고, 실제로 있었던 상황·제약·행동·선택·결과만 옮긴다. 당시 판단과 지금 돌아본 해석이 섞이면 해석은 result_limitations나 observed_details가 아니라 버린다.
 같은 사건이 여러 자료에 나오면(예: 이력서의 프로젝트와 자기소개서의 같은 프로젝트) 하나의 사건으로 보고 같은 event_id를 쓴다(근거 구절을 모두 evidence에 넣는다). 한 사건 안에서 보여주는 면이 다르면(예: 기획과 갈등) 카드를 나누되 event_id는 같게 둔다.
@@ -222,18 +217,14 @@ export async function ensureExperienceCards(): Promise<CardStore> {
     try {
       const { cards, rejected } = await extractCards(sources, model, skill);
       if (rejected) console.info(`[experience-cards] 근거가 원문과 맞지 않는 카드 ${rejected}개를 버렸습니다.`);
-      // 정리하는 동안 사용자가 확인한 것까지 포함해, 내용 해시가 같은 카드는 확인을 이어받는다.
+      // 정리하는 동안 사용자가 뺀 것까지 포함해, 근거 구절이 같은 카드는 뺀 상태를 이어받는다.
       return updateStore((s) => {
-        const confirmed = new Map(s.cards.filter((c) => c.user_confirmed && c.approval).map((c) => [c.approval!.content_hash, c.approval!]));
-        s.cards = cards.map((card) => {
-          const approval = confirmed.get(cardContentHash(card));
-          return approval ? { ...card, user_confirmed: true, approval } : card;
-        });
+        s.cards = carryExclusions(s.cards, cards);
         Object.assign(s, { sourcesHash, model, generatedAt: Date.now(), error: "", coversProfile });
       });
     } catch (error) {
       console.error("[experience-cards] 정리 실패:", error);
-      // 이전 카드와 확인 기록은 그대로 둔다. 오류를 화면에 보여주고, 다음 "지금 분석"이나 "카드 다시 만들기" 때 다시 시도한다.
+      // 이전 카드와 뺀 상태는 그대로 둔다. 오류를 화면에 보여주고, 다음 "지금 분석"이나 "카드 다시 만들기" 때 다시 시도한다.
       return updateStore((s) => Object.assign(s, { sourcesHash, model, error: error instanceof Error ? error.message : "경험 카드를 정리하지 못했습니다." }));
     }
   })().finally(() => { state.findarCardRun = undefined; });
@@ -246,7 +237,7 @@ function cachedSources(): CardSource[] {
 }
 
 // 과거 자료의 회사·직무만 고쳤을 때: 카드가 그 직전 원료로 만든 최신 상태였다면, 다시 만들지 않고(AI 호출 없음)
-// 카드 출처만 새 회사·배경으로 바꾼다. 확인 해시는 출처를 포함하지 않으므로 확인은 그대로 유지된다.
+// 카드 출처만 새 회사·배경으로 바꾼다. 뺀 상태는 그대로 유지된다.
 // 원료의 다른 부분까지 바뀐 상태였다면 그대로 두고, "카드 다시 만들기"가 새 값으로 만든다.
 export function syncCardOrigins<T>(change: () => T): T {
   if (state.findarCardRun) throw new Error("경험 카드를 정리하는 중에는 고칠 수 없습니다. 정리가 끝난 뒤 다시 시도해주세요.");
@@ -278,34 +269,27 @@ export function getExperienceCardStatus() {
   };
 }
 
-// 이력서·지원 정보까지 카드로 정리됐으면 작성에 원본 이력(이력서 요약·경력·활동·수상) 대신 확인한 카드만 쓴다.
+// 이력서·지원 정보까지 카드로 정리됐으면 작성에 원본 이력(이력서 요약·경력·활동·수상) 대신 카드만 쓴다.
 // 아직이면 이전처럼 원본 이력을 쓴다 — 카드를 만들기 전에 작성에서 경험이 갑자기 사라지지 않게 하기 위해서다.
 export function cardsCoverProfile(): boolean {
   return readStore().coversProfile;
 }
 
-// 원본 스킬의 사용자 게이트. 확인할 때 내용 해시를 남겨, 내용이 달라진 카드에 확인이 따라가지 않게 한다.
-export function setCardConfirmed(id: string, confirmed: boolean): ExperienceCard {
+export function setCardExcluded(id: string, excluded: boolean): ExperienceCard {
   let updated: ExperienceCard | undefined;
   updateStore((s) => {
-    s.cards = s.cards.map((card) => {
-      if (card.id !== id) return card;
-      updated = confirmed
-        ? { ...card, user_confirmed: true, approval: { content_hash: cardContentHash(card), actor: "user", confirmed_at: new Date().toISOString() } }
-        : { ...card, user_confirmed: false, approval: null };
-      return updated;
-    });
+    s.cards = s.cards.map((card) => (card.id === id ? (updated = { ...card, excluded }) : card));
   });
   if (!updated) throw new Error("카드를 찾을 수 없습니다.");
   return updated;
 }
 
-// 카드 전체. 확인 전 카드도 "(미확인)" 표시를 달아 첨삭 자료에 넣는다(lib/essay-review.ts).
+// 카드 전체(뺀 카드 포함). 다른 회사 이름 가리기처럼 뺀 카드의 출처도 알아야 하는 곳에서 쓴다.
 export function getAllCards(): ExperienceCard[] {
   return readStore().cards;
 }
 
-// 확인했고, 확인 이후 내용이 바뀌지 않은 카드.
-export function getConfirmedCards(): ExperienceCard[] {
-  return readStore().cards.filter((c) => c.user_confirmed && c.approval?.content_hash === cardContentHash(c));
+// 자기소개서 자료에 넣는 카드: 사용자가 빼지 않은 전부.
+export function getIncludedCards(): ExperienceCard[] {
+  return readStore().cards.filter((c) => !c.excluded);
 }

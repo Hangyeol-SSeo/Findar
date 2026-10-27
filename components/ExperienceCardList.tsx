@@ -8,7 +8,7 @@ interface Card {
   team_result: string[]; personal_actions: string[]; decision: string[]; observed_details: string[];
   constraints: string[]; alternatives_considered: string[]; result_limitations: string[];
   evidence: { entryId: string; sourceFile: string; kind: string; quote: string }[];
-  precision: Record<string, Precision>; sensitive: boolean; user_confirmed: boolean; droppedItems: string[];
+  precision: Record<string, Precision>; sensitive: boolean; excluded?: boolean; droppedItems: string[];
   origins?: { company: string; context: string; question: string; kind: string }[];
 }
 interface CardState {
@@ -62,17 +62,17 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
     }
   }
 
-  async function confirm(card: Card, confirmed: boolean) {
+  async function setExcluded(card: Card, excluded: boolean) {
     setBusy(card.id);
     setError("");
     try {
       const res = await fetch("/api/experience-cards", {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: card.id, confirmed }),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: card.id, excluded }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
       setState(body);
-      showToast(confirmed ? `${card.id}를 확인했습니다` : `${card.id} 확인을 취소했습니다`);
+      showToast(excluded ? `${card.id}를 자기소개서 자료에서 뺐습니다` : `${card.id}를 다시 넣었습니다`);
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : "처리하지 못했습니다.");
     } finally {
@@ -88,17 +88,17 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
     </div>
   );
 
-  const confirmedCount = state.cards.filter((c) => c.user_confirmed).length;
+  const excludedCount = state.cards.filter((c) => c.excluded).length;
   const working = state.running || state.essayRunning;
 
   return (
     <div className="mt-6 rounded-xl border border-gray-100 bg-white p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-gray-700">경험 카드 <span className="font-normal text-gray-400">확인 {confirmedCount} / {state.cards.length}</span></h3>
+          <h3 className="text-sm font-semibold text-gray-700">경험 카드 <span className="font-normal text-gray-400">사용 {state.cards.length - excludedCount} / {state.cards.length}</span></h3>
           <p className="mt-1 text-xs leading-5 text-gray-500">
-            이력서·지원 정보의 경험 항목과 올린 과거 자료를 사건 단위로 정리한 카드입니다. 같은 경험은 하나로 묶습니다. 읽어 보고 사실과 맞는 카드만 <b>확인</b>해주세요.
-            <b>확인한 카드는 자기소개서 자료로 그대로 쓰이고</b>, 확인하지 않은 카드는 ‘미확인’으로 표시해 참고만 합니다. 지원 도우미에서 최종본으로 저장한 글도 카드를 다시 만들면 들어갑니다.
+            이력서·지원 정보의 경험 항목과 올린 과거 자료를 사건 단위로 정리한 카드입니다. 같은 경험은 하나로 묶습니다.
+            <b>모든 카드가 자기소개서 자료로 들어갑니다.</b> 사실과 다르거나 쓰고 싶지 않은 카드만 <b>빼기</b>를 눌러주세요. 지원 도우미에서 최종본으로 저장한 글도 카드를 다시 만들면 들어갑니다.
             {state.coversProfile && <> 이력서 경험도 이제 카드로만 쓰입니다.</>}
           </p>
         </div>
@@ -113,7 +113,7 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
       </div>
 
       {state.stale && !working && state.cards.length > 0 && (
-        <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">과거 자료가 바뀌었습니다. 카드를 다시 만들면 내용이 같은 카드는 확인이 유지되고, 달라진 카드는 다시 확인해야 합니다.</p>
+        <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">과거 자료가 바뀌었습니다. 카드를 다시 만들어도 원문 근거가 같은 카드는 뺀 상태가 유지됩니다.</p>
       )}
       {(error || state.error) && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error || state.error}</p>}
       {!state.cards.length && !working && !state.error && (
@@ -122,18 +122,21 @@ export default function ExperienceCardList({ showToast }: { showToast: (msg: str
 
       <ul className="space-y-3">
         {state.cards.map((card) => (
-          <li key={card.id} className={`rounded-lg border p-4 text-sm ${card.user_confirmed ? "border-emerald-200 bg-emerald-50/40" : "border-gray-100"}`}>
+          <li key={card.id} className={`rounded-lg border p-4 text-sm ${card.excluded ? "border-gray-100 bg-gray-50 opacity-60" : "border-gray-100"}`}>
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="font-medium text-gray-800">{card.context || "(맥락 없음)"}</p>
+                <p className="font-medium text-gray-800">
+                  {card.excluded && <span className="mr-2 rounded bg-gray-200 px-1.5 py-0.5 text-xs font-normal text-gray-600">뺌</span>}
+                  {card.context || "(맥락 없음)"}
+                </p>
                 <p className="text-xs text-gray-400">
                   {card.id} · 사건 {card.event_id} · {card.period}
                   {card.sensitive && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">민감 정보 포함</span>}
                 </p>
               </div>
-              <button onClick={() => confirm(card, !card.user_confirmed)} disabled={!!busy || working}
-                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${card.user_confirmed ? "border border-gray-200 text-gray-600 hover:bg-gray-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
-                {card.user_confirmed ? "확인 취소" : "확인"}
+              <button onClick={() => setExcluded(card, !card.excluded)} disabled={!!busy || working}
+                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${card.excluded ? "bg-blue-600 text-white hover:bg-blue-700" : "border border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+                {card.excluded ? "다시 넣기" : "빼기"}
               </button>
             </div>
             {!!card.origins?.length && (
