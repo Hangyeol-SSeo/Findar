@@ -161,6 +161,7 @@ const check = (t, r) => review.checkEssay('S', t, r);
   const doc = review.essayContextDocument('S', { baseUrl: 'http://localhost:3000', researchNotice: '회사 리서치가 오래됐습니다.' });
   assert.ok(doc.startsWith('# Findar 자기소개서 자료 — 가상증권'));
   assert.ok(doc.includes('아직 고르지 않음') && doc.includes('주의: 회사 리서치가 오래됐습니다.'));
+  assert.ok(doc.includes('한 줄기로 흐른다') && doc.includes('모두 쓰라는 목록이 아니다') && !doc.includes('담백한 합니다체'), 'flow rule first, materials are a pool, no AI style observation');
   assert.ok(doc.includes('### 창업팀에서 결제 오류를 추적한 일') && !doc.includes('필름 동아리') && !doc.includes('다른증권') && !doc.includes('가상대학교'), 'included cards are listed, excluded ones left out, names redacted');
   assert.ok(doc.includes('### 입사 후 포부 (500자 이내, 공백 포함)\n포부 본문입니다.'));
   assert.ok(doc.includes('/api/applications/S/draft/import'));
