@@ -133,7 +133,7 @@ export async function runCompanyWatch({
     try {
       const cacheKey = `${source.type}\n${source.url}`;
       if (!listCache.has(cacheKey)) {
-        listCache.set(cacheKey, adapter.list(source.url, fetcher, { jsLinkTemplate: source.jsLinkTemplate, itemSelector: source.itemSelector, now: now() }));
+        listCache.set(cacheKey, adapter.list(source.url, fetcher, { jsLinkTemplate: source.jsLinkTemplate, itemSelector: source.itemSelector, api: source.api, now: now() }));
       }
       const postings = (await listCache.get(cacheKey)!).filter((p) => keepPosting(p, source, now()));
       run.found = postings.length;

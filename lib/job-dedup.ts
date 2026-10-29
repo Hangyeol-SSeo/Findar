@@ -3,7 +3,8 @@ import { hangulizeLatin, normalizeCompanyName } from "./company-normalize";
 // 같은 공고가 금투협 게시판과 회사 채용 사이트(그리팅·사람인)에 함께 올라온 경우를 찾는다. AI 없음, 요약 전에 판정한다.
 // 실제로 겹친 예: KIS자산평가 "[KIS자산평가] 금융컨설팅본부 솔루션실 신입/경력(1년 이상) 채용 공고"(금투협) ↔
 // "… 신입/경력 채용 공고"(그리팅), NICE신용평가 "신용평가 애널리스트"(둘 다 마감 11/9).
-// 판정: 회사 키가 같고, 공고 링크가 같거나, 제목 2-gram Dice가 마감일이 ±1일 안이면 0.7 이상, 마감일을 모르면 0.85 이상.
+// 판정: 회사 키가 같고, 공고 링크가 같거나, 제목 2-gram Dice가 마감일이 ±1일 안이면 0.7 이상(또는 한쪽 제목이 다른 쪽에 통째로
+// 들어 있음), 마감일을 모르면 0.85 이상.
 // 마감일이 둘 다 있는데 이틀 이상 다르면 다른 공고(재공고·기간 연장 공고)로 본다. 같은 채용 사이트의 서로 다른 공고 주소도
 // 다른 공고다 — BNK투자증권 "CM부 백오피스"와 "주식운용 백오피스"(마감 하루 차이)가 제목만으로는 0.6이 나왔다.
 
@@ -88,9 +89,15 @@ export function duplicateReason(a: DedupPosting, b: DedupPosting): DuplicateReas
   const urlB = postingUrlKey(b.url);
   if (urlA && urlA === urlB) return "url";
   if (urlA && urlB && urlA.split("/")[0] === urlB.split("/")[0]) return null;
-  const similarity = titleSimilarity(titleKey(a.title, a.company), titleKey(b.title, b.company));
+  const keyA = titleKey(a.title, a.company);
+  const keyB = titleKey(b.title, b.company);
+  const similarity = titleSimilarity(keyA, keyB);
   const diff = dayDiff(a.deadline, b.deadline);
-  if (diff !== null) return diff <= 1 && similarity >= SIMILAR_WITH_DEADLINE ? "title+deadline" : null;
+  // 마감일이 같으면 한쪽 제목이 다른 쪽을 그대로 품는 것도 같은 공고로 본다: IBK 채용 사이트
+  // "투자분석부(경제, 시황/투자전략 애널리스트) 채용 공고" ↔ 금투협 "[IBK투자증권] 투자분석부 채용 공고"(둘 다 10/30 마감).
+  const [shorter, longer] = keyA.length <= keyB.length ? [keyA, keyB] : [keyB, keyA];
+  const contained = shorter.length >= 4 && longer.includes(shorter);
+  if (diff !== null) return diff <= 1 && (similarity >= SIMILAR_WITH_DEADLINE || contained) ? "title+deadline" : null;
   return similarity >= SIMILAR_WITHOUT_DEADLINE ? "title" : null;
 }
 

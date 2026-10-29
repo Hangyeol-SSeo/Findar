@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
 import { normalizeCompanyName } from "./company-normalize";
+import type { WatchApiConfig } from "./watch-adapters";
 
 // 금투협 게시판 밖에서 공고를 확인할 회사 목록(감시 목록). 설계: docs/multi-source-jobs.md 2절 D·3절.
 // 금투협에 경력·수시 공고를 올리는 회사도 신입 공채·인턴은 자체 채용 사이트에만 올리는 일이 많다(메리츠·NH·키움·DB·LS).
-// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite·pageWatch이고,
+// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite·pageWatch·endpoint이고,
 // 나머지 유형은 어댑터가 생길 때까지 설정 화면에 "채용 사이트 바로가기"로만 보인다:
-//  - endpoint·workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
+//  - workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
 //  - unknown: 목록이 브라우저에서만 보여 데이터 경로를 아직 확인하지 않음(확인 필요)
 //  - blocked: robots.txt가 데이터 경로를 금지하거나 자동 요청을 차단함(우회하지 않음). 사용자가 직접 확인한다
 //  - saraminApi: 사람인 일반 공고에만 올림. 사람인 오픈API 승인 뒤 받는다
@@ -14,7 +15,7 @@ import { normalizeCompanyName } from "./company-normalize";
 
 export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "unknown" | "blocked" | "saraminApi";
 
-export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch"] as const;
+export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch", "endpoint"] as const;
 export type CollectableSourceType = (typeof COLLECTABLE_SOURCE_TYPES)[number];
 
 export function isCollectable(type: WatchSourceType): type is CollectableSourceType {
@@ -25,7 +26,7 @@ export const WATCH_SOURCE_LABELS: Record<WatchSourceType, string> = {
   greeting: "그리팅",
   saraminAts: "사람인 채용 사이트",
   recruiterAppsite: "recruiter.co.kr 채용 사이트",
-  endpoint: "자체 채용 사이트(준비 중)",
+  endpoint: "회사 채용 사이트",
   pageWatch: "회사 채용 게시판",
   workday: "Workday(준비 중)",
   unknown: "확인 필요",
@@ -42,6 +43,8 @@ export interface WatchSource {
   jsLinkTemplate?: string;
   /** pageWatch: 링크 없이 목록 칸에 내용이 다 있는 게시판의 공고 요소 선택자. */
   itemSelector?: string;
+  /** endpoint: 같은 사이트 목록·상세 API 설정. */
+  api?: WatchApiConfig;
   note?: string;
 }
 
@@ -97,12 +100,15 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("코람코자산신탁", "신탁", [{ type: "recruiterAppsite", url: "https://koramco.recruiter.co.kr/", titleIncludes: ["코람코자산신탁"], note: "코람코 통합 채용 사이트" }]),
     c("한국펀드평가", "데이터", [{ type: "recruiterAppsite", url: "https://kfr.recruiter.co.kr/" }]),
 
-    // 자체 사이트의 같은 사이트 목록 API — 받을 수 있음, 어댑터 준비 중
-    c("IBK투자증권", "증권", [{ type: "endpoint", url: "https://recruit.ibks.com/" }]),
-    c("미래에셋증권", "증권", [{ type: "endpoint", url: "https://recruit.securities.miraeasset.com/" }]),
-    c("한국투자증권", "증권", [{ type: "endpoint", url: "https://career.koreainvestment.com/", note: "한투금융 채용포탈" }]),
-    c("한국투자신탁운용", "자산운용", [{ type: "endpoint", url: "https://career.koreainvestment.com/", note: "한투금융 채용포탈" }]),
-    c("한국투자밸류자산운용", "자산운용", [{ type: "endpoint", url: "https://career.koreainvestment.com/", note: "한투금융 채용포탈" }]),
+    // 자체 채용 사이트의 같은 사이트 목록 API
+    c("IBK투자증권", "증권", [{ type: "endpoint", url: "https://recruit.ibks.com/", api: {
+      list: "/rec/api/ibks/announce/list?searchWord=&includeFinAnno=N&page=1", items: "rows", id: "annoId", title: "title", period: "term",
+      detail: "/rec/api/ibks/announce?annoId={id}", page: "/cv/announces/ibks/{id}",
+    } }]),
+    c("미래에셋증권", "증권", [{ type: "unknown", url: "https://recruit.securities.miraeasset.com/", note: "목록 API(Application.do) 확인됨. 2026-10-29부터 시스템 점검 중이라 재확인 필요" }]),
+    c("한국투자증권", "증권", [{ type: "blocked", url: "https://career.koreainvestment.com/announcementList", note: "한투금융 채용포탈: 목록 요청 인자를 브라우저에서 암호화함" }]),
+    c("한국투자신탁운용", "자산운용", [{ type: "blocked", url: "https://career.koreainvestment.com/announcementList", note: "한투금융 채용포탈: 목록 요청 인자를 브라우저에서 암호화함" }]),
+    c("한국투자밸류자산운용", "자산운용", [{ type: "blocked", url: "https://career.koreainvestment.com/announcementList", note: "한투금융 채용포탈: 목록 요청 인자를 브라우저에서 암호화함" }]),
 
     // 자체 채용 게시판 — 서버 HTML에 글 목록이 있는 곳(2026-10-29 확인)
     c("코리아에셋투자증권", "증권", [{ type: "pageWatch", url: "https://www.kasset.co.kr/recruit_list.do", jsLinkTemplate: "https://www.kasset.co.kr/recruit_view.do?recruitId={id}", note: "본문이 이미지라 제목만 읽힘" }]),

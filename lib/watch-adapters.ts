@@ -34,7 +34,23 @@ export interface WatchListOptions {
   jsLinkTemplate?: string;
   /** 글마다 링크가 없고 목록 칸에 내용이 다 있는 게시판(우리자산운용): 한 공고를 감싸는 요소. 그 글을 본문으로 쓴다. */
   itemSelector?: string;
+  /** endpoint: 같은 사이트 목록·상세 API의 주소와 필드 이름(lib/company-watchlist.ts WatchApiConfig). */
+  api?: WatchApiConfig;
   now?: Date;
+}
+
+/**
+ * 자체 채용 사이트가 화면을 그리려고 부르는 같은 사이트 JSON API(endpoint 어댑터). 사이트마다 파서를 짜지 않고 주소와 필드 이름만 적는다.
+ * 주소의 {id}는 공고 ID로 바뀐다. 필드는 점으로 이은 경로("rows", "data.list")도 된다.
+ */
+export interface WatchApiConfig {
+  list: string; // 진행 중 공고 목록 GET 주소
+  items: string; // 목록 배열 필드
+  id: string;
+  title: string;
+  period?: string; // "2026.10.08 00:00 ~ 2026.10.31 23:59" 같은 접수 기간 필드
+  detail?: string; // 공고 하나의 GET 주소({id}). 본문은 응답의 content·contents·body·detail 중 가장 긴 글
+  page: string; // 사용자가 여는 공고 페이지({id})
 }
 
 /** 공고 본문: 글과, 글이 얇을 때 보탤 본문 이미지·첨부파일 주소(lib/watch-content.ts가 읽는다). */
@@ -444,9 +460,61 @@ export const pageWatchAdapter: WatchAdapter = {
   },
 };
 
+function field(obj: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((value, key) => (value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined), obj);
+}
+
+function parseJson(text: string, what: string): unknown {
+  try { return JSON.parse(text); } catch { throw new WatchFetchError(`${what} 응답이 JSON이 아님(사이트 구조가 바뀌었을 수 있음)`); }
+}
+
+// 확인한 사이트(2026-10-29): IBK투자증권 recruit.ibks.com — 목록 GET /rec/api/ibks/announce/list?includeFinAnno=N(마감 제외)
+// {rows:[{annoId,title,term}]}, 상세 GET /rec/api/ibks/announce?annoId=… {content: HTML}. robots.txt 없음.
+// 한투금융 채용포탈은 목록 요청 인자를 브라우저에서 공개키로 암호화해(_ev/_ec) 부르므로 쓰지 않는다(우회가 된다).
+export const endpointAdapter: WatchAdapter = {
+  async list(base, fetcher, options = {}) {
+    const api = options.api;
+    if (!api) throw new WatchFetchError("endpoint 설정(api)이 없음");
+    const origin = new URL(base).origin;
+    const page = await fetcher.text(new URL(api.list, origin).toString());
+    const items = field(parseJson(page.text, "목록"), api.items);
+    if (!Array.isArray(items)) throw new WatchFetchError(`목록 필드(${api.items})를 찾지 못함(사이트 구조가 바뀌었을 수 있음)`);
+    const slug = new URL(origin).hostname.split(".").find((part) => !/^(?:www|recruit|career|careers)$/.test(part)) ?? "site";
+    return items.flatMap((item) => {
+      const id = field(item, api.id);
+      const title = field(item, api.title);
+      if ((typeof id !== "string" && typeof id !== "number") || typeof title !== "string") return [];
+      const period = api.period ? String(field(item, api.period) ?? "") : "";
+      const dates = [...period.matchAll(/(20\d{2})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})/g)];
+      const fill = (template: string) => new URL(template.replace("{id}", encodeURIComponent(String(id))), origin).toString();
+      return [{
+        seq: `${WATCH_SEQ_PREFIXES.endpoint}${slug}-${id}`,
+        title: oneLine(title),
+        url: fill(api.page),
+        postedAt: dates.length > 1 ? `${dates[0][1]}-${dates[0][2].padStart(2, "0")}-${dates[0][3].padStart(2, "0")} 00:00:00` : "",
+        deadline: periodEnd(period),
+        contentUrl: api.detail ? fill(api.detail) : "",
+        inlineContent: api.detail ? undefined : oneLine(title),
+      }];
+    });
+  },
+  async content(posting, fetcher) {
+    if (posting.inlineContent !== undefined) return { text: posting.inlineContent, images: [], files: [] };
+    const page = await fetcher.text(posting.contentUrl);
+    const data = parseJson(page.text, "공고 상세");
+    // 필드 이름은 목록 설정과 함께 적지 않으므로, 흔한 본문 필드 중 가장 긴 글을 쓴다.
+    const html = ["content", "contents", "body", "detail", "annoContent"]
+      .map((key) => field(data, key)).filter((value): value is string => typeof value === "string")
+      .sort((a, b) => b.length - a.length)[0] ?? "";
+    const $ = cheerio.load(html);
+    return { text: htmlToText(html), ...contentMedia($, $.root() as cheerio.Cheerio<never>, page.url) };
+  },
+};
+
 export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   greeting: greetingAdapter,
   saraminAts: saraminAtsAdapter,
   recruiterAppsite: recruiterAppsiteAdapter,
   pageWatch: pageWatchAdapter,
+  endpoint: endpointAdapter,
 };

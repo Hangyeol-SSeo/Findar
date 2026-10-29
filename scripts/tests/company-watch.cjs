@@ -49,7 +49,7 @@ function nextDataPage(queries) {
   process.chdir(scratch);
   const { parseRobots, robotsAllows, WatchBlockedError } = load('lib/watch-fetch.ts');
   const { companyKey, titleKey, titleSimilarity, duplicateReason } = load('lib/job-dedup.ts');
-  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
+  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, endpointAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
   const { jobSource, postingLink, isWatchSeq, isKofiaSeq } = load('lib/job-source.ts');
 
   // robots.txt: 가장 긴 규칙이 이긴다(recruiter.co.kr 구형 테넌트는 Disallow: / 뒤에 Allow: /appsite/).
@@ -111,6 +111,13 @@ function nextDataPage(queries) {
   assert.equal(duplicateReason(
     { seq: 'greeting-239724', company: '넥스트증권', title: 'Communication Manager', deadline: '', url: 'https://nextsecurities.career.greetinghr.com/ko/o/239724' },
     { seq: '42049', company: '넥스트증권', title: '[넥스트증권] Sr.Communication Manager', deadline: '', url: 'https://nextsecurities.career.greetinghr.com/ko/o/228880' }), null);
+  // 마감일이 같고 한쪽 제목이 다른 쪽을 품으면 같은 공고(IBK). 마감일이 연장된 공고는 따로 둔다(금투협 쪽은 이미 마감).
+  const ibkKofia = { seq: '42620', company: 'IBK투자증권', title: '[IBK투자증권] 투자분석부 채용 공고', deadline: '2026-10-30', url: 'https://recruit.ibks.com/cv/announces/ibks' };
+  assert.equal(duplicateReason({ seq: 'api-ibks-2496991', company: 'IBK투자증권', title: '투자분석부(경제, 시황/투자전략 애널리스트) 채용 공고', deadline: '2026-10-30', url: 'https://recruit.ibks.com/cv/announces/ibks/2496991' }, ibkKofia), 'title+deadline');
+  assert.equal(duplicateReason({ seq: 'x', company: 'IBK투자증권', title: '투자분석부(RA) 채용 공고', deadline: '2026-10-30', url: '' }, { ...ibkKofia, deadline: '' }), null);
+  assert.equal(duplicateReason(
+    { seq: 'api-ibks-2505050', company: 'IBK투자증권', title: '리스크관리부(부서장) 채용 공고', deadline: '2026-10-30', url: '' },
+    { seq: '42654', company: 'IBK투자증권', title: '[IBK투자증권] 리스크관리부(부서장) 채용 공고', deadline: '2026-10-25', url: '' }), null);
   // 회사 키: (주)·공백·영문 약어 한글화, (구. …) 제거.
   assert.equal(companyKey('KB자산운용'), companyKey('케이비자산운용'));
   assert.equal(companyKey('우리투자증권(구. 우리종합금융)'), companyKey('우리투자증권'));
@@ -214,6 +221,24 @@ function nextDataPage(queries) {
   assert.ok(recruiterRequests.every(([, url]) => new URL(url).pathname.startsWith('/appsite/')));
   assert.equal(jobSource('recruiter-ls-sec-269740'), 'recruiterAppsite');
   assert.equal(robotsAllows(parseRobots('User-agent: *\nDisallow: /\nAllow: /appsite/\nAllow: /bbs/appsite/\nUser-agent: Googlebot\nUser-agent: Yeti\nAllow: /\n'), '/app/jobnotice/view'), false);
+
+  // 자체 채용 사이트의 목록 API(endpoint): 주소·필드 이름 설정만으로 받는다(IBK).
+  const ibkApi = { list: '/rec/api/ibks/announce/list?searchWord=&includeFinAnno=N&page=1', items: 'rows', id: 'annoId', title: 'title', period: 'term', detail: '/rec/api/ibks/announce?annoId={id}', page: '/cv/announces/ibks/{id}' };
+  const ibkFetcher = fakeFetcher({
+    'https://recruit.ibks.com/rec/api/ibks/announce/list?searchWord=&includeFinAnno=N&page=1': JSON.stringify({ total: 1, rows: [
+      { annoId: 2496991, title: '투자분석부(경제, 시황/투자전략 애널리스트) 채용 공고', term: '2026.10.12 00:00 ~ 2026.10.30 23:59', status: 'DOC' },
+      { title: 'ID 없는 행' },
+    ] }),
+    'https://recruit.ibks.com/rec/api/ibks/announce?annoId=2496991': JSON.stringify({ title: 't', content: '<p>[IBK투자증권] 경력직 채용 공고<br>1. 모집분야</p><p><img src="/rec/api/ibks/image/a1"></p>' }),
+    'https://x.example/list': '<html>점검 중</html>',
+  });
+  const ibk = await endpointAdapter.list('https://recruit.ibks.com/', ibkFetcher, { api: ibkApi });
+  assert.deepEqual(ibk.map((p) => [p.seq, p.title, p.deadline, p.postedAt, p.url]), [[
+    'api-ibks-2496991', '투자분석부(경제, 시황/투자전략 애널리스트) 채용 공고', '2026-10-30', '2026-10-12 00:00:00', 'https://recruit.ibks.com/cv/announces/ibks/2496991',
+  ]]);
+  assert.deepEqual(await endpointAdapter.content(ibk[0], ibkFetcher), { text: '[IBK투자증권] 경력직 채용 공고\n1. 모집분야', images: ['https://recruit.ibks.com/rec/api/ibks/image/a1'], files: [] });
+  await assert.rejects(endpointAdapter.list('https://x.example/', ibkFetcher, { api: { ...ibkApi, list: '/list' } }), /JSON이 아님/);
+  assert.equal(jobSource('api-ibks-2496991'), 'endpoint');
 
   // 자체 채용 게시판(pageWatch). 기준일 2026-10-29.
   const today = new Date('2026-10-29T03:00:00Z');
