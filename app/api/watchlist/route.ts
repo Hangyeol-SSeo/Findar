@@ -1,4 +1,5 @@
-import { clearWatchRuns, getWatchRuns } from "@/lib/db";
+import { clearWatchRuns, getCompanyCoverage, getWatchRuns } from "@/lib/db";
+import { normalizeCompanyName } from "@/lib/company-normalize";
 import { WATCH_SOURCE_LABELS, isCollectable, readWatchlist, setWatchCompanyEnabled } from "@/lib/company-watchlist";
 import type { WatchlistResponse } from "@/lib/watchlist-types";
 import { isSameOrigin } from "@/lib/request-origin";
@@ -6,11 +7,14 @@ import { isSameOrigin } from "@/lib/request-origin";
 // 설정 → 수집 범위. 감시 목록과 출처별 마지막 확인 결과(watch_runs). 수집 자체는 공고 새로고침(GET /api/jobs)이 한다.
 export async function GET() {
   const runs = new Map(getWatchRuns().map((run) => [`${run.company}\n${run.sourceUrl}`, run]));
+  const since = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date(Date.now() - 183 * 86_400_000));
+  const coverage = getCompanyCoverage(since);
   const body: WatchlistResponse = {
     companies: readWatchlist().companies.map((company) => ({
       name: company.name,
       segment: company.segment,
       enabled: company.enabled,
+      coverage: coverage.get(normalizeCompanyName(company.name)) ?? { kofia: 0, watch: 0, watchOnKofia: 0 },
       sources: company.sources.map((source) => {
         const run = runs.get(`${company.name}\n${source.url}`);
         return {

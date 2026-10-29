@@ -73,6 +73,7 @@ export default function WatchlistSettings({ showToast }: { showToast: (message: 
         <h3 className="text-sm font-semibold text-gray-700">자동으로 확인하는 채용 사이트 ({collected.length}곳)</h3>
         <p className="mt-1 text-xs text-gray-500">
           공고를 새로고침할 때 사이트마다 하루 한 번 확인합니다. 금투협에 이미 올라온 공고는 하나로 합쳐 보여 줍니다.
+          채용 사이트에만 있는 공고가 많은 회사는 금투협에 일부만 올리는 회사입니다.
         </p>
         <ul className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
           {collected.map((company) => (
@@ -85,6 +86,7 @@ export default function WatchlistSettings({ showToast }: { showToast: (message: 
                 {company.sources.filter((s) => s.collectable).map((source) => (
                   <SourceLine key={source.url} source={source} />
                 ))}
+                <CoverageLine coverage={company.coverage} />
               </div>
               <div className="flex shrink-0 items-center gap-3">
                 <button
@@ -119,6 +121,7 @@ export default function WatchlistSettings({ showToast }: { showToast: (message: 
           {manual.map(({ company, source }) => (
             <li key={`${company.name}-${source.url}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
               <span className="w-40 shrink-0 text-sm text-gray-800">{company.name}</span>
+              <span className="text-xs text-gray-400">금투협 6개월 {company.coverage.kofia}건</span>
               <span className="text-xs text-gray-500">{source.label}{source.note ? ` · ${source.note}` : ""}</span>
               {source.type !== "saraminApi" && (
                 <a href={source.url} target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-blue-600 hover:underline">
@@ -195,6 +198,22 @@ function SeasonCheckLine({ showToast }: { showToast: (message: string) => void }
       <p className="mt-1 text-xs text-gray-500">
         자동으로 공고를 받지 못하는 회사(NH·하나·DB·KB 공채·삼성·한화 등)의 이번 시즌 신입 공채 보도를 웹 검색으로 찾아 보드 위에 알려 줍니다. 공고로 저장하지는 않습니다.
       </p>
+    </div>
+  );
+}
+
+// 최근 6개월 금투협 공고 수와 채용 사이트에서 받은 공고 수. 채용 사이트에만 있는 공고가 금투협 공고보다 많으면 강조한다.
+function CoverageLine({ coverage }: { coverage: WatchlistCompanyView["coverage"] }) {
+  const siteTotal = coverage.watch + coverage.watchOnKofia;
+  const partial = coverage.watch > 0 && coverage.watch >= coverage.kofia;
+  return (
+    <div className="mt-1 text-xs text-gray-400">
+      최근 6개월 금투협 {coverage.kofia}건 · 채용 사이트 {siteTotal}건
+      {siteTotal > 0 && (
+        <span className={partial ? "font-medium text-violet-600" : ""}>
+          {" "}(금투협에 없음 {coverage.watch}건{coverage.watchOnKofia > 0 ? ` · 겹침 ${coverage.watchOnKofia}건` : ""})
+        </span>
+      )}
     </div>
   );
 }

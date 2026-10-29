@@ -1256,3 +1256,35 @@ export function listSeasonAlerts(): SeasonAlertRow[] {
 export function dismissSeasonAlert(id: number): boolean {
   return db.prepare(`UPDATE season_alerts SET dismissedAt = ? WHERE id = ? AND dismissedAt IS NULL`).run(Date.now(), id).changes > 0;
 }
+
+export interface CompanyCoverage { kofia: number; watch: number; watchOnKofia: number }
+
+// 수집 범위 점검(설정 → 수집 범위): 회사별로 기간 안의 금투협 공고 수, 채용 사이트에서 받은 공고 수(목록에 저장된 것),
+// 채용 사이트에서 찾았지만 금투협에 이미 있어 연결만 한 수. 채용 사이트 공고가 금투협보다 많은 회사가 금투협에 일부만 올리는 회사다.
+// 키는 normalizeCompanyName.
+export function getCompanyCoverage(sinceDate: string): Map<string, CompanyCoverage> {
+  const coverage = new Map<string, CompanyCoverage>();
+  const bump = (company: string, key: keyof CompanyCoverage, n: number) => {
+    const name = normalizeCompanyName(company);
+    const entry = coverage.get(name) ?? { kofia: 0, watch: 0, watchOnKofia: 0 };
+    entry[key] += n;
+    coverage.set(name, entry);
+  };
+  const rows = db.prepare(`
+    SELECT company,
+      SUM(CASE WHEN seq NOT GLOB '*[^0-9]*' THEN 1 ELSE 0 END) AS kofia,
+      SUM(CASE WHEN seq GLOB '*[^0-9]*' AND seq NOT LIKE 'manual-%' THEN 1 ELSE 0 END) AS watch
+    FROM jobs WHERE date >= ? GROUP BY company
+  `).all(sinceDate) as { company: string; kofia: number; watch: number }[];
+  for (const row of rows) { bump(row.company, "kofia", row.kofia); bump(row.company, "watch", row.watch); }
+  // 처음부터 중복이라 저장하지 않은 채용 사이트 공고(job_links.seq가 채용 사이트, canonical이 금투협).
+  const linked = db.prepare(`
+    SELECT jobs.company AS company, COUNT(*) AS n FROM job_links
+    JOIN jobs ON jobs.seq = job_links.canonicalSeq
+    WHERE job_links.separatedAt IS NULL AND job_links.seq GLOB '*[^0-9]*' AND job_links.seq NOT LIKE 'manual-%'
+      AND jobs.seq NOT GLOB '*[^0-9]*' AND job_links.createdAt >= ?
+    GROUP BY jobs.company
+  `).all(Date.parse(`${sinceDate}T00:00:00+09:00`)) as { company: string; n: number }[];
+  for (const row of linked) bump(row.company, "watchOnKofia", row.n);
+  return coverage;
+}

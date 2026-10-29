@@ -506,6 +506,12 @@ function nextDataPage(queries) {
   assert.deepEqual(again.details, []);
   assert.ok(!watchFetcher.requested.some((u) => u.includes('/o/')));
 
+  // 수집 범위 점검: 회사별 금투협 공고 수, 채용 사이트에서 받은 공고 수, 금투협과 겹쳐 연결만 한 수(최근 기간).
+  const coverage = db.getCompanyCoverage('2026-05-01');
+  assert.deepEqual(coverage.get('KIS자산평가'), { kofia: 1, watch: 1, watchOnKofia: 1 });
+  assert.deepEqual(coverage.get('나이스신용평가'), { kofia: 0, watch: 1, watchOnKofia: 0 });
+  assert.equal(db.getCompanyCoverage('2099-01-01').get('KIS자산평가'), undefined); // 기간 밖이면 빠진다
+
   // 채용 사이트 목록에서 내려간 공고는 마감일이 없어도 닫힌다. 다시 보이면 열린다.
   assert.ok(db.getActiveJobs().some((j) => j.seq === 'greeting-242100'));
   watchPages['https://kispricing.career.greetinghr.com/ko/home'] = nextDataPage([{ queryKey: ['openings'], state: { data: [opening(242026, kisGreeting.title, '2026-11-06T14:59:59Z')] } }]);
