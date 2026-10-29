@@ -72,13 +72,16 @@ function pageLinks(html: string, base: string): string[] {
   return links;
 }
 
-/** 모델에게 돌려줄 페이지 원문. 실패하면 READ_FAILED로 시작한다. */
-export async function readResearchPage(rawUrl: string, { fetchImpl = fetch, timeoutMs = 20_000 }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<string> {
+export type PublicPage =
+  | { ok: true; url: string; title: string; text: string; html: string; notes: string[] }
+  | { ok: false; kind: "invalid" | "private" | "blockedHost" | "blocked" | "pdf" | "error"; reason: string };
+
+/** 공개 웹페이지 하나를 읽어 머리·메뉴·바닥을 뺀 본문을 돌려준다. 리서치 도구와 공고 직접 추가(링크에서 읽기)가 함께 쓴다. */
+export async function fetchPublicPage(rawUrl: string, { fetchImpl = fetch, timeoutMs = 20_000, textLimit = TEXT_LIMIT }: { fetchImpl?: typeof fetch; timeoutMs?: number; textLimit?: number } = {}): Promise<PublicPage> {
   let url: URL;
-  try { url = new URL(rawUrl.trim()); } catch { return `${READ_FAILED} 주소 형식이 아닙니다: ${rawUrl}`; }
-  if ((url.protocol !== "https:" && url.protocol !== "http:") || !isPublicHost(url.hostname)) return `${READ_FAILED} 공개 웹 주소만 읽을 수 있습니다.`;
-  if (isBlockedResearchHost(url.toString()))
-    return `${READ_FAILED} ${url.hostname}은 자동 접근을 막는 사이트라 열지 않았습니다. 다시 시도하지 말고, 검색 결과에 보인 내용만 "검색 요약"이라고 밝혀서 쓰세요.`;
+  try { url = new URL(rawUrl.trim()); } catch { return { ok: false, kind: "invalid", reason: `주소 형식이 아닙니다: ${rawUrl}` }; }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || !isPublicHost(url.hostname)) return { ok: false, kind: "private", reason: "공개 웹 주소만 읽을 수 있습니다." };
+  if (isBlockedResearchHost(url.toString())) return { ok: false, kind: "blockedHost", reason: `${url.hostname}은 자동 접근을 막는 사이트라 열지 않았습니다.` };
   let notes: string[] = [];
   let page = await fetchOnce(url.toString(), fetchImpl, timeoutMs);
   if (!page.ok && page.tls && url.protocol === "https:") {
@@ -94,11 +97,23 @@ export async function readResearchPage(rawUrl: string, { fetchImpl = fetch, time
     }
   }
   if (!page.ok) {
-    if (page.pdf) return `${READ_FAILED} PDF 문서입니다. PDF는 WebFetch로 읽으세요.`;
-    if (page.blocked) return `${READ_FAILED} ${page.reason}. 우회하지 말고 다른 출처를 찾거나, 검색 결과에 보인 내용만 "검색 요약"이라고 밝혀서 쓰세요.`;
-    return `${READ_FAILED} ${page.reason}${notes.length ? ` (${notes.join(" ")})` : ""}`;
+    const kind = page.pdf ? "pdf" : page.blocked ? "blocked" : "error";
+    return { ok: false, kind, reason: `${page.reason}${kind === "error" && notes.length ? ` (${notes.join(" ")})` : ""}` };
   }
-  const { title, text } = extractHomepageText(page.html, { stripChrome: true, limit: TEXT_LIMIT });
+  const { title, text } = extractHomepageText(page.html, { stripChrome: true, limit: textLimit });
+  return { ok: true, url: page.url, title, text, html: page.html, notes };
+}
+
+/** 모델에게 돌려줄 페이지 원문. 실패하면 READ_FAILED로 시작한다. */
+export async function readResearchPage(rawUrl: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<string> {
+  const page = await fetchPublicPage(rawUrl, options);
+  if (!page.ok) {
+    if (page.kind === "blockedHost") return `${READ_FAILED} ${page.reason} 다시 시도하지 말고, 검색 결과에 보인 내용만 "검색 요약"이라고 밝혀서 쓰세요.`;
+    if (page.kind === "pdf") return `${READ_FAILED} PDF 문서입니다. PDF는 WebFetch로 읽으세요.`;
+    if (page.kind === "blocked") return `${READ_FAILED} ${page.reason}. 우회하지 말고 다른 출처를 찾거나, 검색 결과에 보인 내용만 "검색 요약"이라고 밝혀서 쓰세요.`;
+    return `${READ_FAILED} ${page.reason}`;
+  }
+  const { title, text, notes } = page;
   const links = pageLinks(page.html, page.url);
   if (text.length < 50 && !links.length) return `${READ_FAILED} 본문이 거의 없는 페이지입니다(스크립트로 그리는 페이지일 수 있음): ${page.url}`;
   return [

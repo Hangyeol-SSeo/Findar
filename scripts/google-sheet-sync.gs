@@ -3,6 +3,7 @@
  *
  * Findar(lib/sheet-sync.ts)가 지원 상태를 바꿀 때마다 이 웹 앱으로 POST를 보낸다.
  * 링크 열(F)의 KOFIA 공고 번호(seq=)로 기존 행을 찾아 단계·결과를 갱신하고, 없으면 새 행을 추가한다.
+ * Findar에 직접 추가한 공고(seq가 manual-로 시작)는 링크가 없거나 협회 주소가 아니므로, 링크 칸 메모(findar:seq)로 찾는다.
  *
  * 설치
  *  1. 지원 현황 시트에서 [확장 프로그램] → [Apps Script]를 열고 이 파일 내용을 그대로 붙여 넣는다.
@@ -26,7 +27,7 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var token = PropertiesService.getScriptProperties().getProperty("FINDAR_TOKEN");
     if (!token || data.token !== token) return json({ ok: false, error: "invalid token" });
-    if (!/^\d+$/.test(String(data.seq))) return json({ ok: false, error: "invalid seq" });
+    if (!/^(\d+|manual-[a-z0-9]+)$/.test(String(data.seq))) return json({ ok: false, error: "invalid seq" });
 
     lock.waitLock(20000);
     var sheet = getTargetSheet();
@@ -46,6 +47,7 @@ function doPost(e) {
         data.stage || "",
         data.result || "",
       ]]);
+      sheet.getRange(row, COL.link).setNote("findar:" + data.seq);
     } else {
       // 기존 행은 단계·결과만 갱신하고, 나머지 칸은 비어 있을 때만 채운다(손으로 고친 값 보존).
       fillIfBlank(sheet, row, COL.company, data.company);
@@ -76,14 +78,16 @@ function getTargetSheet() {
   return sheets[0];
 }
 
-// 링크 칸의 텍스트나 하이퍼링크 URL에서 seq=번호를 찾는다.
+// 링크 칸 메모(findar:seq), 텍스트나 하이퍼링크 URL의 seq=번호로 찾는다.
 function findRowBySeq(sheet, seq) {
   var lastRow = sheet.getLastRow();
   if (lastRow <= HEADER_ROWS) return -1;
   var range = sheet.getRange(HEADER_ROWS + 1, COL.link, lastRow - HEADER_ROWS, 1);
   var texts = range.getDisplayValues();
   var rich = range.getRichTextValues();
+  var notes = range.getNotes();
   for (var i = 0; i < texts.length; i++) {
+    if (notes[i][0] === "findar:" + seq) return HEADER_ROWS + 1 + i;
     var url = rich[i][0] ? rich[i][0].getLinkUrl() : null;
     if (seqOf(texts[i][0]) === seq || seqOf(url) === seq) return HEADER_ROWS + 1 + i;
   }

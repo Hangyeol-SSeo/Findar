@@ -80,7 +80,7 @@ export function emailDomainUrls(texts: string[]): string[] {
 
 // 사이트 공통 머리·메뉴·바닥 영역. 하위 페이지마다 반복돼 글자 수만 차지하므로 하위 페이지에서는 지운다.
 // 첫 화면은 바닥에 주소·연락처가 있어 그대로 둔다.
-const CHROME = "header, nav, footer, [id*=gnb], [class*=gnb], [id*=lnb], [class*=lnb], [id*=snb], [class*=snb], [id*=header], [class*=header], [id*=footer], [class*=footer], [id*=sidebar], [class*=sidebar], [class*=sitemap], [id*=quick], [class*=quick], [id*=skip], [class*=skip], [id*=top_menu], [class*=top_menu], [class*=breadcrumb], [class*=location]";
+export const CHROME = "header, nav, footer, [id*=gnb], [class*=gnb], [id*=lnb], [class*=lnb], [id*=snb], [class*=snb], [id*=header], [class*=header], [id*=footer], [class*=footer], [id*=sidebar], [class*=sidebar], [class*=sitemap], [id*=quick], [class*=quick], [id*=skip], [class*=skip], [id*=top_menu], [class*=top_menu], [class*=breadcrumb], [class*=location]";
 
 export function extractHomepageText(html: string, { stripChrome = false, limit = ROOT_TEXT_LIMIT } = {}): { title: string; text: string } {
   const $ = cheerio.load(html);
@@ -177,7 +177,8 @@ export function sniffImage(bytes: Uint8Array): { mediaType: InputImage["mediaTyp
   return null;
 }
 
-async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<InputImage | null> {
+// 공고 직접 추가의 링크 읽기도 쓴다(세로로 긴 공고 이미지라 maxSide·maxBytes를 크게 준다).
+export async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: number, { maxSide = MAX_IMAGE_SIDE, maxBytes = MAX_IMAGE_BYTES } = {}): Promise<InputImage | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -187,11 +188,11 @@ async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: numbe
     } });
     if (!res.ok || (res.url && !isPublicHost(new URL(res.url).hostname))) return null;
     const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length < MIN_IMAGE_BYTES || bytes.length > MAX_IMAGE_BYTES) return null;
+    if (bytes.length < MIN_IMAGE_BYTES || bytes.length > maxBytes) return null;
     const image = sniffImage(bytes);
     if (!image) return null;
     const { width, height } = image;
-    if (width !== undefined && height !== undefined && (Math.min(width, height) < 40 || Math.max(width, height) < MIN_IMAGE_SIDE || Math.max(width, height) > MAX_IMAGE_SIDE)) return null;
+    if (width !== undefined && height !== undefined && (Math.min(width, height) < 40 || Math.max(width, height) < MIN_IMAGE_SIDE || Math.max(width, height) > maxSide)) return null;
     return { mediaType: image.mediaType, data: Buffer.from(bytes).toString("base64") };
   } catch { return null; }
   finally { clearTimeout(timer); }
