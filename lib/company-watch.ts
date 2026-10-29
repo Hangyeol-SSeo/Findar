@@ -37,6 +37,8 @@ const DEDUP_WINDOW_DAYS = 150;
 // 마감일 없이 오래 열린 공고는 인재풀 등록이다(교보자산신탁 "우수인재 등록시스템(DB)", 2024년부터 열림).
 const STALE_OPEN_DAYS = 180;
 const TALENT_POOL = /인재\s*(?:풀|pool|DB|등록)|인재풀|talent\s*pool/i;
+// 공고가 아니라 지원서 작성 입구인 항목(신한투자증권 "■ 경력직 채용 입사지원서 작성").
+const APPLY_ENTRY = /(?:입사)?지원서\s*(?:작성|등록|수정)\s*$/;
 const MAX_NEW_PER_SOURCE = 15;
 // 자체 게시판은 글을 하나씩 열고 요약해야 공고인지 안다. 첫 확인 때 비용이 몰리지 않게 하루에 적게 연다.
 const MAX_NEW_PER_PAGE_SOURCE = 5;
@@ -90,11 +92,15 @@ export function dueWatchTasks(now: Date, force = false): WatchTask[] {
   return tasks;
 }
 
+// 토스·Workday는 지금 열린 직무만 보여 주고 상시 직무를 몇 년씩 열어 둔다(토스증권 Product Designer 2021년 게시). 이런
+// 목록은 게시가 오래됐다는 이유로 빼지 않는다.
+const CURRENT_OPENINGS_ONLY = new Set(["tossCareer", "workday"]);
+
 function keepPosting(posting: WatchPosting, source: WatchSource, now: Date): boolean {
   if (source.titleIncludes?.length && !source.titleIncludes.some((word) => posting.title.includes(word))) return false;
-  if (TALENT_POOL.test(posting.title)) return false;
+  if (TALENT_POOL.test(posting.title) || APPLY_ENTRY.test(posting.title)) return false;
   if (posting.deadline && posting.deadline < todayYmd(now)) return false;
-  if (!posting.deadline && posting.postedAt && posting.postedAt.slice(0, 10) < daysBefore(now, STALE_OPEN_DAYS)) return false;
+  if (!CURRENT_OPENINGS_ONLY.has(source.type) && !posting.deadline && posting.postedAt && posting.postedAt.slice(0, 10) < daysBefore(now, STALE_OPEN_DAYS)) return false;
   return true;
 }
 
@@ -133,7 +139,7 @@ export async function runCompanyWatch({
     try {
       const cacheKey = `${source.type}\n${source.url}`;
       if (!listCache.has(cacheKey)) {
-        listCache.set(cacheKey, adapter.list(source.url, fetcher, { jsLinkTemplate: source.jsLinkTemplate, itemSelector: source.itemSelector, api: source.api, now: now() }));
+        listCache.set(cacheKey, adapter.list(source.url, fetcher, { jsLinkTemplate: source.jsLinkTemplate, itemSelector: source.itemSelector, api: source.api, affiliate: source.affiliate, now: now() }));
       }
       const postings = (await listCache.get(cacheKey)!).filter((p) => keepPosting(p, source, now()));
       run.found = postings.length;

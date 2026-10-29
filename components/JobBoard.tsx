@@ -12,6 +12,7 @@ import ManualJobForm, { type ManualJobSaved } from "./ManualJobForm";
 import { isManualSeq } from "@/lib/manual-jobs";
 import { JOB_SOURCE_LABELS, isKofiaSeq, jobSource, postingLink } from "@/lib/job-source";
 import JobLinksNotice from "@/components/JobLinksNotice";
+import SeasonAlerts from "@/components/SeasonAlerts";
 import { normalizeCompanyName } from "@/lib/company-normalize";
 import type { Memo, MemoIndex } from "@/lib/memo-types";
 import { categorizePositions } from "@/lib/position-categories";
@@ -136,7 +137,9 @@ export default function JobBoard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
   // 공고 직접 추가 창. seq가 있으면 직접 추가한 그 공고를 고친다.
-  const [manualForm, setManualForm] = useState<{ seq: string | null } | null>(null);
+  const [manualForm, setManualForm] = useState<{ seq: string | null; initial?: { company: string; title: string; url: string; deadline: string } } | null>(null);
+  // 공고 새로고침이 끝날 때마다 늘려 공채 소식 알림을 다시 읽게 한다(확인은 새로고침 뒤 서버에서 돈다).
+  const [seasonRefresh, setSeasonRefresh] = useState(0);
   const [panelTab, setPanelTab] = useState<"detail" | "company" | "tailoring" | "draft">("detail");
   const [panelWidth, setPanelWidth] = useState<number>(() => readStoredPanelWidth());
   const [resizingPanel, setResizingPanel] = useState(false);
@@ -371,6 +374,7 @@ export default function JobBoard() {
               setNewCount(typeof data.newCount === "number" ? data.newCount : null);
               setHasProfile(!!data.hasProfile);
               setLoading(false);
+              setSeasonRefresh((n) => n + 1);
               setProgress((p) => ({
                 ...p,
                 phase: "done",
@@ -805,6 +809,11 @@ export default function JobBoard() {
               에서 이력서·포트폴리오 PDF를 올린 뒤 새로고침해주세요.
             </div>
           )}
+
+          <SeasonAlerts
+            refreshKey={seasonRefresh}
+            onAdd={(alert) => setManualForm({ seq: null, initial: { company: alert.company, title: alert.title, url: alert.recruitUrl, deadline: alert.deadline } })}
+          />
 
           {/* Progress bar */}
           {loading && progress.phase !== "idle" && (
@@ -1469,8 +1478,9 @@ export default function JobBoard() {
       </div>
       {manualForm && (
         <ManualJobForm<JobSummary>
-          key={manualForm.seq ?? "new"}
+          key={manualForm.seq ?? `new:${manualForm.initial?.title ?? ""}`}
           seq={manualForm.seq}
+          initial={manualForm.initial}
           onClose={() => setManualForm(null)}
           onSaved={handleManualJobSaved}
         />

@@ -17,6 +17,8 @@ export interface WatchlistCompanyView {
   segment: string;
   enabled: boolean;
   sources: WatchlistSourceView[];
+  /** 최근 6개월: 금투협 공고 수, 채용 사이트에서 받아 목록에 넣은 수, 채용 사이트에서 찾았지만 금투협에 이미 있던 수. */
+  coverage: { kofia: number; watch: number; watchOnKofia: number };
 }
 
 export interface WatchlistResponse {

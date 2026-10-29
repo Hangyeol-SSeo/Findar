@@ -40,6 +40,8 @@ function load(relative) {
       upsertJob: j => savedJobs.push(j), updateJobMatch: (...args) => matches.push(args),
       getJobsNeedingMatch: () => [], skipLowScoreMatches: () => 0,
     };
+    if (id === 'next/server') return { after: () => {} };
+    if (id === '@/lib/hiring-season') return { runSeasonCheck: async () => ({ checked: 0, found: 0, failed: 0 }) };
     if (id === '@/lib/company-watch') return {
       runCompanyWatch: async () => ({ details: [], runs: 0, linked: 0 }), linkKofiaDuplicates: () => 0, recordNotPosting: () => {}, isNotPosting: () => false,
     };

@@ -5,6 +5,8 @@ import { AI_FEATURES, AI_MODEL_IDS, CLAUDE_MODELS, CODEX_MODELS, isCodexModel, D
 
 function settingsPath() { return join(process.cwd(), "data", "ai-model-settings.json"); }
 function isJobFeature(feature: AIFeature) { return feature === "summarization" || feature === "matching"; }
+// 공채 소식 확인은 회사마다 검색 한두 번에 짧은 JSON만 받으므로 기본은 저렴한 모델이다.
+function cheapByDefault(feature: AIFeature) { return feature === "hiringSeason"; }
 function freeRideModel() { return process.env.FREERIDE_MODEL || AI_MODEL_IDS.FREERIDE_CODING; }
 function currentModel(model: string) {
   // 목록에서 뺀 모델을 저장해 둔 선택은 같은 계열의 현재 모델로 옮긴다.
@@ -18,7 +20,8 @@ function defaults(): AIModelSettings {
   return Object.fromEntries(AI_FEATURES.map(({ id }) => [id,
     isJobFeature(id)
       ? process.env.USE_FREERIDE === "true" ? freeRideModel() : DEFAULT_JOB_AI_MODEL
-      : id === "companyResearch" ? currentModel(process.env.COMPANY_RESEARCH_MODEL || DEFAULT_AI_MODEL) : DEFAULT_AI_MODEL,
+      : id === "companyResearch" ? currentModel(process.env.COMPANY_RESEARCH_MODEL || DEFAULT_AI_MODEL)
+      : cheapByDefault(id) ? DEFAULT_JOB_AI_MODEL : DEFAULT_AI_MODEL,
   ])) as AIModelSettings;
 }
 

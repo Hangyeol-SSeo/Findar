@@ -35,14 +35,17 @@ const MAX_TOTAL_SLICES = POSTING_IMAGE_LIMITS.slices * 3;
 // 본문이 이미지인 공고는 이미지를 올리거나 붙여 넣으면 글자를 옮겨 본문 칸에 채운다(저장 전에 사용자가 확인한다).
 export default function ManualJobForm<Job>({
   seq,
+  initial,
   onClose,
   onSaved,
 }: {
   seq: string | null;
+  /** 새 공고 칸의 처음 값(공채 소식 알림의 "공고로 추가"). 본문은 사용자가 링크 읽기로 채운다. */
+  initial?: Partial<Fields>;
   onClose: () => void;
   onSaved: (result: ManualJobSaved<Job>) => void;
 }) {
-  const [fields, setFields] = useState<Fields>(EMPTY);
+  const [fields, setFields] = useState<Fields>(() => ({ ...EMPTY, ...initial }));
   const [loadingExisting, setLoadingExisting] = useState(!!seq);
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState<{ ok: boolean; text: string } | null>(null);

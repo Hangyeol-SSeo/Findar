@@ -171,6 +171,27 @@ db.exec(`
     createdAt INTEGER NOT NULL
   );
 
+  -- 공채 시즌 감지(lib/hiring-season.ts): 회사별 마지막 확인과, 찾은 공채 소식(공고가 아니라 알림). 닫은 알림은 dismissedAt.
+  CREATE TABLE IF NOT EXISTS season_checks (
+    company TEXT PRIMARY KEY,
+    checkedAt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS season_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT NOT NULL,
+    season TEXT NOT NULL,
+    title TEXT NOT NULL,
+    deadline TEXT NOT NULL DEFAULT '',
+    recruitUrl TEXT NOT NULL DEFAULT '',
+    articleUrl TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    foundAt INTEGER NOT NULL,
+    dismissedAt INTEGER,
+    UNIQUE (company, season, title)
+  );
+
   -- 채용 사이트 감시(lib/company-watch.ts)의 출처별 마지막 결과. 하루 한 번만 돌리는 기준이자 설정 화면의 상태 표시.
   CREATE TABLE IF NOT EXISTS watch_runs (
     company TEXT NOT NULL,
@@ -1198,4 +1219,72 @@ export function insertNotPosting(row: { seq: string; company: string; title: str
 export function getNotPostingSeqs(seqs: string[]): Set<string> {
   const stmt = db.prepare(`SELECT seq FROM watch_not_postings WHERE seq = ?`);
   return new Set(seqs.filter((seq) => stmt.get(seq)));
+}
+
+export interface SeasonCheckRow { company: string; checkedAt: number; status: string; message: string }
+
+export function getSeasonChecks(): SeasonCheckRow[] {
+  return db.prepare(`SELECT * FROM season_checks`).all() as SeasonCheckRow[];
+}
+
+export function saveSeasonCheck(row: SeasonCheckRow): void {
+  db.prepare(`INSERT INTO season_checks (company, checkedAt, status, message) VALUES (@company, @checkedAt, @status, @message)
+    ON CONFLICT(company) DO UPDATE SET checkedAt = excluded.checkedAt, status = excluded.status, message = excluded.message`).run(row);
+}
+
+export interface SeasonAlertRow {
+  id: number; company: string; season: string; title: string; deadline: string;
+  recruitUrl: string; articleUrl: string; evidence: string; foundAt: number; dismissedAt: number | null;
+}
+
+// 같은 회사·시즌·제목이면 한 건으로 두고 마감일·주소만 새 값으로 바꾼다(닫은 알림은 그대로 닫혀 있다).
+export function upsertSeasonAlert(row: Omit<SeasonAlertRow, "id" | "foundAt" | "dismissedAt">): void {
+  db.prepare(`
+    INSERT INTO season_alerts (company, season, title, deadline, recruitUrl, articleUrl, evidence, foundAt)
+    VALUES (@company, @season, @title, @deadline, @recruitUrl, @articleUrl, @evidence, @foundAt)
+    ON CONFLICT(company, season, title) DO UPDATE SET
+      deadline = CASE WHEN excluded.deadline != '' THEN excluded.deadline ELSE season_alerts.deadline END,
+      recruitUrl = CASE WHEN excluded.recruitUrl != '' THEN excluded.recruitUrl ELSE season_alerts.recruitUrl END,
+      articleUrl = excluded.articleUrl, evidence = excluded.evidence
+  `).run({ ...row, foundAt: Date.now() });
+}
+
+export function listSeasonAlerts(): SeasonAlertRow[] {
+  return db.prepare(`SELECT * FROM season_alerts ORDER BY CASE WHEN deadline = '' THEN 1 ELSE 0 END, deadline, foundAt DESC`).all() as SeasonAlertRow[];
+}
+
+export function dismissSeasonAlert(id: number): boolean {
+  return db.prepare(`UPDATE season_alerts SET dismissedAt = ? WHERE id = ? AND dismissedAt IS NULL`).run(Date.now(), id).changes > 0;
+}
+
+export interface CompanyCoverage { kofia: number; watch: number; watchOnKofia: number }
+
+// 수집 범위 점검(설정 → 수집 범위): 회사별로 기간 안의 금투협 공고 수, 채용 사이트에서 받은 공고 수(목록에 저장된 것),
+// 채용 사이트에서 찾았지만 금투협에 이미 있어 연결만 한 수. 채용 사이트 공고가 금투협보다 많은 회사가 금투협에 일부만 올리는 회사다.
+// 키는 normalizeCompanyName.
+export function getCompanyCoverage(sinceDate: string): Map<string, CompanyCoverage> {
+  const coverage = new Map<string, CompanyCoverage>();
+  const bump = (company: string, key: keyof CompanyCoverage, n: number) => {
+    const name = normalizeCompanyName(company);
+    const entry = coverage.get(name) ?? { kofia: 0, watch: 0, watchOnKofia: 0 };
+    entry[key] += n;
+    coverage.set(name, entry);
+  };
+  const rows = db.prepare(`
+    SELECT company,
+      SUM(CASE WHEN seq NOT GLOB '*[^0-9]*' THEN 1 ELSE 0 END) AS kofia,
+      SUM(CASE WHEN seq GLOB '*[^0-9]*' AND seq NOT LIKE 'manual-%' THEN 1 ELSE 0 END) AS watch
+    FROM jobs WHERE date >= ? GROUP BY company
+  `).all(sinceDate) as { company: string; kofia: number; watch: number }[];
+  for (const row of rows) { bump(row.company, "kofia", row.kofia); bump(row.company, "watch", row.watch); }
+  // 처음부터 중복이라 저장하지 않은 채용 사이트 공고(job_links.seq가 채용 사이트, canonical이 금투협).
+  const linked = db.prepare(`
+    SELECT jobs.company AS company, COUNT(*) AS n FROM job_links
+    JOIN jobs ON jobs.seq = job_links.canonicalSeq
+    WHERE job_links.separatedAt IS NULL AND job_links.seq GLOB '*[^0-9]*' AND job_links.seq NOT LIKE 'manual-%'
+      AND jobs.seq NOT GLOB '*[^0-9]*' AND job_links.createdAt >= ?
+    GROUP BY jobs.company
+  `).all(Date.parse(`${sinceDate}T00:00:00+09:00`)) as { company: string; n: number }[];
+  for (const row of linked) bump(row.company, "watchOnKofia", row.n);
+  return coverage;
 }
