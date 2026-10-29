@@ -7,6 +7,7 @@ import {
   markSheetSyncPending,
   recordSheetSyncFailure,
 } from "./db";
+import { postingLink } from "./manual-jobs";
 import { applicationAppliedAt, isSubmittedApplicationStatus, type ApplicationStatus } from "./application-status";
 
 // 지원 상태가 바뀌면 사용자의 지원 현황 Google 시트에 한 행씩 기록한다.
@@ -76,7 +77,8 @@ export function buildSheetRowPayload(seq: string): SheetRowPayload | null {
     appliedDate: formatYyMmDd(appliedAt),
     career: job.positionType === "미분류" ? "" : job.positionType,
     position: getApplicationRole(seq).role || job.positions.join(", ") || job.title,
-    link: `https://www.kofia.or.kr/brd/m_96/view.do?seq=${seq}`,
+    // 직접 추가한 공고는 링크가 없을 수 있다. Apps Script는 이런 행을 링크 칸 메모(findar:seq)로 다시 찾는다.
+    link: postingLink(job) ?? "",
     ...stageAndResult(application.status, history),
   };
 }

@@ -8,6 +8,8 @@ import ApplicationRole from "./ApplicationRole";
 import ResumeTailoringPanel from "./ResumeTailoringPanel";
 import CategoryTooltip from "./CategoryTooltip";
 import MemoPanel, { type MemoSaved } from "./MemoPanel";
+import ManualJobForm, { type ManualJobSaved } from "./ManualJobForm";
+import { isManualSeq, postingLink } from "@/lib/manual-jobs";
 import { normalizeCompanyName } from "@/lib/company-normalize";
 import type { Memo, MemoIndex } from "@/lib/memo-types";
 import { categorizePositions } from "@/lib/position-categories";
@@ -131,6 +133,8 @@ export default function JobBoard() {
   const [positionFilter, setPositionFilter] = useState("전체");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobSummary | null>(null);
+  // 공고 직접 추가 창. seq가 있으면 직접 추가한 그 공고를 고친다.
+  const [manualForm, setManualForm] = useState<{ seq: string | null } | null>(null);
   const [panelTab, setPanelTab] = useState<"detail" | "company" | "tailoring" | "draft">("detail");
   const [panelWidth, setPanelWidth] = useState<number>(() => readStoredPanelWidth());
   const [resizingPanel, setResizingPanel] = useState(false);
@@ -492,6 +496,15 @@ export default function JobBoard() {
     [loadTrackedJobs]
   );
 
+  // 직접 추가·수정한 공고를 목록에 넣고 상세를 연다. 지원 현황에 있는 공고면 거기 값도 바꾼다.
+  const handleManualJobSaved = useCallback(({ job }: ManualJobSaved<JobSummary>) => {
+    setManualForm(null);
+    setJobs((prev) => prev.some((j) => j.seq === job.seq) ? prev.map((j) => (j.seq === job.seq ? job : j)) : [job, ...prev]);
+    setTrackedJobs((prev) => prev.map((j) => (j.seq === job.seq ? { ...j, ...job } : j)));
+    setSelectedJob(job);
+    setPanelTab("detail");
+  }, []);
+
   const toggleBookmark = useCallback((seq: string, bookmarked: boolean) => {
     setJobs((prev) =>
       prev.map((j) => (j.seq === seq ? { ...j, bookmarked } : j))
@@ -752,6 +765,13 @@ export default function JobBoard() {
                   {loading ? "수집 중..." : "새로고침"}
                 </button>
               </div>
+              <button
+                onClick={() => setManualForm({ seq: null })}
+                title="금융투자협회 게시판에 없는 공고를 직접 넣습니다"
+                className="text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                공고 직접 추가
+              </button>
               <Link href="/profile" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
                 내 지원 자료
               </Link>
@@ -1229,6 +1249,18 @@ export default function JobBoard() {
             <div className="flex-1 overflow-y-auto p-5">
               <h2 className="text-xl font-bold mb-3">{selectedJob.title}</h2>
 
+              {isManualSeq(selectedJob.seq) && (
+                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                  <span>직접 추가한 공고입니다.</span>
+                  <button
+                    onClick={() => setManualForm({ seq: selectedJob.seq })}
+                    className="shrink-0 font-medium text-blue-600 hover:underline"
+                  >
+                    공고 수정
+                  </button>
+                </div>
+              )}
+
               <div className="mb-4">
                 <label className="text-xs text-gray-400 block mb-1">지원 상태</label>
                 <select
@@ -1318,7 +1350,7 @@ export default function JobBoard() {
               <div className="grid grid-cols-2 gap-3 mb-5">
                 <InfoItem label="채용 유형" value={selectedJob.positionType} />
                 <InfoItem label="경력" value={selectedJob.experienceYears} />
-                <InfoItem label="등록일" value={selectedJob.date} />
+                <InfoItem label={isManualSeq(selectedJob.seq) ? "추가일" : "등록일"} value={selectedJob.date} />
                 <InfoItem
                   label="마감일"
                   value={
@@ -1386,7 +1418,8 @@ export default function JobBoard() {
             </div>
             )}
 
-            {/* Panel footer */}
+            {/* Panel footer — 직접 추가한 공고는 협회 원문이 없고, 적어 둔 공고 링크가 지원 사이트 링크다. */}
+            {(selectedJob.siteUrl || !isManualSeq(selectedJob.seq)) && (
             <div className={panelTab === "company" ? "shrink-0 grid grid-cols-2 gap-2 border-t border-gray-100 px-5 py-2" : "p-5 border-t border-gray-100 space-y-2"}>
               {selectedJob.siteUrl && (
                 <a
@@ -1395,11 +1428,12 @@ export default function JobBoard() {
                   rel="noopener noreferrer"
                   className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
                 >
-                  지원 사이트 바로가기
+                  {isManualSeq(selectedJob.seq) ? "공고 페이지 바로가기" : "지원 사이트 바로가기"}
                 </a>
               )}
+              {!isManualSeq(selectedJob.seq) && (
               <a
-                href={`https://www.kofia.or.kr/brd/m_96/view.do?seq=${selectedJob.seq}`}
+                href={postingLink(selectedJob) ?? undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={
@@ -1410,10 +1444,20 @@ export default function JobBoard() {
               >
                 KOFIA 원문 보기
               </a>
+              )}
             </div>
+            )}
           </div>
         )}
       </div>
+      {manualForm && (
+        <ManualJobForm<JobSummary>
+          key={manualForm.seq ?? "new"}
+          seq={manualForm.seq}
+          onClose={() => setManualForm(null)}
+          onSaved={handleManualJobSaved}
+        />
+      )}
     </div>
   );
 }
@@ -1544,6 +1588,7 @@ function JobCard({
             ))}
           </select>
           <div className="text-xs text-gray-400">{job.date}</div>
+          {isManualSeq(job.seq) && <div className="text-xs text-gray-400">직접 추가</div>}
           {job.deadline && (
             <div className={`text-xs ${showTracking && job.expired ? "text-gray-400" : "text-red-500"}`}>
               ~{job.deadline}

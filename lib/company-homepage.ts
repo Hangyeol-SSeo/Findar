@@ -177,7 +177,8 @@ export function sniffImage(bytes: Uint8Array): { mediaType: InputImage["mediaTyp
   return null;
 }
 
-async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<InputImage | null> {
+// 공고 직접 추가의 링크 읽기도 쓴다(세로로 긴 공고 이미지라 maxSide·maxBytes를 크게 준다).
+export async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: number, { maxSide = MAX_IMAGE_SIDE, maxBytes = MAX_IMAGE_BYTES } = {}): Promise<InputImage | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -187,11 +188,11 @@ async function fetchImage(url: string, fetchImpl: typeof fetch, timeoutMs: numbe
     } });
     if (!res.ok || (res.url && !isPublicHost(new URL(res.url).hostname))) return null;
     const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length < MIN_IMAGE_BYTES || bytes.length > MAX_IMAGE_BYTES) return null;
+    if (bytes.length < MIN_IMAGE_BYTES || bytes.length > maxBytes) return null;
     const image = sniffImage(bytes);
     if (!image) return null;
     const { width, height } = image;
-    if (width !== undefined && height !== undefined && (Math.min(width, height) < 40 || Math.max(width, height) < MIN_IMAGE_SIDE || Math.max(width, height) > MAX_IMAGE_SIDE)) return null;
+    if (width !== undefined && height !== undefined && (Math.min(width, height) < 40 || Math.max(width, height) < MIN_IMAGE_SIDE || Math.max(width, height) > maxSide)) return null;
     return { mediaType: image.mediaType, data: Buffer.from(bytes).toString("base64") };
   } catch { return null; }
   finally { clearTimeout(timer); }
