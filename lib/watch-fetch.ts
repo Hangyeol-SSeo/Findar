@@ -71,7 +71,9 @@ export function robotsAllows(rules: RobotsRule[], path: string): boolean {
 
 export interface WatchFetcher {
   /** HTML·텍스트 페이지를 받는다(EUC-KR 해석 포함). 최종 주소도 돌려준다. */
-  text(url: string, init?: { method?: "GET" | "POST"; body?: string; contentType?: string }): Promise<{ url: string; text: string }>;
+  /** maxBytes: 이보다 긴 응답은 잘린다(기본 3MB). 회사 전체 공고를 한 번에 주는 JSON(토스 약 6MB)은 크게 준다. */
+  /** json: JSON API 요청(Accept를 JSON으로). 같은 주소에 Accept에 따라 HTML·JSON을 돌려주는 사이트가 있다(applyin /jobs). */
+  text(url: string, init?: { method?: "GET" | "POST"; body?: string; contentType?: string; maxBytes?: number; json?: boolean }): Promise<{ url: string; text: string }>;
   /** 첨부파일·이미지를 받는다(maxBytes를 넘으면 실패). 파일 이름은 Content-Disposition에서 읽는다. */
   bytes?(url: string, maxBytes: number): Promise<{ url: string; bytes: Uint8Array; contentType: string; filename: string }>;
 }
@@ -106,7 +108,7 @@ export function createWatchFetcher(fetchImpl: typeof fetch = fetch, { gapMs = HO
     lastRequest.set(host, Date.now());
   }
 
-  async function raw(url: string, init: { method?: string; body?: string; contentType?: string } = {}) {
+  async function raw(url: string, init: { method?: string; body?: string; contentType?: string; json?: boolean } = {}) {
     if (signal?.aborted) throw new WatchFetchError("취소됨");
     const host = new URL(url).host;
     await wait(host);
@@ -122,7 +124,7 @@ export function createWatchFetcher(fetchImpl: typeof fetch = fetch, { gapMs = HO
         signal: controller.signal,
         headers: {
           "User-Agent": WATCH_USER_AGENT,
-          "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+          "Accept": init.json ? "application/json, text/plain;q=0.5" : "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
           "Accept-Language": "ko-KR,ko;q=0.9",
           ...(init.contentType ? { "Content-Type": init.contentType } : {}),
         },
@@ -196,7 +198,7 @@ export function createWatchFetcher(fetchImpl: typeof fetch = fetch, { gapMs = HO
       if (res.status === 401 || res.status === 403 || res.status === 429) throw new WatchBlockedError(`HTTP ${res.status} — 자동 접근이 막힘`);
       if (!res.ok) throw new WatchFetchError(`HTTP ${res.status}`);
       const contentType = res.headers.get("content-type") ?? "";
-      const text = decode((await res.arrayBuffer()).slice(0, MAX_BYTES), contentType);
+      const text = decode((await res.arrayBuffer()).slice(0, init.maxBytes ?? MAX_BYTES), contentType);
       if (res.status === 202 || (text.length < 40_000 && CHALLENGE.test(text))) throw new WatchBlockedError("봇 차단 확인 페이지");
       return { url: finalUrl, text };
     },

@@ -12,9 +12,9 @@ import type { WatchApiConfig } from "./watch-adapters";
 //  - saraminApi: 사람인 일반 공고에만 올림. 사람인 오픈API 승인 뒤 받는다
 // 사용자 데이터는 data/company-watchlist.json(없으면 아래 초기값). 사용자는 회사별로 끄고 켤 수만 있다.
 
-export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "unknown" | "blocked" | "saraminApi";
+export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "tossCareer" | "unknown" | "blocked" | "saraminApi";
 
-export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch", "endpoint", "workday"] as const;
+export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch", "endpoint", "workday", "tossCareer"] as const;
 export type CollectableSourceType = (typeof COLLECTABLE_SOURCE_TYPES)[number];
 
 export function isCollectable(type: WatchSourceType): type is CollectableSourceType {
@@ -28,6 +28,7 @@ export const WATCH_SOURCE_LABELS: Record<WatchSourceType, string> = {
   endpoint: "회사 채용 사이트",
   pageWatch: "회사 채용 게시판",
   workday: "Workday",
+  tossCareer: "토스 채용",
   unknown: "확인 필요",
   blocked: "자동 수집 불가",
   saraminApi: "사람인 공고(API 승인 대기)",
@@ -44,6 +45,8 @@ export interface WatchSource {
   itemSelector?: string;
   /** endpoint: 같은 사이트 목록·상세 API 설정. */
   api?: WatchApiConfig;
+  /** tossCareer: 토스 계열사 이름. */
+  affiliate?: string;
   note?: string;
 }
 
@@ -63,6 +66,12 @@ export interface Watchlist {
 }
 
 const c = (name: string, segment: string, sources: WatchSource[], enabled = true): WatchCompany => ({ name, segment, sources, enabled });
+
+// applyin({slug}.applyin.co.kr) 채용 사이트는 모두 같은 API다.
+const APPLYIN_API: WatchApiConfig = {
+  list: "/jobs?v=1.2.0&size=50", items: "data", id: "id", title: "title", deadline: "end", posted: "start",
+  detail: "/jobs/{id}?v=1.2.0", page: "/jobs/{id}",
+};
 
 // 2026-10-29 전수 확인 결과(docs/multi-source-jobs.md 2절 D). "금투협만"(별도 채널 없음) 회사는 넣지 않았다.
 export const DEFAULT_WATCHLIST: Watchlist = {
@@ -121,7 +130,10 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("하나자산신탁", "신탁", [{ type: "pageWatch", url: "https://hanatrust.com/ko/recruitment/jobNotice", note: "하반기 직원 채용이 금투협에 없음" }]),
     c("이지자산평가", "채권평가", [{ type: "pageWatch", url: "https://www.egap.co.kr/bbs/board.php?bo_table=recruit" }]),
     // 자체 채용 게시판이지만 글 목록을 스크립트로 불러오거나 열리지 않음 — 확인 필요
-    c("신한투자증권", "증권", [{ type: "unknown", url: "https://recruit.shinhansec.com/", note: "채용 사이트가 스크립트로만 그려짐" }]),
+    c("신한투자증권", "증권", [{ type: "endpoint", url: "https://recruit.shinhansec.com/", api: {
+      list: "/recruit/mainList.do", listBody: "searchType=A", items: "", id: "ANNO_ID", title: "ANNO_SUBJECT",
+      deadline: "ACCEPT_END_YMD", posted: "ACCEPT_STA_YMD", detail: "/recruit/view.do?annoId={id}", page: "/recruit/view.do?annoId={id}",
+    } }]),
     c("DS투자증권", "증권", [{ type: "unknown", url: "https://www.ds-sec.co.kr/sub01/sub01_06.php", note: "채용공고가 탭 안에 있음(글 링크 없음)" }]),
     c("마이다스에셋자산운용", "자산운용", [{ type: "unknown", url: "https://midasasset.com/%ea%b3%b5%ec%a7%80-%ea%b3%b5%ec%8b%9c/%ec%b1%84%ec%9a%a9%ea%b3%b5%ea%b3%a0/", note: "글 목록을 스크립트로 불러옴" }]),
     c("트러스톤자산운용", "자산운용", [{ type: "unknown", url: "https://www.trustonasset.com/?cat=61", note: "글 목록을 스크립트로 불러옴" }]),
@@ -137,17 +149,17 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     // 확인 필요 — 목록이 브라우저에서만 보임
     c("메리츠증권", "증권", [
       { type: "unknown", url: "https://recruit-meritz.com/", note: "대졸 공채가 금투협에 없음" },
-      { type: "unknown", url: "https://imeritz.careerlink.kr/", note: "CareerLink(InHR)" },
+      { type: "unknown", url: "https://imeritz.careerlink.kr/", note: "CareerLink(InHR): 목록을 다른 호스트 API(api.inhr.co.kr)에서 받아 부르지 않음" },
     ]),
-    c("케이비자산운용", "자산운용", [{ type: "unknown", url: "https://kbam.careerlink.kr/", note: "CareerLink(InHR)" }]),
-    c("부국증권", "증권", [{ type: "unknown", url: "https://bookook.applyin.co.kr/", note: "applyin" }]),
+    c("케이비자산운용", "자산운용", [{ type: "unknown", url: "https://kbam.careerlink.kr/", note: "CareerLink(InHR): 목록을 다른 호스트 API(api.inhr.co.kr)에서 받아 부르지 않음" }]),
+    c("부국증권", "증권", [{ type: "endpoint", url: "https://bookook.applyin.co.kr/", note: "applyin", api: APPLYIN_API }]),
     c("신영증권", "증권", [{ type: "unknown", url: "https://shinrecruit.shinyoung.com/", note: "applyin" }]),
-    c("하나대체투자자산운용", "자산운용", [{ type: "unknown", url: "https://hana-aamc.applyin.co.kr/", note: "applyin" }]),
+    c("하나대체투자자산운용", "자산운용", [{ type: "endpoint", url: "https://hana-aamc.applyin.co.kr/", note: "applyin", api: APPLYIN_API }]),
     c("스카이펀드서비스", "사무관리", [{ type: "unknown", url: "https://www.skyfs.co.kr/", note: "applyin" }]),
-    c("삼성증권", "증권", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용" }]),
-    c("삼성자산운용", "자산운용", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용" }]),
-    c("삼성선물", "선물", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용(추정)" }]),
-    c("토스증권", "증권", [{ type: "unknown", url: "https://toss.im/career", note: "Greenhouse" }]),
+    c("삼성증권", "증권", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용: 목록 API가 브라우저 세션을 요구함. 공채는 공채 소식 확인이 찾음" }]),
+    c("삼성자산운용", "자산운용", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용: 목록 API가 브라우저 세션을 요구함" }]),
+    c("삼성선물", "선물", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용(추정): 목록 API가 브라우저 세션을 요구함" }]),
+    c("토스증권", "증권", [{ type: "tossCareer", url: "https://toss.im/career/jobs", affiliate: "토스증권", note: "토스 계열사 통합 채용" }]),
     c("케이비부동산신탁", "신탁", [{ type: "unknown", url: "https://kbret.incruit.com/", note: "인크루트" }]),
 
     // 자동 수집 불가 — 사용자가 직접 확인

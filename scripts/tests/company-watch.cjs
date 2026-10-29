@@ -49,7 +49,7 @@ function nextDataPage(queries) {
   process.chdir(scratch);
   const { parseRobots, robotsAllows, WatchBlockedError } = load('lib/watch-fetch.ts');
   const { companyKey, titleKey, titleSimilarity, duplicateReason } = load('lib/job-dedup.ts');
-  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, endpointAdapter, workdayAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
+  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, endpointAdapter, workdayAdapter, tossCareerAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
   const { jobSource, postingLink, isWatchSeq, isKofiaSeq } = load('lib/job-source.ts');
 
   // robots.txt: 가장 긴 규칙이 이긴다(recruiter.co.kr 구형 테넌트는 Disallow: / 뒤에 Allow: /appsite/).
@@ -240,6 +240,32 @@ function nextDataPage(queries) {
   await assert.rejects(endpointAdapter.list('https://x.example/', ibkFetcher, { api: { ...ibkApi, list: '/list' } }), /JSON이 아님/);
   assert.equal(jobSource('api-ibks-2496991'), 'endpoint');
 
+  // endpoint 확장: 목록 POST 폼 값, 최상위 배열, "2026.11.08" 날짜, ISO 마감(서울 날짜), HTML 상세, {data:{content}} 상세.
+  const endpointRequests = [];
+  const shinhanFetcher = { async text(url, init = {}) {
+    endpointRequests.push([init.method ?? 'GET', url, init.body ?? '', init.json === true]);
+    if (url === 'https://recruit.shinhansec.com/recruit/mainList.do') return { url, text: JSON.stringify([
+      { ANNO_ID: 4175211, ANNO_SUBJECT: '리서치본부 RA 공개채용', ACCEPT_STA_YMD: '2026.10.23', ACCEPT_END_YMD: '2026.11.08' },
+    ]) };
+    if (url === 'https://recruit.shinhansec.com/recruit/view.do?annoId=4175211') return { url, text: '<html><body><header>메뉴</header><div class="view_wrap"><h3>리서치본부 RA 공개채용</h3><p>모집구분 신입 · 마감일 2026.11.08</p></div></body></html>' };
+    if (url === 'https://hana-aamc.applyin.co.kr/jobs?v=1.2.0&size=50') return { url, text: JSON.stringify({ data: [{ id: 23451, title: '전략자산운용 경력직원 채용', start: '2026-10-11T15:00:00.000000Z', end: '2026-11-30T14:59:59.000000Z' }] }) };
+    if (url === 'https://hana-aamc.applyin.co.kr/jobs/23451?v=1.2.0') return { url, text: JSON.stringify({ data: { content: '<p>국내 부동산 투자 경력</p>' } }) };
+    throw new Error(`unexpected ${url}`);
+  } };
+  const { DEFAULT_WATCHLIST } = load('lib/company-watchlist.ts');
+  const sourceOf = (name) => DEFAULT_WATCHLIST.companies.find((c) => c.name === name).sources[0];
+  const shinhan = await endpointAdapter.list('https://recruit.shinhansec.com/', shinhanFetcher, { api: sourceOf('신한투자증권').api });
+  assert.deepEqual(shinhan.map((p) => [p.seq, p.title, p.deadline, p.postedAt, p.url]), [[
+    'api-shinhansec-4175211', '리서치본부 RA 공개채용', '2026-11-08', '2026-10-23 00:00:00', 'https://recruit.shinhansec.com/recruit/view.do?annoId=4175211',
+  ]]);
+  assert.equal((await endpointAdapter.content(shinhan[0], shinhanFetcher)).text, '리서치본부 RA 공개채용\n모집구분 신입 · 마감일 2026.11.08');
+  const applyin = await endpointAdapter.list('https://hana-aamc.applyin.co.kr/', shinhanFetcher, { api: sourceOf('하나대체투자자산운용').api });
+  assert.deepEqual(applyin.map((p) => [p.seq, p.deadline, p.postedAt, p.url]), [['api-hana-aamc-23451', '2026-11-30', '2026-10-12 00:00:00', 'https://hana-aamc.applyin.co.kr/jobs/23451']]);
+  assert.equal((await endpointAdapter.content(applyin[0], shinhanFetcher)).text, '국내 부동산 투자 경력');
+  assert.deepEqual(endpointRequests.map(([method, , body, json]) => [method, body, json]), [
+    ['POST', 'searchType=A', true], ['GET', '', true], ['GET', '', true], ['GET', '', true],
+  ]);
+
   // Workday: 서울 검색 결과 중 근무지가 한국인 공고만, 마감일·게시일은 본문 응답에서.
   const wdRequests = [];
   const wdFetcher = {
@@ -272,6 +298,35 @@ function nextDataPage(queries) {
   assert.equal(wdRequests.length, 2); // total 3 ≤ 한 쪽(20)이라 다음 쪽은 부르지 않는다
   await assert.rejects(workdayAdapter.list('https://x.wd1.myworkdayjobs.com/', wdFetcher), /사이트 이름/);
   assert.equal(robotsAllows(parseRobots('User-agent: *\nAllow: /BlackRock_Professional/\nDisallow: /BlackRock_AIG/\nDisallow: /refreshFacet/\n'), '/wday/cxs/blackrock/BlackRock_Professional/jobs'), true);
+
+  // 토스 채용: 계열사 통합 목록 JSON 한 번(본문 포함)에서 이 계열사 공고만. 같은 공고가 여러 묶음에 나오면 한 번만.
+  const tossMetaOf = (sub, extra = {}) => [
+    { name: 'Employment_Type', value: '정규직' },
+    { name: '포지션의 소속 자회사를 선택해 주세요.', value: sub },
+    { name: 'Job Description을 작성해 주세요.(작성 전, 채용 커뮤니케이션 가이드 노션을 꼭 참고해 주세요.)', value: '## 합류하게 될 팀\n- 리스크관리' },
+    { name: '커리어페이지 메뉴에 "미노출" 되어야 하는 Job인가요?', value: extra.hidden ? 'True' : 'False' },
+    { name: '커리어페이지 채용공고 클로징 일자 (서류접수 마감일이 정해진 경우)', value: extra.closing ?? '' },
+  ];
+  const tossRequests = [];
+  const tossFetcher = { async text(url, init = {}) {
+    tossRequests.push([url, init.maxBytes]);
+    return { url, text: JSON.stringify({ resultType: 'SUCCESS', success: [
+      { primary_job: { id: 111, title: 'Risk Manager', first_published: '2021-01-25T14:11:36Z', application_deadline: null, metadata: tossMetaOf('토스증권') }, jobs: [
+        { id: 111, title: 'Risk Manager', metadata: tossMetaOf('토스증권') },
+        { id: 222, title: 'Android Developer', metadata: tossMetaOf('토스') },
+      ] },
+      { primary_job: { id: 333, title: 'IR Manager', first_published: '2026-10-01T00:00:00Z', metadata: tossMetaOf('토스증권', { closing: '2026-11-15' }) }, jobs: [] },
+      { primary_job: { id: 444, title: '숨긴 공고', metadata: tossMetaOf('토스증권', { hidden: true }) }, jobs: [] },
+    ] }) };
+  } };
+  const toss = await tossCareerAdapter.list('https://toss.im/career/jobs', tossFetcher, { affiliate: '토스증권' });
+  assert.deepEqual(toss.map((p) => [p.seq, p.title, p.deadline, p.url]), [
+    ['toss-111', 'Risk Manager', '', 'https://toss.im/career/job-detail?job_id=111'],
+    ['toss-333', 'IR Manager', '2026-11-15', 'https://toss.im/career/job-detail?job_id=333'],
+  ]);
+  assert.equal((await tossCareerAdapter.content(toss[0], tossFetcher)).text, '토스증권 · Risk Manager\n\n고용 형태: 정규직\n\n## 합류하게 될 팀\n- 리스크관리');
+  assert.deepEqual(tossRequests, [['https://api-public.toss.im/api/v3/ipd-eggnog/career/job-groups', 20000000]]);
+  assert.equal(jobSource('toss-111'), 'tossCareer');
 
   // 자체 채용 게시판(pageWatch). 기준일 2026-10-29.
   const today = new Date('2026-10-29T03:00:00Z');

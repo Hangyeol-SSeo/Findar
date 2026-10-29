@@ -36,6 +36,8 @@ export interface WatchListOptions {
   itemSelector?: string;
   /** endpoint: 같은 사이트 목록·상세 API의 주소와 필드 이름(lib/company-watchlist.ts WatchApiConfig). */
   api?: WatchApiConfig;
+  /** tossCareer: 토스 계열사 중 이 회사(예: "토스증권"). */
+  affiliate?: string;
   now?: Date;
 }
 
@@ -44,12 +46,15 @@ export interface WatchListOptions {
  * 주소의 {id}는 공고 ID로 바뀐다. 필드는 점으로 이은 경로("rows", "data.list")도 된다.
  */
 export interface WatchApiConfig {
-  list: string; // 진행 중 공고 목록 GET 주소
-  items: string; // 목록 배열 필드
+  list: string; // 진행 중 공고 목록 주소(GET, listBody가 있으면 POST)
+  listBody?: string; // 목록 POST 폼 값. 화면이 보내는 값 그대로(예: 신한투자증권 "searchType=A")
+  items: string; // 목록 배열 필드(응답이 바로 배열이면 "")
   id: string;
   title: string;
   period?: string; // "2026.10.08 00:00 ~ 2026.10.31 23:59" 같은 접수 기간 필드
-  detail?: string; // 공고 하나의 GET 주소({id}). 본문은 응답의 content·contents·body·detail 중 가장 긴 글
+  deadline?: string; // 마감 필드(ISO "2026-11-30T14:59:59Z" → 서울 기준 날짜, 또는 "2026.11.30")
+  posted?: string; // 게시·접수 시작 필드(마감과 같은 형식)
+  detail?: string; // 공고 하나의 GET 주소({id}). JSON이면 content·contents·body·detail 중 가장 긴 글, HTML이면 본문 영역
   page: string; // 사용자가 여는 공고 페이지({id})
 }
 
@@ -463,14 +468,40 @@ export const pageWatchAdapter: WatchAdapter = {
   },
 };
 
+// 빈 경로는 응답 자체(목록이 최상위 배열인 신한투자증권).
 function field(obj: unknown, path: string): unknown {
+  if (!path) return obj;
   return path.split(".").reduce<unknown>((value, key) => (value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined), obj);
+}
+
+/** "2026-11-30T14:59:59Z"(서울 날짜로) 또는 "2026.11.30"·"2026-11-30" → YYYY-MM-DD. */
+function apiDate(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : typeof value === "number" ? new Date(value).toISOString() : "";
+  if (/T\d{2}:/.test(text)) return seoulDateTime(text).slice(0, 10);
+  const match = text.match(/^(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
+  return match ? `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` : "";
+}
+
+/** 공고 상세 HTML의 본문: 사이트 공통 메뉴를 빼고 본문 영역 중 가장 긴 것. */
+function htmlMainContent(html: string, base: string): Pick<WatchContent, "text" | "images" | "files"> {
+  const $ = cheerio.load(html);
+  $("script, style, noscript, template").remove();
+  $(CHROME).remove();
+  const main = $("article, [class*=view], [class*=detail], [class*=board_read], main, #content, .content, #contents, .contents")
+    .toArray().map((el) => $(el)).filter((el) => oneLine(el.text()).length >= 40)
+    .sort((a, b) => oneLine(b.text()).length - oneLine(a.text()).length)[0];
+  const root = (main ?? $("body")) as cheerio.Cheerio<never>;
+  return { text: htmlToText(root.html() ?? "").slice(0, 30_000), ...contentMedia($, root, base) };
 }
 
 function parseJson(text: string, what: string): unknown {
   try { return JSON.parse(text); } catch { throw new WatchFetchError(`${what} 응답이 JSON이 아님(사이트 구조가 바뀌었을 수 있음)`); }
 }
 
+// 신한투자증권 recruit.shinhansec.com: 목록 POST /recruit/mainList.do searchType=A [{ANNO_ID, ANNO_SUBJECT, ACCEPT_END_YMD}],
+// 상세 GET /recruit/view.do?annoId=(HTML). robots.txt 없음(2026-10-30 확인). 화면이 그 목록을 스크립트로 그려서 pageWatch로는 못 받았다.
+// applyin(하나대체투자·부국증권 등 {slug}.applyin.co.kr): 목록 GET /jobs?v=1.2.0&size=50 {data:[{id,title,start,end}]},
+// 상세 GET /jobs/{id}?v=1.2.0 {data:{content: HTML}}. robots.txt는 GPTBot만 막는다(2026-10-30 확인).
 // 확인한 사이트(2026-10-29): IBK투자증권 recruit.ibks.com — 목록 GET /rec/api/ibks/announce/list?includeFinAnno=N(마감 제외)
 // {rows:[{annoId,title,term}]}, 상세 GET /rec/api/ibks/announce?annoId=… {content: HTML}. robots.txt 없음.
 // 한투금융 채용포탈은 목록 요청 인자를 브라우저에서 공개키로 암호화해(_ev/_ec) 부르므로 쓰지 않는다(우회가 된다).
@@ -479,7 +510,9 @@ export const endpointAdapter: WatchAdapter = {
     const api = options.api;
     if (!api) throw new WatchFetchError("endpoint 설정(api)이 없음");
     const origin = new URL(base).origin;
-    const page = await fetcher.text(new URL(api.list, origin).toString());
+    const page = await fetcher.text(new URL(api.list, origin).toString(), api.listBody
+      ? { json: true, method: "POST", body: api.listBody, contentType: "application/x-www-form-urlencoded; charset=UTF-8" }
+      : { json: true });
     const items = field(parseJson(page.text, "목록"), api.items);
     if (!Array.isArray(items)) throw new WatchFetchError(`목록 필드(${api.items})를 찾지 못함(사이트 구조가 바뀌었을 수 있음)`);
     const slug = new URL(origin).hostname.split(".").find((part) => !/^(?:www|recruit|career|careers)$/.test(part)) ?? "site";
@@ -489,13 +522,15 @@ export const endpointAdapter: WatchAdapter = {
       if ((typeof id !== "string" && typeof id !== "number") || typeof title !== "string") return [];
       const period = api.period ? String(field(item, api.period) ?? "") : "";
       const dates = [...period.matchAll(/(20\d{2})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})/g)];
+      const isoDeadline = api.deadline ? apiDate(field(item, api.deadline)) : "";
+      const isoPosted = api.posted && apiDate(field(item, api.posted)) ? `${apiDate(field(item, api.posted))} 00:00:00` : "";
       const fill = (template: string) => new URL(template.replace("{id}", encodeURIComponent(String(id))), origin).toString();
       return [{
         seq: `${WATCH_SEQ_PREFIXES.endpoint}${slug}-${id}`,
         title: oneLine(title),
         url: fill(api.page),
-        postedAt: dates.length > 1 ? `${dates[0][1]}-${dates[0][2].padStart(2, "0")}-${dates[0][3].padStart(2, "0")} 00:00:00` : "",
-        deadline: periodEnd(period),
+        postedAt: isoPosted || (dates.length > 1 ? `${dates[0][1]}-${dates[0][2].padStart(2, "0")}-${dates[0][3].padStart(2, "0")} 00:00:00` : ""),
+        deadline: isoDeadline || periodEnd(period),
         contentUrl: api.detail ? fill(api.detail) : "",
         inlineContent: api.detail ? undefined : oneLine(title),
       }];
@@ -503,11 +538,12 @@ export const endpointAdapter: WatchAdapter = {
   },
   async content(posting, fetcher) {
     if (posting.inlineContent !== undefined) return { text: posting.inlineContent, images: [], files: [] };
-    const page = await fetcher.text(posting.contentUrl);
+    const page = await fetcher.text(posting.contentUrl, { json: true });
+    if (/^\s*</.test(page.text)) return htmlMainContent(page.text, page.url); // 상세가 HTML 화면인 사이트(신한투자증권)
     const data = parseJson(page.text, "공고 상세");
-    // 필드 이름은 목록 설정과 함께 적지 않으므로, 흔한 본문 필드 중 가장 긴 글을 쓴다.
+    // 필드 이름은 목록 설정과 함께 적지 않으므로, 흔한 본문 필드 중 가장 긴 글을 쓴다(응답이 {data: {...}}로 감싼 경우 포함).
     const html = ["content", "contents", "body", "detail", "annoContent"]
-      .map((key) => field(data, key)).filter((value): value is string => typeof value === "string")
+      .flatMap((key) => [field(data, key), field(data, `data.${key}`)]).filter((value): value is string => typeof value === "string")
       .sort((a, b) => b.length - a.length)[0] ?? "";
     const $ = cheerio.load(html);
     return { text: htmlToText(html), ...contentMedia($, $.root() as cheerio.Cheerio<never>, page.url) };
@@ -537,7 +573,7 @@ export const workdayAdapter: WatchAdapter = {
     const postings: WatchPosting[] = [];
     for (let offset = 0; offset < WORKDAY_MAX; offset += WORKDAY_PAGE) {
       const page = await fetcher.text(`${origin}/wday/cxs/${tenant}/${site}/jobs`, {
-        method: "POST", contentType: "application/json",
+        method: "POST", contentType: "application/json", json: true,
         body: JSON.stringify({ appliedFacets: {}, limit: WORKDAY_PAGE, offset, searchText: "Seoul" }),
       });
       const data = parseJson(page.text, "Workday 목록") as { total?: number; jobPostings?: WorkdayPosting[] };
@@ -559,7 +595,7 @@ export const workdayAdapter: WatchAdapter = {
     return postings;
   },
   async content(posting, fetcher) {
-    const page = await fetcher.text(posting.contentUrl);
+    const page = await fetcher.text(posting.contentUrl, { json: true });
     const info = (parseJson(page.text, "Workday 공고") as { jobPostingInfo?: Record<string, unknown> }).jobPostingInfo ?? {};
     const html = typeof info.jobDescription === "string" ? info.jobDescription : "";
     const text = (key: string) => (typeof info[key] === "string" ? (info[key] as string) : "");
@@ -579,6 +615,66 @@ export const workdayAdapter: WatchAdapter = {
   },
 };
 
+// 토스 채용(toss.im/career/jobs). 계열사 공고를 한 화면에 모아 보여 주고, 목록은 브라우저가 같은 회사 API
+// api-public.toss.im/api/v3/ipd-eggnog/career/job-groups에서 받는다(Greenhouse 공고 형식, 약 6MB, 본문 포함, 2026-10-29 확인).
+// 계열사는 metadata "포지션의 소속 자회사를 선택해 주세요."로 고르고, 본문은 metadata "Job Description…"(마크다운)이라 공고를
+// 따로 열지 않는다. toss.im robots.txt는 /career/jobs?* 같은 화면 주소만 막고, api-public에는 robots.txt가 없다.
+const TOSS_JOBS_API = "https://api-public.toss.im/api/v3/ipd-eggnog/career/job-groups";
+const TOSS_MAX_BYTES = 20_000_000;
+
+interface TossJob {
+  id?: number;
+  title?: string;
+  absolute_url?: string;
+  first_published?: string | null;
+  application_deadline?: string | null;
+  metadata?: { name?: string; value?: unknown }[];
+}
+
+function tossMeta(job: TossJob, prefix: string): string {
+  const value = job.metadata?.find((m) => m.name?.startsWith(prefix))?.value;
+  return typeof value === "string" && value !== "None" ? value : "";
+}
+
+export const tossCareerAdapter: WatchAdapter = {
+  async list(_base, fetcher, options = {}) {
+    if (!options.affiliate) throw new WatchFetchError("토스 계열사 이름(affiliate)이 없음");
+    const page = await fetcher.text(TOSS_JOBS_API, { maxBytes: TOSS_MAX_BYTES, json: true });
+    const groups = field(parseJson(page.text, "토스 채용 목록"), "success");
+    if (!Array.isArray(groups)) throw new WatchFetchError("토스 채용 목록 형식이 아님");
+    const postings = new Map<string, WatchPosting>();
+    for (const group of groups as { primary_job?: TossJob; jobs?: TossJob[] }[]) {
+      for (const job of [group.primary_job, ...(group.jobs ?? [])]) {
+        if (!job || typeof job.id !== "number" || !job.title) continue;
+        if (tossMeta(job, "포지션의 소속 자회사") !== options.affiliate) continue;
+        if (tossMeta(job, "커리어페이지 메뉴에 \"미노출\"") === "True") continue;
+        const seq = `${WATCH_SEQ_PREFIXES.tossCareer}${job.id}`;
+        if (postings.has(seq)) continue;
+        const closing = tossMeta(job, "커리어페이지 채용공고 클로징 일자");
+        const deadline = (job.application_deadline ?? "").slice(0, 10) || (/^\d{4}-\d{2}-\d{2}/.test(closing) ? closing.slice(0, 10) : "");
+        const description = tossMeta(job, "Job Description");
+        postings.set(seq, {
+          seq,
+          title: oneLine(job.title),
+          url: `https://toss.im/career/job-detail?job_id=${job.id}`,
+          postedAt: seoulDateTime(job.first_published),
+          deadline: /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? deadline : "",
+          contentUrl: "",
+          inlineContent: [
+            `${options.affiliate} · ${oneLine(job.title)}`,
+            tossMeta(job, "Employment_Type") && `고용 형태: ${tossMeta(job, "Employment_Type")}`,
+            description,
+          ].filter(Boolean).join("\n\n"),
+        });
+      }
+    }
+    return [...postings.values()];
+  },
+  async content(posting) {
+    return { text: posting.inlineContent ?? "", images: [], files: [] };
+  },
+};
+
 export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   greeting: greetingAdapter,
   saraminAts: saraminAtsAdapter,
@@ -586,4 +682,5 @@ export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   pageWatch: pageWatchAdapter,
   endpoint: endpointAdapter,
   workday: workdayAdapter,
+  tossCareer: tossCareerAdapter,
 };
