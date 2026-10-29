@@ -58,6 +58,9 @@ export interface WatchContent {
   text: string;
   images: string[];
   files: { url: string; name: string }[];
+  /** 목록에는 없고 본문에서야 알게 된 마감일·게시일(Workday). 있으면 목록 값보다 우선한다. */
+  deadline?: string;
+  postedAt?: string;
 }
 
 const NOT_CONTENT_IMAGE = /logo|icon|btn|button|bullet|arrow|blank|spacer|banner|sns|top_|loading|ajax/i;
@@ -511,10 +514,76 @@ export const endpointAdapter: WatchAdapter = {
   },
 };
 
+// Workday(외국계). 공개 채용 사이트가 부르는 같은 사이트 JSON API를 쓴다(2026-10-29 확인, robots.txt는 /refreshFacet/·내부 사이트만
+// 금지하고 /wday/cxs/는 막지 않는다): 목록 POST /wday/cxs/{tenant}/{site}/jobs {searchText:"Seoul"},
+// 본문 GET /wday/cxs/{tenant}/{site}{externalPath}(jobDescription HTML, startDate, endDate). 감시 목록 url은
+// "https://{tenant}.wdN.myworkdayjobs.com/{site}". 근무지가 서울·한국인 공고만 남긴다(여러 근무지 공고는 근무지를 알 수 없어 뺀다).
+const KOREA = /seoul|korea|서울|한국/i;
+const WORKDAY_PAGE = 20;
+const WORKDAY_MAX = 100;
+
+interface WorkdayPosting { title?: string; externalPath?: string; locationsText?: string; bulletFields?: string[] }
+
+function workdayParts(base: string): { origin: string; tenant: string; site: string } {
+  const url = new URL(base);
+  const site = url.pathname.split("/").filter(Boolean).find((part) => !/^[a-z]{2}-[A-Z]{2}$/.test(part)) ?? "";
+  if (!site) throw new WatchFetchError("Workday 사이트 이름이 주소에 없음(https://{tenant}.wdN.myworkdayjobs.com/{site})");
+  return { origin: url.origin, tenant: url.hostname.split(".")[0], site };
+}
+
+export const workdayAdapter: WatchAdapter = {
+  async list(base, fetcher) {
+    const { origin, tenant, site } = workdayParts(base);
+    const postings: WatchPosting[] = [];
+    for (let offset = 0; offset < WORKDAY_MAX; offset += WORKDAY_PAGE) {
+      const page = await fetcher.text(`${origin}/wday/cxs/${tenant}/${site}/jobs`, {
+        method: "POST", contentType: "application/json",
+        body: JSON.stringify({ appliedFacets: {}, limit: WORKDAY_PAGE, offset, searchText: "Seoul" }),
+      });
+      const data = parseJson(page.text, "Workday 목록") as { total?: number; jobPostings?: WorkdayPosting[] };
+      if (!Array.isArray(data.jobPostings)) throw new WatchFetchError("Workday 목록 형식이 아님");
+      for (const job of data.jobPostings) {
+        if (!job.title || !job.externalPath || !KOREA.test(job.locationsText ?? "")) continue;
+        const reqId = job.bulletFields?.[0] || job.externalPath.split("_").pop() || job.externalPath;
+        postings.push({
+          seq: `${WATCH_SEQ_PREFIXES.workday}${tenant}-${reqId}`.replace(/[^\w-]/g, ""),
+          title: oneLine(job.title),
+          url: `${origin}/${site}${job.externalPath}`,
+          postedAt: "",
+          deadline: "",
+          contentUrl: `${origin}/wday/cxs/${tenant}/${site}${job.externalPath}`,
+        });
+      }
+      if ((data.total ?? 0) <= offset + WORKDAY_PAGE) break;
+    }
+    return postings;
+  },
+  async content(posting, fetcher) {
+    const page = await fetcher.text(posting.contentUrl);
+    const info = (parseJson(page.text, "Workday 공고") as { jobPostingInfo?: Record<string, unknown> }).jobPostingInfo ?? {};
+    const html = typeof info.jobDescription === "string" ? info.jobDescription : "";
+    const text = (key: string) => (typeof info[key] === "string" ? (info[key] as string) : "");
+    const header = [
+      text("location") && `근무지: ${text("location")}`,
+      text("timeType") && `근무 형태: ${text("timeType")}`,
+      text("endDate") && `마감: ${text("endDate")}`,
+    ].filter(Boolean).join("\n");
+    const $ = cheerio.load(html);
+    const ymd = (value: string) => (/^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : "");
+    return {
+      text: [header, htmlToText(html)].filter(Boolean).join("\n\n"),
+      ...contentMedia($, $.root() as cheerio.Cheerio<never>, page.url),
+      deadline: ymd(text("endDate")),
+      postedAt: ymd(text("startDate")) ? `${ymd(text("startDate"))} 00:00:00` : "",
+    };
+  },
+};
+
 export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   greeting: greetingAdapter,
   saraminAts: saraminAtsAdapter,
   recruiterAppsite: recruiterAppsiteAdapter,
   pageWatch: pageWatchAdapter,
   endpoint: endpointAdapter,
+  workday: workdayAdapter,
 };

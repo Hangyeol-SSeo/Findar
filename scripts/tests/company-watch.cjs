@@ -49,7 +49,7 @@ function nextDataPage(queries) {
   process.chdir(scratch);
   const { parseRobots, robotsAllows, WatchBlockedError } = load('lib/watch-fetch.ts');
   const { companyKey, titleKey, titleSimilarity, duplicateReason } = load('lib/job-dedup.ts');
-  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, endpointAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
+  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, endpointAdapter, workdayAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
   const { jobSource, postingLink, isWatchSeq, isKofiaSeq } = load('lib/job-source.ts');
 
   // robots.txt: 가장 긴 규칙이 이긴다(recruiter.co.kr 구형 테넌트는 Disallow: / 뒤에 Allow: /appsite/).
@@ -239,6 +239,39 @@ function nextDataPage(queries) {
   assert.deepEqual(await endpointAdapter.content(ibk[0], ibkFetcher), { text: '[IBK투자증권] 경력직 채용 공고\n1. 모집분야', images: ['https://recruit.ibks.com/rec/api/ibks/image/a1'], files: [] });
   await assert.rejects(endpointAdapter.list('https://x.example/', ibkFetcher, { api: { ...ibkApi, list: '/list' } }), /JSON이 아님/);
   assert.equal(jobSource('api-ibks-2496991'), 'endpoint');
+
+  // Workday: 서울 검색 결과 중 근무지가 한국인 공고만, 마감일·게시일은 본문 응답에서.
+  const wdRequests = [];
+  const wdFetcher = {
+    async text(url, init = {}) {
+      wdRequests.push([init.method ?? 'GET', url, init.body ?? '']);
+      if (url === 'https://blackrock.wd1.myworkdayjobs.com/wday/cxs/blackrock/BlackRock_Professional/jobs') {
+        const body = JSON.parse(init.body);
+        assert.equal(body.searchText, 'Seoul');
+        return { url, text: JSON.stringify({ total: 3, jobPostings: [
+          { title: 'Director, Korea Institutional Client Business Team', externalPath: '/job/Seoul-Korea/Director--Korea-Institutional-Client-Business-Team_R266341', locationsText: 'Seoul, Korea', bulletFields: ['R266341'] },
+          { title: 'Seoul Desk Coverage (London based)', externalPath: '/job/London/Seoul-Desk_R1', locationsText: 'London, United Kingdom', bulletFields: ['R1'] },
+          { title: 'Regional role', externalPath: '/job/x/Regional_R2', locationsText: '3 Locations', bulletFields: ['R2'] },
+        ] }) };
+      }
+      if (url === 'https://blackrock.wd1.myworkdayjobs.com/wday/cxs/blackrock/BlackRock_Professional/job/Seoul-Korea/Director--Korea-Institutional-Client-Business-Team_R266341') {
+        return { url, text: JSON.stringify({ jobPostingInfo: { title: 'Director', jobDescription: '<p><b>About this role</b></p><p>Coverage of Korean institutions.</p>', location: 'Seoul, Korea', timeType: 'Full time', startDate: '2026-10-20', endDate: '2026-11-13' } }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    },
+  };
+  const wd = await workdayAdapter.list('https://blackrock.wd1.myworkdayjobs.com/BlackRock_Professional', wdFetcher);
+  assert.deepEqual(wd.map((p) => [p.seq, p.title, p.url]), [[
+    'workday-blackrock-R266341', 'Director, Korea Institutional Client Business Team',
+    'https://blackrock.wd1.myworkdayjobs.com/BlackRock_Professional/job/Seoul-Korea/Director--Korea-Institutional-Client-Business-Team_R266341',
+  ]]);
+  const wdContent = await workdayAdapter.content(wd[0], wdFetcher);
+  assert.equal(wdContent.text, '근무지: Seoul, Korea\n근무 형태: Full time\n마감: 2026-11-13\n\nAbout this role\nCoverage of Korean institutions.');
+  assert.equal(wdContent.deadline, '2026-11-13');
+  assert.equal(wdContent.postedAt, '2026-10-20 00:00:00');
+  assert.equal(wdRequests.length, 2); // total 3 ≤ 한 쪽(20)이라 다음 쪽은 부르지 않는다
+  await assert.rejects(workdayAdapter.list('https://x.wd1.myworkdayjobs.com/', wdFetcher), /사이트 이름/);
+  assert.equal(robotsAllows(parseRobots('User-agent: *\nAllow: /BlackRock_Professional/\nDisallow: /BlackRock_AIG/\nDisallow: /refreshFacet/\n'), '/wday/cxs/blackrock/BlackRock_Professional/jobs'), true);
 
   // 자체 채용 게시판(pageWatch). 기준일 2026-10-29.
   const today = new Date('2026-10-29T03:00:00Z');

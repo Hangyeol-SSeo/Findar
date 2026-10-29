@@ -5,12 +5,13 @@ import { isManualSeq } from "./manual-jobs";
 //  - 직접 추가: "manual-…"
 //  - 채용 사이트 감시(lib/company-watch.ts): "<어댑터>-<원본 ID>". 그리팅 "greeting-<openingId>",
 //    사람인 기업 채용 사이트 "saraminats-<slug>-<채용 ID>", recruiter.co.kr 구형 "recruiter-<slug>-<jobnoticeSn>",
-//    자체 채용 게시판 "page-<공고 주소 해시 12자리>", 자체 채용 사이트의 목록 API "api-<slug>-<공고 ID>"
+//    자체 채용 게시판 "page-<공고 주소 해시 12자리>", 자체 채용 사이트의 목록 API "api-<slug>-<공고 ID>",
+//    Workday "workday-<tenant>-<공고 번호>"
 // 금투협이 아닌 공고의 siteUrl은 그 공고의 원문 페이지(곧 지원하는 곳)다. AI 없음(클라이언트에서도 쓴다).
 
-export type JobSource = "kofia" | "manual" | "greeting" | "saraminAts" | "recruiterAppsite" | "pageWatch" | "endpoint";
+export type JobSource = "kofia" | "manual" | "greeting" | "saraminAts" | "recruiterAppsite" | "pageWatch" | "endpoint" | "workday";
 
-export const WATCH_SEQ_PREFIXES = { greeting: "greeting-", saraminAts: "saraminats-", recruiterAppsite: "recruiter-", pageWatch: "page-", endpoint: "api-" } as const;
+export const WATCH_SEQ_PREFIXES = { greeting: "greeting-", saraminAts: "saraminats-", recruiterAppsite: "recruiter-", pageWatch: "page-", endpoint: "api-", workday: "workday-" } as const;
 export type WatchAdapterType = keyof typeof WATCH_SEQ_PREFIXES;
 
 export const JOB_SOURCE_LABELS: Record<JobSource, string> = {
@@ -21,6 +22,7 @@ export const JOB_SOURCE_LABELS: Record<JobSource, string> = {
   recruiterAppsite: "채용 사이트(recruiter)",
   pageWatch: "회사 채용 게시판",
   endpoint: "회사 채용 사이트",
+  workday: "채용 사이트(Workday)",
 };
 
 export function isKofiaSeq(seq: string): boolean {
@@ -34,6 +36,7 @@ export function jobSource(seq: string): JobSource {
   if (seq.startsWith(WATCH_SEQ_PREFIXES.recruiterAppsite)) return "recruiterAppsite";
   if (seq.startsWith(WATCH_SEQ_PREFIXES.pageWatch)) return "pageWatch";
   if (seq.startsWith(WATCH_SEQ_PREFIXES.endpoint)) return "endpoint";
+  if (seq.startsWith(WATCH_SEQ_PREFIXES.workday)) return "workday";
   return "manual";
 }
 

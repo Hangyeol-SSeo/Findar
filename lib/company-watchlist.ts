@@ -5,9 +5,8 @@ import type { WatchApiConfig } from "./watch-adapters";
 
 // 금투협 게시판 밖에서 공고를 확인할 회사 목록(감시 목록). 설계: docs/multi-source-jobs.md 2절 D·3절.
 // 금투협에 경력·수시 공고를 올리는 회사도 신입 공채·인턴은 자체 채용 사이트에만 올리는 일이 많다(메리츠·NH·키움·DB·LS).
-// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite·pageWatch·endpoint이고,
-// 나머지 유형은 어댑터가 생길 때까지 설정 화면에 "채용 사이트 바로가기"로만 보인다:
-//  - workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
+// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite·pageWatch·
+// endpoint·workday이고, 나머지 유형은 설정 화면에 "채용 사이트 바로가기"로만 보인다:
 //  - unknown: 목록이 브라우저에서만 보여 데이터 경로를 아직 확인하지 않음(확인 필요)
 //  - blocked: robots.txt가 데이터 경로를 금지하거나 자동 요청을 차단함(우회하지 않음). 사용자가 직접 확인한다
 //  - saraminApi: 사람인 일반 공고에만 올림. 사람인 오픈API 승인 뒤 받는다
@@ -15,7 +14,7 @@ import type { WatchApiConfig } from "./watch-adapters";
 
 export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "unknown" | "blocked" | "saraminApi";
 
-export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch", "endpoint"] as const;
+export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch", "endpoint", "workday"] as const;
 export type CollectableSourceType = (typeof COLLECTABLE_SOURCE_TYPES)[number];
 
 export function isCollectable(type: WatchSourceType): type is CollectableSourceType {
@@ -28,7 +27,7 @@ export const WATCH_SOURCE_LABELS: Record<WatchSourceType, string> = {
   recruiterAppsite: "recruiter.co.kr 채용 사이트",
   endpoint: "회사 채용 사이트",
   pageWatch: "회사 채용 게시판",
-  workday: "Workday(준비 중)",
+  workday: "Workday",
   unknown: "확인 필요",
   blocked: "자동 수집 불가",
   saraminApi: "사람인 공고(API 승인 대기)",
@@ -127,8 +126,11 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("아이비케이자산운용", "자산운용", [{ type: "unknown", url: "https://www.ibkasset.com/customer-center/notice", note: "공지 게시판에 채용 공지, 목록을 스크립트로 불러옴" }]),
     c("한국투자리얼에셋운용", "자산운용", [{ type: "unknown", url: "https://kira.koreainvestment.com/", note: "https 연결 실패(robots.txt 확인 불가)" }]),
 
-    // Workday — 받을 수 있음, 어댑터 준비 중
-    c("베어링자산운용", "자산운용", [{ type: "workday", url: "https://barings.wd1.myworkdayjobs.com/" }]),
+    // Workday(외국계) — 서울 근무 공고만
+    c("모간스탠리인터내셔날증권 서울지점", "외국계 IB", [{ type: "workday", url: "https://ms.wd5.myworkdayjobs.com/External", note: "Morgan Stanley" }]),
+    c("도이치은행 서울지점", "외국계 IB", [{ type: "workday", url: "https://db.wd3.myworkdayjobs.com/DBWebsite", note: "Deutsche Bank(도이치증권 포함)" }]),
+    c("베어링자산운용", "자산운용", [{ type: "workday", url: "https://barings.wd1.myworkdayjobs.com/Barings" }]),
+    c("블랙록자산운용", "자산운용", [{ type: "workday", url: "https://blackrock.wd1.myworkdayjobs.com/BlackRock_Professional" }]),
 
     // 확인 필요 — 목록이 브라우저에서만 보임
     c("메리츠증권", "증권", [

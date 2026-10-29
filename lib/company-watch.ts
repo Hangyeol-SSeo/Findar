@@ -162,7 +162,7 @@ export async function runCompanyWatch({
           seq: posting.seq,
           company: company.name,
           title: posting.title,
-          date: posting.postedAt || new Intl.DateTimeFormat("sv-SE", {
+          date: content.postedAt || posting.postedAt || new Intl.DateTimeFormat("sv-SE", {
             timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
             hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
           }).format(now()),
@@ -172,7 +172,7 @@ export async function runCompanyWatch({
           // 첨부 이름은 지원 방법 판정(lib/application-method.ts: 입사지원서 양식 첨부 여부)에도 쓰인다.
           attachments: content.files.map((file) => ({ name: file.name, url: file.url })),
           content: text,
-          knownDeadline: posting.deadline,
+          knownDeadline: content.deadline || posting.deadline,
           mayNotBePosting: posting.mayNotBePosting === true,
         });
         run.added += 1;
