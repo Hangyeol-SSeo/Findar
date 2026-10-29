@@ -16,7 +16,7 @@ import {
 import { ensureProfile, getCachedProfile, type Profile } from "@/lib/profile";
 import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
 import { FreeRideRequestError } from "@/lib/job-ai";
-import { linkKofiaDuplicates, runCompanyWatch } from "@/lib/company-watch";
+import { isNotPosting, linkKofiaDuplicates, recordNotPosting, runCompanyWatch } from "@/lib/company-watch";
 import { jobSource } from "@/lib/job-source";
 import {
   CRAWL_PAGES,
@@ -150,7 +150,7 @@ export async function GET(request: Request) {
 
         // 4단계: AI 요약 + 매칭 + DB 저장 (여러 건씩 묶어서 처리 — 호출 횟수/시간/토큰 절약)
         // 금투협 공고와 채용 사이트 공고가 같은 경로를 탄다. knownDeadline은 채용 사이트가 알려 준 마감일(요약보다 우선).
-        async function summarizeAndStore(items: (JobDetail & { knownDeadline?: string })[]): Promise<JobSummary[]> {
+        async function summarizeAndStore(items: (JobDetail & { knownDeadline?: string; mayNotBePosting?: boolean })[]): Promise<JobSummary[]> {
           send({
             type: "phase",
             phase: "summarize",
@@ -188,6 +188,13 @@ export async function GET(request: Request) {
               const summarizedOk = !!summary && summary.jdSummary !== "요약 실패";
               let finalSummary = summary ?? fallbackSummary(detail);
               if (detail.knownDeadline) finalSummary = { ...finalSummary, deadline: detail.knownDeadline };
+              // 자체 게시판 글이 채용 안내·결과 발표 글이면(isNotPosting) 저장하지 않고 다시 열지 않게 기록한다.
+              // 요약이 실패한 글은 기록하지 않는다 — 다음 확인 때 다시 연다.
+              if (summarizedOk && isNotPosting({ title: detail.title, mayNotBePosting: detail.mayNotBePosting === true }, finalSummary)) {
+                recordNotPosting(detail);
+                processed += 1;
+                continue;
+              }
               upsertJob({ summary: finalSummary, rawContent: detail.content, summarizedOk });
               if (summarizedOk) chunkSummaries.push(finalSummary);
               stored.push(finalSummary);

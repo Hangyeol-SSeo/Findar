@@ -162,6 +162,15 @@ db.exec(`
     createdAt INTEGER NOT NULL
   );
 
+  -- 자체 채용 게시판에서 열어 봤지만 공고가 아니었던 글(요약에 모집 직무가 없음). 다시 열거나 요약하지 않는다.
+  CREATE TABLE IF NOT EXISTS watch_not_postings (
+    seq TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+  );
+
   -- 채용 사이트 감시(lib/company-watch.ts)의 출처별 마지막 결과. 하루 한 번만 돌리는 기준이자 설정 화면의 상태 표시.
   CREATE TABLE IF NOT EXISTS watch_runs (
     company TEXT NOT NULL,
@@ -1179,4 +1188,14 @@ export function syncWatchPostingsOpen(company: string, seqPrefix: string, openSe
       else if (!row.sourceClosedAt) close.run(now, row.seq);
     }
   })();
+}
+
+export function insertNotPosting(row: { seq: string; company: string; title: string; url: string }): void {
+  db.prepare(`INSERT INTO watch_not_postings (seq, company, title, url, createdAt) VALUES (@seq, @company, @title, @url, @createdAt)
+    ON CONFLICT(seq) DO NOTHING`).run({ ...row, createdAt: Date.now() });
+}
+
+export function getNotPostingSeqs(seqs: string[]): Set<string> {
+  const stmt = db.prepare(`SELECT seq FROM watch_not_postings WHERE seq = ?`);
+  return new Set(seqs.filter((seq) => stmt.get(seq)));
 }

@@ -1,4 +1,6 @@
 import * as cheerio from "cheerio";
+import { createHash } from "crypto";
+import { CHROME } from "./company-homepage";
 import { WATCH_SEQ_PREFIXES, type WatchAdapterType } from "./job-source";
 import { WatchFetchError, type WatchFetcher } from "./watch-fetch";
 
@@ -22,10 +24,21 @@ export interface WatchPosting {
   contentUrl: string; // 본문을 읽을 주소
   /** 본문을 따로 열지 않고 목록 정보로 만든 본문(recruiter 구형: 본문 페이지가 robots.txt 금지). */
   inlineContent?: string;
+  /** 자체 게시판 글은 채용 안내·결과 발표일 수 있다. 요약에서 모집 직무가 나오지 않으면 저장하지 않는다. */
+  mayNotBePosting?: boolean;
+}
+
+/** 감시 목록 출처의 사이트별 설정(자체 게시판용). */
+export interface WatchListOptions {
+  /** 글 링크가 javascript:fn('92')뿐인 게시판: 숫자 ID를 넣을 상세 주소. 예: "https://www.kasset.co.kr/recruit_view.do?recruitId={id}" */
+  jsLinkTemplate?: string;
+  /** 글마다 링크가 없고 목록 칸에 내용이 다 있는 게시판(우리자산운용): 한 공고를 감싸는 요소. 그 글을 본문으로 쓴다. */
+  itemSelector?: string;
+  now?: Date;
 }
 
 export interface WatchAdapter {
-  list(base: string, fetcher: WatchFetcher): Promise<WatchPosting[]>;
+  list(base: string, fetcher: WatchFetcher, options?: WatchListOptions): Promise<WatchPosting[]>;
   content(posting: WatchPosting, fetcher: WatchFetcher): Promise<string>;
 }
 
@@ -251,8 +264,159 @@ export const recruiterAppsiteAdapter: WatchAdapter = {
   },
 };
 
+// 자체 채용 게시판(pageWatch). 사이트마다 파서를 두지 않는다. 확인한 게시판(2026-10-29): 하나자산운용·마스턴·신영자산운용
+// (공지 게시판의 채용 분류)·신영부동산신탁·하나자산신탁·이지자산평가·코리아에셋(글 링크가 javascript:)·우리자산운용(링크 없음).
+//  1. 게시판 첫 페이지에서 사이트 공통 메뉴(CHROME)를 빼고, 같은 사이트의 글 링크를 찾는다. 글 링크 = 게시판 주소와 다르고,
+//     쪽 번호 링크가 아니며, 주소에 글 번호(숫자)가 있다. 링크 글자가 "상세보기"·"입사지원"처럼 일반적이면 그 줄의 제목 칸을 쓴다.
+//  2. 줄(tr·li 등)에 "마감·채용완료"가 있거나, 접수 기간 끝이 지났거나, 적힌 연도가 모두 올해 전이면 열지 않는다
+//     (게시판 첫 페이지에 몇 년 치 글이 있다 — 신영부동산신탁 2022년 공고).
+//  3. 새 글만 열어 본문을 읽고, 요약에서 모집 직무가 나오지 않으면 저장하지 않는다(채용 안내·결과 발표 글).
+const GENERIC_LINK_TEXT = /^(?:상세\s*보기|자세히\s*보기?|더\s*보기|입사\s*지원(?:하기)?|지원\s*하기|채용\s*마감|마감|보기|view|more|apply)$/i;
+const CLOSED_MARK = /채용\s*완료|채용\s*마감|접수\s*마감|모집\s*마감|^\s*마감|종료된/;
+const PAGE_PARAM = /^(?:page|pageno|pageindex|cpage|pg|p)$/i;
+const ROW = "tr, li, article, dl, [class*=item], [class*=list] > div";
+const TITLE = "[class*=tit], [class*=subject], [class*=title], strong, h3, h4, h5";
+const DATE = /(20\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})/g;
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// 같은 글이 쪽 번호·빈 검색어 인자만 달리해 나타나도(…/view/8064?keyword=&page=0) 같은 번호가 되게, 그런 인자를 빼고 해시한다.
+function pageSeq(url: string): string {
+  const u = new URL(url);
+  const kept = [...u.searchParams.entries()].filter(([key, value]) => value !== "" && !PAGE_PARAM.test(key)).sort(([a], [b]) => a.localeCompare(b));
+  const key = `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}?${kept.map(([k, v]) => `${k}=${v}`).join("&")}${u.hash}`;
+  return `${WATCH_SEQ_PREFIXES.pageWatch}${createHash("sha1").update(key).digest("hex").slice(0, 12)}`;
+}
+
+// 글 링크인지: 경로가 게시판과 다르면 그 차이에 글 번호(숫자)가 있어야 하고, 경로가 같으면 게시판 주소에 없던 인자 중
+// 값이 숫자뿐인 것(seq=20, wr_id=2)이 있어야 한다. 쪽 번호(page=2, /page/2/)·분류(categorySeq=96 — 게시판 주소에도 있는 인자)·
+// 탭(tab=tab01)은 글이 아니다. 글 링크에도 "&page=1"이 붙곤 한다(하나자산신탁 …/jobNotice/view?seq=44&page=1).
+export function isPostLink(target: URL, board: URL): boolean {
+  const path = (u: URL) => u.pathname.replace(/\/page\/\d+\/?$/, "/").replace(/\/+$/, "");
+  const params = (u: URL) => [...u.searchParams.entries()].filter(([key]) => !PAGE_PARAM.test(key));
+  const boardPath = path(board);
+  const targetPath = path(target);
+  if (targetPath !== boardPath) {
+    let extra = targetPath.startsWith(boardPath) ? targetPath.slice(boardPath.length) : targetPath;
+    try { extra = decodeURIComponent(extra); } catch { /* 그대로 */ }
+    return /\d/.test(extra) || params(target).some(([, value]) => /^\d+$/.test(value));
+  }
+  const boardKeys = new Set(params(board).map(([key]) => key));
+  return params(target).some(([key, value]) => !boardKeys.has(key) && /^\d+$/.test(value));
+}
+
+function sameSite(a: URL, b: URL): boolean {
+  return a.hostname.replace(/^www\./, "") === b.hostname.replace(/^www\./, "");
+}
+
+/** 줄 글에서 읽은 마감일과 "이미 지난 글" 여부. */
+export function rowDates(rowText: string, now: Date): { deadline: string; postedAt: string; old: boolean } {
+  const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(now);
+  let deadline = periodEnd(rowText);
+  // 연도 없는 마감 표기("~9.13", "~ 10/29")는 올해로 읽는다. 반년 넘게 앞선 달이면 내년(12월 글의 "~1/10").
+  const short = !deadline ? rowText.match(/~\s*(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)/) : null;
+  if (short && Number(short[1]) >= 1 && Number(short[1]) <= 12 && Number(short[2]) >= 1 && Number(short[2]) <= 31) {
+    const month = Number(short[1]);
+    const year = Number(today.slice(0, 4)) + (month < Number(today.slice(5, 7)) - 6 ? 1 : 0);
+    deadline = `${year}-${String(month).padStart(2, "0")}-${short[2].padStart(2, "0")}`;
+  }
+  const dates = [...rowText.matchAll(DATE)].map((m) => `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`);
+  const years = [...rowText.matchAll(/(?:^|[^\d])(20\d{2})(?:년|[.\-/]|\s|$)/g)].map((m) => Number(m[1]));
+  const postedAt = dates.find((d) => d !== deadline) ?? "";
+  const old = (deadline !== "" && deadline < today)
+    || (years.length > 0 && Math.max(...years) < Number(today.slice(0, 4)))
+    || (!deadline && postedAt !== "" && postedAt < new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date(now.getTime() - 60 * 86_400_000)));
+  return { deadline, postedAt: postedAt ? `${postedAt} 00:00:00` : "", old };
+}
+
+function rowTitle($: cheerio.CheerioAPI, anchor: cheerio.Cheerio<never>, row: cheerio.Cheerio<never>): string {
+  const own = oneLine(anchor.text());
+  if (own.length >= 4 && !GENERIC_LINK_TEXT.test(own)) {
+    const inner = anchor.find(TITLE).first();
+    const innerText = oneLine(inner.text());
+    return innerText.length >= 4 ? innerText : own;
+  }
+  const titled = row.find(TITLE).filter((_, el) => {
+    const text = oneLine($(el).text());
+    return text.length >= 4 && !GENERIC_LINK_TEXT.test(text);
+  }).first();
+  return oneLine(titled.text()) || oneLine(row.text()).slice(0, 120);
+}
+
+export const pageWatchAdapter: WatchAdapter = {
+  async list(base, fetcher, options = {}) {
+    const now = options.now ?? new Date();
+    const page = await fetcher.text(base);
+    const boardUrl = new URL(page.url);
+    const $ = cheerio.load(page.text);
+    $("script, style, noscript, template").remove();
+    $(CHROME).remove();
+    const postings = new Map<string, WatchPosting>();
+
+    if (options.itemSelector) {
+      $(options.itemSelector).each((_, el) => {
+        const item = $(el);
+        const text = htmlToText(item.html() ?? "");
+        const title = oneLine(item.find(TITLE).first().text()) || text.split("\n")[0];
+        if (!title || CLOSED_MARK.test(oneLine(item.text()))) return;
+        const dates = rowDates(oneLine(item.text()), now);
+        if (dates.old) return;
+        const seq = pageSeq(`${boardUrl.origin}${boardUrl.pathname}#${title}`);
+        postings.set(seq, { seq, title, url: boardUrl.toString(), postedAt: dates.postedAt, deadline: dates.deadline, contentUrl: "", inlineContent: text, mayNotBePosting: true });
+      });
+      return [...postings.values()];
+    }
+
+    $("a").each((_, el) => {
+      const anchor = $(el) as cheerio.Cheerio<never>;
+      const href = (anchor.attr("href") ?? "").trim();
+      let target: URL | null = null;
+      // javascript:fn_egov_select('92') → 상세 주소. 쪽 번호 함수(fn_egov_link_page(2))는 뺀다.
+      const jsId = `${href} ${anchor.attr("onclick") ?? ""}`.match(/(\w+)\(\s*['"]?(\d+)['"]?\s*\)/);
+      if (options.jsLinkTemplate && jsId && !/page/i.test(jsId[1])) target = new URL(options.jsLinkTemplate.replace("{id}", jsId[2]));
+      else if (href && !/^(?:javascript:|#|mailto:|tel:)/i.test(href)) {
+        try { target = new URL(href, boardUrl); } catch { target = null; }
+      }
+      if (!target || !sameSite(target, boardUrl)) return;
+      target.hash = "";
+      if (!isPostLink(target, boardUrl)) return;
+      if (/\.(?:pdf|hwp|hwpx|docx?|xlsx?|zip|jpe?g|png|gif)(?:$|\?)/i.test(target.pathname)) return;
+
+      const row = (anchor.closest(ROW).length ? anchor.closest(ROW) : anchor.parent()) as cheerio.Cheerio<never>;
+      const rowText = oneLine(row.text());
+      const title = rowTitle($, anchor, row);
+      if (title.length < 4 || CLOSED_MARK.test(rowText)) return;
+      const dates = rowDates(rowText, now);
+      if (dates.old) return;
+      const url = target.toString();
+      const seq = pageSeq(url);
+      if (!postings.has(seq)) postings.set(seq, { seq, title, url, postedAt: dates.postedAt, deadline: dates.deadline, contentUrl: url, mayNotBePosting: true });
+    });
+    return [...postings.values()];
+  },
+  async content(posting, fetcher) {
+    if (posting.inlineContent !== undefined) return posting.inlineContent;
+    const page = await fetcher.text(posting.contentUrl);
+    const $ = cheerio.load(page.text);
+    $("script, style, noscript, template").remove();
+    $(CHROME).remove();
+    // 이전글·다음글·목록 버튼(코리아에셋은 본문이 이미지라 이것만 글로 남았다).
+    $("[class*=prev], [class*=next], [class*=pager], [class*=paging], [class*=btn_list], [class*=list_btn]").remove();
+    $("*").filter((_, el) => /^(?:이전글|다음글)/.test(oneLine($(el).text())) && oneLine($(el).text()).length < 200).remove();
+    const main = $("article, [class*=view], [class*=detail], [class*=board_read], main, #content, .content, #contents, .contents")
+      .toArray().map((el) => $(el)).filter((el) => oneLine(el.text()).length >= 40)
+      .sort((a, b) => oneLine(b.text()).length - oneLine(a.text()).length)[0];
+    const text = htmlToText((main ?? $("body")).html() ?? "").slice(0, 30_000);
+    // 본문이 이미지·첨부파일뿐이면 글이 거의 없다. 요약기가 최소한 제목은 보게 한다.
+    return text.includes(posting.title) ? text : `${posting.title}\n${text}`.trim();
+  },
+};
+
 export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   greeting: greetingAdapter,
   saraminAts: saraminAtsAdapter,
   recruiterAppsite: recruiterAppsiteAdapter,
+  pageWatch: pageWatchAdapter,
 };

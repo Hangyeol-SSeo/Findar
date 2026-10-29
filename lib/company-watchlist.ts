@@ -4,9 +4,9 @@ import { normalizeCompanyName } from "./company-normalize";
 
 // 금투협 게시판 밖에서 공고를 확인할 회사 목록(감시 목록). 설계: docs/multi-source-jobs.md 2절 D·3절.
 // 금투협에 경력·수시 공고를 올리는 회사도 신입 공채·인턴은 자체 채용 사이트에만 올리는 일이 많다(메리츠·NH·키움·DB·LS).
-// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite이고,
+// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite·pageWatch이고,
 // 나머지 유형은 어댑터가 생길 때까지 설정 화면에 "채용 사이트 바로가기"로만 보인다:
-//  - endpoint·pageWatch·workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
+//  - endpoint·workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
 //  - unknown: 목록이 브라우저에서만 보여 데이터 경로를 아직 확인하지 않음(확인 필요)
 //  - blocked: robots.txt가 데이터 경로를 금지하거나 자동 요청을 차단함(우회하지 않음). 사용자가 직접 확인한다
 //  - saraminApi: 사람인 일반 공고에만 올림. 사람인 오픈API 승인 뒤 받는다
@@ -14,7 +14,7 @@ import { normalizeCompanyName } from "./company-normalize";
 
 export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "unknown" | "blocked" | "saraminApi";
 
-export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite"] as const;
+export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite", "pageWatch"] as const;
 export type CollectableSourceType = (typeof COLLECTABLE_SOURCE_TYPES)[number];
 
 export function isCollectable(type: WatchSourceType): type is CollectableSourceType {
@@ -26,7 +26,7 @@ export const WATCH_SOURCE_LABELS: Record<WatchSourceType, string> = {
   saraminAts: "사람인 채용 사이트",
   recruiterAppsite: "recruiter.co.kr 채용 사이트",
   endpoint: "자체 채용 사이트(준비 중)",
-  pageWatch: "자체 게시판(준비 중)",
+  pageWatch: "회사 채용 게시판",
   workday: "Workday(준비 중)",
   unknown: "확인 필요",
   blocked: "자동 수집 불가",
@@ -38,6 +38,10 @@ export interface WatchSource {
   url: string;
   /** 그룹 채용 사이트(NICE)에서 이 회사 공고만 고르는 제목 머리말. 하나라도 들어 있으면 이 회사 공고. */
   titleIncludes?: string[];
+  /** pageWatch: 글 링크가 javascript:뿐인 게시판의 상세 주소({id} 자리). lib/watch-adapters.ts WatchListOptions 참고. */
+  jsLinkTemplate?: string;
+  /** pageWatch: 링크 없이 목록 칸에 내용이 다 있는 게시판의 공고 요소 선택자. */
+  itemSelector?: string;
   note?: string;
 }
 
@@ -100,21 +104,22 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("한국투자신탁운용", "자산운용", [{ type: "endpoint", url: "https://career.koreainvestment.com/", note: "한투금융 채용포탈" }]),
     c("한국투자밸류자산운용", "자산운용", [{ type: "endpoint", url: "https://career.koreainvestment.com/", note: "한투금융 채용포탈" }]),
 
-    // 자체 채용 게시판 — 받을 수 있음, 어댑터 준비 중
-    c("신한투자증권", "증권", [{ type: "pageWatch", url: "https://recruit.shinhansec.com/" }]),
-    c("코리아에셋투자증권", "증권", [{ type: "pageWatch", url: "https://www.kasset.co.kr/recruit_list.do" }]),
-    c("DS투자증권", "증권", [{ type: "pageWatch", url: "https://www.ds-sec.co.kr/sub01/sub01_06.php" }]),
+    // 자체 채용 게시판 — 서버 HTML에 글 목록이 있는 곳(2026-10-29 확인)
+    c("코리아에셋투자증권", "증권", [{ type: "pageWatch", url: "https://www.kasset.co.kr/recruit_list.do", jsLinkTemplate: "https://www.kasset.co.kr/recruit_view.do?recruitId={id}", note: "본문이 이미지라 제목만 읽힘" }]),
     c("하나자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.hanaam.com/hanaam/recruit" }]),
-    c("우리자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.wooriam.kr/company/recruit-list", note: "하반기 공개 채용이 금투협에 없음" }]),
-    c("마스턴투자운용", "자산운용", [{ type: "pageWatch", url: "https://careers.mastern.co.kr/" }]),
-    c("마이다스에셋자산운용", "자산운용", [{ type: "pageWatch", url: "https://midasasset.com/" }]),
-    c("한국투자리얼에셋운용", "자산운용", [{ type: "pageWatch", url: "https://kira.koreainvestment.com/" }]),
-    c("트러스톤자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.trustonasset.com/" }]),
-    c("신영자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.syfund.co.kr/", note: "공지 게시판에 채용 공지" }]),
-    c("아이비케이자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.ibkasset.com/", note: "공지 게시판에 채용 공지" }]),
-    c("신영부동산신탁", "신탁", [{ type: "pageWatch", url: "http://www.shinyoungret.com/?pages=job" }]),
+    c("우리자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.wooriam.kr/company/recruit-list", itemSelector: ".recruit-item", note: "하반기 공개 채용이 금투협에 없음" }]),
+    c("마스턴투자운용", "자산운용", [{ type: "pageWatch", url: "https://careers.mastern.co.kr/pages/recruit/job-posting_list.php" }]),
+    c("신영자산운용", "자산운용", [{ type: "pageWatch", url: "https://www.syfund.co.kr/board/notice?categorySeq=95", note: "공지 게시판의 채용 분류" }]),
+    c("신영부동산신탁", "신탁", [{ type: "pageWatch", url: "http://www.shinyoungret.com/?pages=job&subs=sub01" }]),
     c("하나자산신탁", "신탁", [{ type: "pageWatch", url: "https://hanatrust.com/ko/recruitment/jobNotice", note: "하반기 직원 채용이 금투협에 없음" }]),
     c("이지자산평가", "채권평가", [{ type: "pageWatch", url: "https://www.egap.co.kr/bbs/board.php?bo_table=recruit" }]),
+    // 자체 채용 게시판이지만 글 목록을 스크립트로 불러오거나 열리지 않음 — 확인 필요
+    c("신한투자증권", "증권", [{ type: "unknown", url: "https://recruit.shinhansec.com/", note: "채용 사이트가 스크립트로만 그려짐" }]),
+    c("DS투자증권", "증권", [{ type: "unknown", url: "https://www.ds-sec.co.kr/sub01/sub01_06.php", note: "채용공고가 탭 안에 있음(글 링크 없음)" }]),
+    c("마이다스에셋자산운용", "자산운용", [{ type: "unknown", url: "https://midasasset.com/%ea%b3%b5%ec%a7%80-%ea%b3%b5%ec%8b%9c/%ec%b1%84%ec%9a%a9%ea%b3%b5%ea%b3%a0/", note: "글 목록을 스크립트로 불러옴" }]),
+    c("트러스톤자산운용", "자산운용", [{ type: "unknown", url: "https://www.trustonasset.com/?cat=61", note: "글 목록을 스크립트로 불러옴" }]),
+    c("아이비케이자산운용", "자산운용", [{ type: "unknown", url: "https://www.ibkasset.com/customer-center/notice", note: "공지 게시판에 채용 공지, 목록을 스크립트로 불러옴" }]),
+    c("한국투자리얼에셋운용", "자산운용", [{ type: "unknown", url: "https://kira.koreainvestment.com/", note: "https 연결 실패(robots.txt 확인 불가)" }]),
 
     // Workday — 받을 수 있음, 어댑터 준비 중
     c("베어링자산운용", "자산운용", [{ type: "workday", url: "https://barings.wd1.myworkdayjobs.com/" }]),

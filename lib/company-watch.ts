@@ -7,6 +7,8 @@ import {
   getWatchRuns,
   hasJobUserState,
   insertJobLink,
+  getNotPostingSeqs,
+  insertNotPosting,
   saveWatchRun,
   syncWatchPostingsOpen,
   type WatchRunRow,
@@ -34,10 +36,14 @@ const DEDUP_WINDOW_DAYS = 150;
 const STALE_OPEN_DAYS = 180;
 const TALENT_POOL = /인재\s*(?:풀|pool|DB|등록)|인재풀|talent\s*pool/i;
 const MAX_NEW_PER_SOURCE = 15;
+// 자체 게시판은 글을 하나씩 열고 요약해야 공고인지 안다. 첫 확인 때 비용이 몰리지 않게 하루에 적게 연다.
+const MAX_NEW_PER_PAGE_SOURCE = 5;
 
 export interface WatchDetail extends JobDetail {
   /** 채용 사이트가 알려 준 마감일(YYYY-MM-DD). 요약기가 찾은 값보다 우선한다. */
   knownDeadline: string;
+  /** 자체 게시판 글: 요약에서 모집 직무가 나오지 않으면 공고가 아닌 글로 기록하고 저장하지 않는다(recordNotPosting). */
+  mayNotBePosting: boolean;
 }
 
 export interface WatchProgress {
@@ -121,13 +127,15 @@ export async function runCompanyWatch({
     const run: WatchRunRow = { company: company.name, sourceUrl: source.url, sourceType: source.type, status: "ok", message: "", found: 0, added: 0, ranAt: now().getTime() };
     try {
       const cacheKey = `${source.type}\n${source.url}`;
-      if (!listCache.has(cacheKey)) listCache.set(cacheKey, adapter.list(source.url, fetcher));
+      if (!listCache.has(cacheKey)) {
+        listCache.set(cacheKey, adapter.list(source.url, fetcher, { jsLinkTemplate: source.jsLinkTemplate, itemSelector: source.itemSelector, now: now() }));
+      }
       const postings = (await listCache.get(cacheKey)!).filter((p) => keepPosting(p, source, now()));
       run.found = postings.length;
       syncWatchPostingsOpen(company.name, WATCH_SEQ_PREFIXES[source.type], postings.map((p) => p.seq), now().getTime());
 
       const seqs = postings.map((p) => p.seq);
-      const known = new Set([...getExistingSeqs(seqs), ...getLinkedSeqs(seqs)]);
+      const known = new Set([...getExistingSeqs(seqs), ...getLinkedSeqs(seqs), ...getNotPostingSeqs(seqs)]);
       const separated = getSeparatedSeqs(seqs);
       const candidates: DedupPosting[] = getDedupCandidates(daysBefore(now(), DEDUP_WINDOW_DAYS))
         .map((row) => ({ seq: row.seq, company: row.company, title: row.title, deadline: row.deadline, url: row.siteUrl }));
@@ -141,7 +149,7 @@ export async function runCompanyWatch({
           linked += 1;
           continue;
         }
-        if (opened >= MAX_NEW_PER_SOURCE) break;
+        if (opened >= (source.type === "pageWatch" ? MAX_NEW_PER_PAGE_SOURCE : MAX_NEW_PER_SOURCE)) break;
         opened += 1;
         const content = await adapter.content(posting, fetcher);
         details.push({
@@ -158,6 +166,7 @@ export async function runCompanyWatch({
           attachments: [],
           content,
           knownDeadline: posting.deadline,
+          mayNotBePosting: posting.mayNotBePosting === true,
         });
         run.added += 1;
       }
@@ -196,4 +205,18 @@ export function linkKofiaDuplicates(kofia: DedupPosting[], now: Date = new Date(
     linked += 1;
   }
   return linked;
+}
+
+// 제목에 채용 낱말이 있으면 본문이 첨부·이미지뿐이라 모집 직무가 안 나왔어도 공고로 둔다(신영자산운용·하나자산신탁 글은
+// 본문이 첨부 hwp·docx다). 채용 낱말이 없는 글(합격자 발표, 채용 절차 안내)만 공고가 아닌 글로 본다.
+const POSTING_TITLE = /채용|모집|인턴|공채|초빙|recruit|hiring/i;
+
+export function isNotPosting(detail: Pick<WatchDetail, "title" | "mayNotBePosting">, summary: { positions: string[] }): boolean {
+  if (!detail.mayNotBePosting || summary.positions.length > 0) return false;
+  return !POSTING_TITLE.test(detail.title) || /발표|결과|안내\s*$|절차|FAQ/i.test(detail.title);
+}
+
+/** 자체 게시판 글이 요약에서 모집 직무가 나오지 않은 글(채용 안내·결과 발표)이면 기록해 다시 열지 않는다. */
+export function recordNotPosting(detail: Pick<WatchDetail, "seq" | "company" | "title" | "siteUrl">): void {
+  insertNotPosting({ seq: detail.seq, company: detail.company, title: detail.title, url: detail.siteUrl });
 }

@@ -41,7 +41,7 @@ function load(relative) {
       getJobsNeedingMatch: () => [], skipLowScoreMatches: () => 0,
     };
     if (id === '@/lib/company-watch') return {
-      runCompanyWatch: async () => ({ details: [], runs: 0, linked: 0 }), linkKofiaDuplicates: () => 0,
+      runCompanyWatch: async () => ({ details: [], runs: 0, linked: 0 }), linkKofiaDuplicates: () => 0, recordNotPosting: () => {}, isNotPosting: () => false,
     };
     if (id.startsWith('@/')) return load(id.slice(2) + '.ts');
     if (id.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(filename), id + '.ts')));

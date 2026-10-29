@@ -80,7 +80,7 @@ export function emailDomainUrls(texts: string[]): string[] {
 
 // 사이트 공통 머리·메뉴·바닥 영역. 하위 페이지마다 반복돼 글자 수만 차지하므로 하위 페이지에서는 지운다.
 // 첫 화면은 바닥에 주소·연락처가 있어 그대로 둔다.
-const CHROME = "header, nav, footer, [id*=gnb], [class*=gnb], [id*=lnb], [class*=lnb], [id*=snb], [class*=snb], [id*=header], [class*=header], [id*=footer], [class*=footer], [id*=sidebar], [class*=sidebar], [class*=sitemap], [id*=quick], [class*=quick], [id*=skip], [class*=skip], [id*=top_menu], [class*=top_menu], [class*=breadcrumb], [class*=location]";
+export const CHROME = "header, nav, footer, [id*=gnb], [class*=gnb], [id*=lnb], [class*=lnb], [id*=snb], [class*=snb], [id*=header], [class*=header], [id*=footer], [class*=footer], [id*=sidebar], [class*=sidebar], [class*=sitemap], [id*=quick], [class*=quick], [id*=skip], [class*=skip], [id*=top_menu], [class*=top_menu], [class*=breadcrumb], [class*=location]";
 
 export function extractHomepageText(html: string, { stripChrome = false, limit = ROOT_TEXT_LIMIT } = {}): { title: string; text: string } {
   const $ = cheerio.load(html);

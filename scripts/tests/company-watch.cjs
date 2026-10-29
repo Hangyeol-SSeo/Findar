@@ -49,7 +49,7 @@ function nextDataPage(queries) {
   process.chdir(scratch);
   const { parseRobots, robotsAllows, WatchBlockedError } = load('lib/watch-fetch.ts');
   const { companyKey, titleKey, titleSimilarity, duplicateReason } = load('lib/job-dedup.ts');
-  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
+  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, pageWatchAdapter, isPostLink, rowDates, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
   const { jobSource, postingLink, isWatchSeq, isKofiaSeq } = load('lib/job-source.ts');
 
   // robots.txt: 가장 긴 규칙이 이긴다(recruiter.co.kr 구형 테넌트는 Disallow: / 뒤에 Allow: /appsite/).
@@ -215,6 +215,59 @@ function nextDataPage(queries) {
   assert.equal(jobSource('recruiter-ls-sec-269740'), 'recruiterAppsite');
   assert.equal(robotsAllows(parseRobots('User-agent: *\nDisallow: /\nAllow: /appsite/\nAllow: /bbs/appsite/\nUser-agent: Googlebot\nUser-agent: Yeti\nAllow: /\n'), '/app/jobnotice/view'), false);
 
+  // 자체 채용 게시판(pageWatch). 기준일 2026-10-29.
+  const today = new Date('2026-10-29T03:00:00Z');
+  const B = (u) => new URL(u);
+  // 글 링크 판정: 경로 차이의 숫자, 같은 경로면 새 숫자 인자. 쪽 번호·분류·탭은 아니다.
+  assert.equal(isPostLink(B('https://hanatrust.com/ko/recruitment/jobNotice/view?seq=44&page=1'), B('https://hanatrust.com/ko/recruitment/jobNotice')), true);
+  assert.equal(isPostLink(B('https://hanatrust.com/ko/recruitment/jobNotice?search_employment_type=career'), B('https://hanatrust.com/ko/recruitment/jobNotice')), false);
+  assert.equal(isPostLink(B('https://www.syfund.co.kr/board/notice?categorySeq=96&keyword=&page=0'), B('https://www.syfund.co.kr/board/notice?categorySeq=95')), false);
+  assert.equal(isPostLink(B('https://www.syfund.co.kr/board/notice/view/8064?categorySeq=95&page=0'), B('https://www.syfund.co.kr/board/notice?categorySeq=95')), true);
+  assert.equal(isPostLink(B('http://www.shinyoungret.com/?pages=job&subs=sub01&tab=tab01'), B('http://www.shinyoungret.com/?pages=job&subs=sub01')), false);
+  assert.equal(isPostLink(B('http://www.shinyoungret.com/?pages=job&subs=sub01&m=view&idx=20'), B('http://www.shinyoungret.com/?pages=job&subs=sub01')), true);
+  assert.equal(isPostLink(B('http://www.shinyoungret.com/?pages=job&subs=sub01&pageno=2&q='), B('http://www.shinyoungret.com/?pages=job&subs=sub01')), false);
+  assert.equal(isPostLink(B('https://www.egap.co.kr/bbs/board.php?bo_table=recruit&sca=%EC%8B%A0%EC%9E%85'), B('https://www.egap.co.kr/bbs/board.php?bo_table=recruit')), false);
+  assert.equal(isPostLink(B('https://midasasset.com/notices/page/2/'), B('https://midasasset.com/notices/')), false);
+  // 줄 날짜: 지난 마감, 올해 전 연도, 연도 없는 마감 표기.
+  assert.deepEqual(rowDates('마감 리테일마케팅 경력직 ~ 2026.09.20', today), { deadline: '2026-09-20', postedAt: '', old: true });
+  assert.equal(rowDates('2022년 신영부동산신탁 경력직 공개 채용(~3/13)', today).old, true);
+  assert.equal(rowDates('[채용]2026년 경력 직원 채용공고(채권운용본부 / ~9.13)', today).old, true);
+  assert.deepEqual(rowDates('2026년 하나자산신탁 하반기 직원 채용 2026-10-16 ~ 2026-10-30', today), { deadline: '2026-10-30', postedAt: '2026-10-16 00:00:00', old: false });
+  assert.equal(rowDates('재무관리부 신입 업무직원 공개채용(~11/5)', today).deadline, '2026-11-05');
+
+  const boardPages = {
+    // 하나자산신탁형: 링크 글자는 "상세보기", 제목은 같은 줄의 제목 칸. 메뉴는 공통 영역이라 빠진다.
+    'https://hanatrust.com/ko/recruitment/jobNotice': `<html><body><header><a href="/ko/recruitment/jobNotice/view?seq=1">채용 메뉴 1번 글</a></header>
+      <ul class="list"><li><p class="tit">2026년 하나자산신탁 하반기 직원 채용</p><span>2026-10-16 ~ 2026-10-30</span><a href="/ko/recruitment/jobNotice/view?seq=44&page=1">상세보기</a></li>
+      <li><p class="tit">2025년 상반기 채용</p><span>2025-03-01 ~ 2025-03-15</span><a href="/ko/recruitment/jobNotice/view?seq=30&page=1">상세보기</a></li>
+      <li><p class="tit">경력 채용(마감)</p><span>채용마감</span><a href="/ko/recruitment/jobNotice/view?seq=41&page=1">상세보기</a></li></ul>
+      <a href="/ko/recruitment/jobNotice?page=2">2</a><a href="/files/apply.hwp">입사지원서 123.hwp</a></body></html>`,
+    'https://hanatrust.com/ko/recruitment/jobNotice/view?seq=44&page=1': `<html><body><nav>메뉴</nav><div class="view"><h3>2026년 하반기 직원 채용</h3><p>모집부문: 신탁사업 신입</p><p>접수: 10/16 ~ 10/30</p></div><footer>주소</footer></body></html>`,
+    // 코리아에셋형: 글 링크가 javascript:fn_egov_select('92'), 쪽 번호 함수는 무시.
+    'https://www.kasset.co.kr/recruit_list.do': `<table><tr><td class="board_tit"><a href="javascript:fn_egov_select('93');">채권금융팀 인턴사원 모집</a></td><td>2026-10-25 09:00:00 ~ 2026-11-05 23:59:00</td><td>진행중</td></tr>
+      <tr><td class="board_tit"><a href="javascript:fn_egov_select('92');">채권금융팀 신입사원 모집</a></td><td>2026-10-21 ~ 2026-10-28</td><td>마감</td></tr></table>
+      <a href="javascript:fn_egov_link_page(2);">2</a>`,
+    // 우리자산운용형: 글 링크 없이 목록 칸에 내용이 다 있음.
+    'https://www.wooriam.kr/company/recruit-list': `<div class="recruit-item"><div class="recruit-item__badge">채용중</div><div class="recruit-item__title"><a>[우리자산운용] 2027년 상반기 인턴 채용</a></div><dl><dt>채용기간</dt><dd>2026-10-25 ~ 2026-11-10</dd><dt>모집분야</dt><dd>운용지원</dd></dl></div>
+      <div class="recruit-item"><div class="recruit-item__badge complete">채용완료</div><div class="recruit-item__title"><a>[우리자산운용] 2026년 하반기 공개 채용</a></div><dl><dd>2026-10-01 ~ 2026-10-18</dd></dl></div>`,
+  };
+  const boardFetcher = fakeFetcher(boardPages);
+  const hanaTrust = await pageWatchAdapter.list('https://hanatrust.com/ko/recruitment/jobNotice', boardFetcher, { now: today });
+  assert.deepEqual(hanaTrust.map((p) => [p.title, p.deadline, p.url, p.mayNotBePosting]), [
+    ['2026년 하나자산신탁 하반기 직원 채용', '2026-10-30', 'https://hanatrust.com/ko/recruitment/jobNotice/view?seq=44&page=1', true],
+  ]);
+  assert.match(hanaTrust[0].seq, /^page-[0-9a-f]{12}$/);
+  // 본문에 목록 제목이 없으면 앞에 붙인다(본문이 이미지·첨부뿐인 글도 요약기가 제목은 본다).
+  assert.equal(await pageWatchAdapter.content(hanaTrust[0], boardFetcher), '2026년 하나자산신탁 하반기 직원 채용\n2026년 하반기 직원 채용\n모집부문: 신탁사업 신입\n접수: 10/16 ~ 10/30');
+  // 본문이 이미지뿐이고 이전글·다음글만 글로 남는 페이지(코리아에셋): 이전글·다음글은 빼고 제목만.
+  boardPages['https://www.kasset.co.kr/recruit_view.do?recruitId=17'] = '<html><body><div class="board_view"><h4>IB부문 전문영업직 채용</h4><img src="/a.png"><div class="board_prev"><span>이전글</span> 신기술투자본부 인턴 채용 공고 2023-02-02</div><div><span>다음글</span> [경력]IT지원팀 모집 2022-10-12</div></div></body></html>';
+  assert.equal(await pageWatchAdapter.content({ title: 'IB부문 전문영업직 채용', contentUrl: 'https://www.kasset.co.kr/recruit_view.do?recruitId=17' }, boardFetcher), 'IB부문 전문영업직 채용');
+  const kasset = await pageWatchAdapter.list('https://www.kasset.co.kr/recruit_list.do', boardFetcher, { now: today, jsLinkTemplate: 'https://www.kasset.co.kr/recruit_view.do?recruitId={id}' });
+  assert.deepEqual(kasset.map((p) => [p.title, p.url, p.deadline]), [['채권금융팀 인턴사원 모집', 'https://www.kasset.co.kr/recruit_view.do?recruitId=93', '2026-11-05']]);
+  const wooriam = await pageWatchAdapter.list('https://www.wooriam.kr/company/recruit-list', boardFetcher, { now: today, itemSelector: '.recruit-item' });
+  assert.deepEqual(wooriam.map((p) => [p.title, p.deadline, p.url]), [['[우리자산운용] 2027년 상반기 인턴 채용', '2026-11-10', 'https://www.wooriam.kr/company/recruit-list']]);
+  assert.match(await pageWatchAdapter.content(wooriam[0], boardFetcher), /모집분야\n?\s*운용지원/);
+
   // 수집 흐름: 감시 목록 → 새 공고만 열고, 금투협과 같은 공고는 연결만, 출처별 기록과 하루 한 번.
   const db = load('lib/db.ts');
   const { writeWatchlist } = load('lib/company-watchlist.ts');
@@ -319,6 +372,16 @@ function nextDataPage(queries) {
   assert.ok(active.includes('42783') && !active.includes('greeting-240402'));
   assert.ok(active.includes('greeting-242300') && !active.includes('43001'));
   assert.ok(active.includes('42872') && active.includes('greeting-242100'));
+
+  // 공고가 아닌 게시판 글로 기록한 것은 다음 수집에서 다시 열지 않는다.
+  const { recordNotPosting, isNotPosting } = load('lib/company-watch.ts');
+  assert.equal(isNotPosting({ title: '2026년 상반기 서류전형 합격자 발표', mayNotBePosting: true }, { positions: [] }), true);
+  assert.equal(isNotPosting({ title: '[채용] 2026년 하반기 신입사원 채용공고', mayNotBePosting: true }, { positions: [] }), false);
+  assert.equal(isNotPosting({ title: '홈페이지 개편 안내', mayNotBePosting: true }, { positions: [] }), true);
+  assert.equal(isNotPosting({ title: '홈페이지 개편 안내', mayNotBePosting: false }, { positions: [] }), false);
+  assert.equal(isNotPosting({ title: '사내 행사', mayNotBePosting: true }, { positions: ['운용'] }), false);
+  recordNotPosting({ seq: 'greeting-242100', company: 'KIS자산평가', title: 'x', siteUrl: '' });
+  assert.deepEqual([...db.getNotPostingSeqs(['greeting-242100', 'greeting-1'])], ['greeting-242100']);
 
   // "중복 아님": 저장된 공고는 바로 목록에 돌아오고, 다시 묶이지 않는다.
   assert.deepEqual(db.getJobLinksFor('42783').map((l) => l.seq), ['greeting-240402']);
