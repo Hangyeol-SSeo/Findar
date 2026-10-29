@@ -7,3 +7,12 @@ export function normalizeCompanyName(raw: string): string {
     .replace(/\s+/g, "")
     .trim();
 }
+
+// 영문 약어 상호는 DART와 KOFIA 공고가 서로 다르게 적는 경우가 많다(DS투자증권 ↔ 디에스투자증권, 케이비자산운용 ↔ KB자산운용).
+const LETTER_NAMES: Record<string, string> = {
+  A: "에이", B: "비", C: "씨", D: "디", E: "이", F: "에프", G: "지", H: "에이치", I: "아이", J: "제이", K: "케이", L: "엘", M: "엠",
+  N: "엔", O: "오", P: "피", Q: "큐", R: "알", S: "에스", T: "티", U: "유", V: "브이", W: "더블유", X: "엑스", Y: "와이", Z: "제트",
+};
+export function hangulizeLatin(name: string): string {
+  return name.replace(/[A-Za-z]+/g, (word) => [...word.toUpperCase()].map((c) => LETTER_NAMES[c] ?? c).join(""));
+}

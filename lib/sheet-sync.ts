@@ -7,7 +7,7 @@ import {
   markSheetSyncPending,
   recordSheetSyncFailure,
 } from "./db";
-import { postingLink } from "./manual-jobs";
+import { postingLink } from "./job-source";
 import { applicationAppliedAt, isSubmittedApplicationStatus, type ApplicationStatus } from "./application-status";
 
 // 지원 상태가 바뀌면 사용자의 지원 현황 Google 시트에 한 행씩 기록한다.

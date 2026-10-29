@@ -9,7 +9,8 @@ import ResumeTailoringPanel from "./ResumeTailoringPanel";
 import CategoryTooltip from "./CategoryTooltip";
 import MemoPanel, { type MemoSaved } from "./MemoPanel";
 import ManualJobForm, { type ManualJobSaved } from "./ManualJobForm";
-import { isManualSeq, postingLink } from "@/lib/manual-jobs";
+import { isManualSeq } from "@/lib/manual-jobs";
+import { JOB_SOURCE_LABELS, isKofiaSeq, jobSource, postingLink } from "@/lib/job-source";
 import { normalizeCompanyName } from "@/lib/company-normalize";
 import type { Memo, MemoIndex } from "@/lib/memo-types";
 import { categorizePositions } from "@/lib/position-categories";
@@ -117,7 +118,7 @@ function readStoredPanelWidth(): number {
 }
 
 interface Progress {
-  phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "rematch" | "done";
+  phase: "idle" | "profile" | "crawl" | "detail" | "summarize" | "watch" | "rematch" | "done";
   message: string;
   current: number;
   total: number;
@@ -329,6 +330,16 @@ export default function JobBoard() {
                   return exists ? prev : [...prev, data.job];
                 });
               }
+              break;
+
+            case "watch-progress":
+              setProgress((p) => ({
+                ...p,
+                phase: "watch",
+                message: `회사 채용 사이트 확인 중... (${data.current}/${data.total} ${data.company}${data.added > 0 ? `, 새 공고 ${data.added}건` : ""})`,
+                current: data.current,
+                total: data.total,
+              }));
               break;
 
             case "rematch-progress":
@@ -1351,6 +1362,9 @@ export default function JobBoard() {
                 <InfoItem label="채용 유형" value={selectedJob.positionType} />
                 <InfoItem label="경력" value={selectedJob.experienceYears} />
                 <InfoItem label={isManualSeq(selectedJob.seq) ? "추가일" : "등록일"} value={selectedJob.date} />
+                {!isKofiaSeq(selectedJob.seq) && !isManualSeq(selectedJob.seq) && (
+                  <InfoItem label="출처" value={JOB_SOURCE_LABELS[jobSource(selectedJob.seq)]} />
+                )}
                 <InfoItem
                   label="마감일"
                   value={
@@ -1418,8 +1432,8 @@ export default function JobBoard() {
             </div>
             )}
 
-            {/* Panel footer — 직접 추가한 공고는 협회 원문이 없고, 적어 둔 공고 링크가 지원 사이트 링크다. */}
-            {(selectedJob.siteUrl || !isManualSeq(selectedJob.seq)) && (
+            {/* Panel footer — 금투협 밖 공고(직접 추가·채용 사이트)는 협회 원문이 없고, siteUrl이 공고 원문이자 지원하는 곳이다. */}
+            {(selectedJob.siteUrl || isKofiaSeq(selectedJob.seq)) && (
             <div className={panelTab === "company" ? "shrink-0 grid grid-cols-2 gap-2 border-t border-gray-100 px-5 py-2" : "p-5 border-t border-gray-100 space-y-2"}>
               {selectedJob.siteUrl && (
                 <a
@@ -1428,10 +1442,10 @@ export default function JobBoard() {
                   rel="noopener noreferrer"
                   className="block text-center px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
                 >
-                  {isManualSeq(selectedJob.seq) ? "공고 페이지 바로가기" : "지원 사이트 바로가기"}
+                  {isKofiaSeq(selectedJob.seq) ? "지원 사이트 바로가기" : "공고 페이지 바로가기"}
                 </a>
               )}
-              {!isManualSeq(selectedJob.seq) && (
+              {isKofiaSeq(selectedJob.seq) && (
               <a
                 href={postingLink(selectedJob) ?? undefined}
                 target="_blank"
@@ -1588,7 +1602,7 @@ function JobCard({
             ))}
           </select>
           <div className="text-xs text-gray-400">{job.date}</div>
-          {isManualSeq(job.seq) && <div className="text-xs text-gray-400">직접 추가</div>}
+          {!isKofiaSeq(job.seq) && <div className="text-xs text-gray-400">{JOB_SOURCE_LABELS[jobSource(job.seq)]}</div>}
           {job.deadline && (
             <div className={`text-xs ${showTracking && job.expired ? "text-gray-400" : "text-red-500"}`}>
               ~{job.deadline}

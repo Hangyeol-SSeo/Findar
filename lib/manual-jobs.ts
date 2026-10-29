@@ -13,12 +13,6 @@ export function isManualSeq(seq: string): boolean {
   return seq.startsWith(MANUAL_SEQ_PREFIX);
 }
 
-/** 공고 원문 주소. KOFIA 공고는 협회 게시판, 직접 추가한 공고는 사용자가 적은 링크(없으면 null). */
-export function postingLink(job: { seq: string; siteUrl: string }): string | null {
-  if (isManualSeq(job.seq)) return job.siteUrl || null;
-  return `https://www.kofia.or.kr/brd/m_96/view.do?seq=${job.seq}`;
-}
-
 export interface ManualJobInput {
   company: string;
   title: string;

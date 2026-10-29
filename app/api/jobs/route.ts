@@ -16,6 +16,8 @@ import {
 import { ensureProfile, getCachedProfile, type Profile } from "@/lib/profile";
 import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
 import { FreeRideRequestError } from "@/lib/job-ai";
+import { linkKofiaDuplicates, runCompanyWatch } from "@/lib/company-watch";
+import { jobSource } from "@/lib/job-source";
 import {
   CRAWL_PAGES,
   REMATCH_SKIP_THRESHOLD,
@@ -46,6 +48,9 @@ export async function GET(request: Request) {
     50
   );
   const matchEnabled = searchParams.get("match") !== "false";
+  // 회사 채용 사이트 확인: 기본은 출처마다 하루 한 번, "force"는 지금 전부, "off"는 건너뜀.
+  const watchParam = searchParams.get("watch");
+  const watchMode = watchParam === "off" || watchParam === "force" ? watchParam : "daily";
 
   const encoder = new TextEncoder();
   let closed = false;
@@ -144,70 +149,106 @@ export async function GET(request: Request) {
         }
 
         // 4단계: AI 요약 + 매칭 + DB 저장 (여러 건씩 묶어서 처리 — 호출 횟수/시간/토큰 절약)
-        send({
-          type: "phase",
-          phase: "summarize",
-          message:
-            details.length === 0
-              ? "AI 요약 건너뜀"
-              : `AI 요약 중... (0/${details.length})`,
-          total: details.length,
-        });
+        // 금투협 공고와 채용 사이트 공고가 같은 경로를 탄다. knownDeadline은 채용 사이트가 알려 준 마감일(요약보다 우선).
+        async function summarizeAndStore(items: (JobDetail & { knownDeadline?: string })[]): Promise<JobSummary[]> {
+          send({
+            type: "phase",
+            phase: "summarize",
+            message:
+              items.length === 0
+                ? "AI 요약 건너뜀"
+                : `AI 요약 중... (0/${items.length})`,
+            total: items.length,
+          });
 
-        const startTime = Date.now();
-        let processed = 0;
+          const startTime = Date.now();
+          let processed = 0;
+          const stored: JobSummary[] = [];
 
-        for (let i = 0; i < details.length; i += SUMMARIZE_BATCH_SIZE) {
-          if (closed) return; // 남은 배치의 AI 요약/매칭 호출을 시작하지 않음
-          const chunk = details.slice(i, i + SUMMARIZE_BATCH_SIZE);
+          for (let i = 0; i < items.length; i += SUMMARIZE_BATCH_SIZE) {
+            if (closed) return stored; // 남은 배치의 AI 요약/매칭 호출을 시작하지 않음
+            const chunk = items.slice(i, i + SUMMARIZE_BATCH_SIZE);
 
-          const summarized = await summarizeJobBatch(chunk);
-          const missing = chunk.filter((d) => !summarized.has(d.seq));
-          if (missing.length > 0) {
-            // 배치 파싱 실패분만 개별 재시도 (전체 배치를 버리지 않음)
-            for (const detail of missing) {
+            const summarized = await summarizeJobBatch(chunk);
+            const missing = chunk.filter((d) => !summarized.has(d.seq));
+            if (missing.length > 0) {
+              // 배치 파싱 실패분만 개별 재시도 (전체 배치를 버리지 않음)
+              for (const detail of missing) {
+                try {
+                  summarized.set(detail.seq, await summarizeJob(detail));
+                } catch (e) {
+                  console.error(`Failed to summarize ${detail.seq}:`, e);
+                }
+              }
+            }
+
+            const chunkSummaries: JobSummary[] = [];
+            for (const detail of chunk) {
+              const summary = summarized.get(detail.seq);
+              const summarizedOk = !!summary && summary.jdSummary !== "요약 실패";
+              let finalSummary = summary ?? fallbackSummary(detail);
+              if (detail.knownDeadline) finalSummary = { ...finalSummary, deadline: detail.knownDeadline };
+              upsertJob({ summary: finalSummary, rawContent: detail.content, summarizedOk });
+              if (summarizedOk) chunkSummaries.push(finalSummary);
+              stored.push(finalSummary);
+
+              processed += 1;
+              const elapsed = Date.now() - startTime;
+              const avgPerJob = elapsed / processed;
+              const remaining = Math.round((avgPerJob * (items.length - processed)) / 1000);
+
+              // 매칭 전에 먼저 전송 (매칭 배치 호출 때문에 progress bar가 멈춰 보이지 않도록)
+              send({
+                type: "summarize-progress",
+                current: processed,
+                total: items.length,
+                remainingSeconds: remaining,
+                source: jobSource(detail.seq),
+                job: { ...finalSummary },
+              });
+            }
+
+            // 매칭 (프로필이 있고 이번 청크에서 요약에 성공한 공고만, 한 번에 배치 호출)
+            if (profile && chunkSummaries.length > 0) {
               try {
-                summarized.set(detail.seq, await summarizeJob(detail));
+                const matched = await matchJobBatch(profile, chunkSummaries);
+                for (const [seq, m] of matched) {
+                  updateJobMatch(seq, m, profile.sourcesHash);
+                }
               } catch (e) {
-                console.error(`Failed to summarize ${detail.seq}:`, e);
+                console.error(`Failed to match chunk at ${i}:`, e);
               }
             }
           }
+          return stored;
+        }
 
-          const chunkSummaries: JobSummary[] = [];
-          for (const detail of chunk) {
-            const summary = summarized.get(detail.seq);
-            const summarizedOk = !!summary && summary.jdSummary !== "요약 실패";
-            const finalSummary = summary ?? fallbackSummary(detail);
-            upsertJob({ summary: finalSummary, rawContent: detail.content, summarizedOk });
-            if (summarizedOk) chunkSummaries.push(finalSummary);
+        const kofiaStored = await summarizeAndStore(details);
+        if (closed) return;
+        // 이미 저장된 채용 사이트·직접 추가 공고와 같은 금투협 공고면 한쪽을 목록에서 뺀다(lib/job-dedup.ts).
+        linkKofiaDuplicates(kofiaStored.map((s) => ({ seq: s.seq, company: s.company, title: s.title, deadline: s.deadline, url: s.siteUrl })));
 
-            processed += 1;
-            const elapsed = Date.now() - startTime;
-            const avgPerJob = elapsed / processed;
-            const remaining = Math.round((avgPerJob * (details.length - processed)) / 1000);
-
-            // 매칭 전에 먼저 전송 (매칭 배치 호출 때문에 progress bar가 멈춰 보이지 않도록)
-            send({
-              type: "summarize-progress",
-              current: processed,
-              total: details.length,
-              remainingSeconds: remaining,
-              job: { ...finalSummary },
-            });
-          }
-
-          // 매칭 (프로필이 있고 이번 청크에서 요약에 성공한 공고만, 한 번에 배치 호출)
-          if (profile && chunkSummaries.length > 0) {
-            try {
-              const matched = await matchJobBatch(profile, chunkSummaries);
-              for (const [seq, m] of matched) {
-                updateJobMatch(seq, m, profile.sourcesHash);
-              }
-            } catch (e) {
-              console.error(`Failed to match chunk at ${i}:`, e);
-            }
-          }
+        // 4-1단계: 감시 목록의 채용 사이트(금투협에 없는 공채·인턴 등). 출처마다 하루 한 번(lib/company-watch.ts).
+        let watchNew = 0;
+        if (watchMode !== "off") {
+          send({ type: "phase", phase: "watch", message: "회사 채용 사이트 확인 중..." });
+          const watch = await runCompanyWatch({
+            force: watchMode === "force",
+            signal: request.signal,
+            onProgress: (p) =>
+              send({
+                type: "watch-progress",
+                current: p.current,
+                total: p.total,
+                company: p.company,
+                status: p.status,
+                added: p.added,
+              }),
+          });
+          if (closed) return;
+          watchNew = watch.details.length;
+          if (watch.details.length > 0) await summarizeAndStore(watch.details);
+          if (closed) return;
         }
 
         // 5단계: 프로필 해시가 바뀌었으면 기존 공고 일괄 재매칭
@@ -250,7 +291,7 @@ export async function GET(request: Request) {
         send({
           type: "done",
           jobs: activeJobs,
-          newCount: details.length,
+          newCount: details.length + watchNew,
           hasProfile: !!profile,
         });
       } catch (error) {

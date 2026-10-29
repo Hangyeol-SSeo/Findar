@@ -1,7 +1,7 @@
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "./ai-query";
 import { getAIModelId } from "./ai-model-settings";
-import { postingLink } from "./manual-jobs";
+import { postingLink } from "./job-source";
 import {
   getCompany,
   getCompanySections,

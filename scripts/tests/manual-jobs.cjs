@@ -28,7 +28,8 @@ function load(relative) {
 (async () => {
   process.chdir(scratch);
   const db = load('lib/db.ts');
-  const { validateManualJobInput, isManualSeq, postingLink } = load('lib/manual-jobs.ts');
+  const { validateManualJobInput, isManualSeq } = load('lib/manual-jobs.ts');
+  const { postingLink } = load('lib/job-source.ts');
   const { saveManualJob, ManualJobError } = load('lib/manual-job-save.ts');
 
   // 입력 검증: 필수 칸, 링크 형식, 마감일 형식.

@@ -149,6 +149,31 @@ db.exec(`
     updatedAt INTEGER NOT NULL,
     PRIMARY KEY (scope, key)
   );
+
+  -- 같은 공고가 두 출처(금투협·채용 사이트·직접 추가)에 있을 때의 연결(lib/job-dedup.ts). seq는 목록에서 빠지는 쪽,
+  -- canonicalSeq는 남는 쪽이다. 채용 사이트 공고가 처음부터 중복이면 jobs에 저장하지 않고 이 행만 남겨, 다음 수집이
+  -- 같은 공고를 다시 열거나 요약하지 않게 한다.
+  CREATE TABLE IF NOT EXISTS job_links (
+    seq TEXT PRIMARY KEY,
+    canonicalSeq TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL
+  );
+
+  -- 채용 사이트 감시(lib/company-watch.ts)의 출처별 마지막 결과. 하루 한 번만 돌리는 기준이자 설정 화면의 상태 표시.
+  CREATE TABLE IF NOT EXISTS watch_runs (
+    company TEXT NOT NULL,
+    sourceUrl TEXT NOT NULL,
+    sourceType TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    found INTEGER NOT NULL DEFAULT 0,
+    added INTEGER NOT NULL DEFAULT 0,
+    ranAt INTEGER NOT NULL,
+    PRIMARY KEY (company, sourceUrl)
+  );
 `);
 
 function addColumnIfMissing(column: string, definition: string): void {
@@ -166,6 +191,9 @@ addColumnIfMissing("matchReasoning", "TEXT");
 addColumnIfMissing("matchProfileHash", "TEXT");
 addColumnIfMissing("hidden", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfMissing("bookmarked", "INTEGER NOT NULL DEFAULT 0");
+// 채용 사이트 감시로 받은 공고가 그 사이트 목록에서 사라진 시각(마감일을 적지 않는 공고가 많아 이것으로 닫는다).
+// upsertJobStmt의 SET에 넣지 않는다 — 감시(lib/company-watch.ts)만 바꾼다.
+addColumnIfMissing("sourceClosedAt", "INTEGER");
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_matchScore ON jobs(matchScore)`);
 
@@ -195,6 +223,7 @@ interface JobRow {
   matchProfileHash: string | null;
   hidden: number;
   bookmarked: number;
+  sourceClosedAt: number | null;
   applicationStatus: string;
   applicationNotes: string | null;
 }
@@ -351,10 +380,14 @@ const JOB_WITH_APPLICATION_SELECT = `
   LEFT JOIN applications ON applications.seq = jobs.seq
 `;
 
+// 다른 출처의 같은 공고로 연결된 쪽(job_links.seq)은 목록·매칭에서 뺀다.
+const NOT_LINKED_DUPLICATE = `jobs.seq NOT IN (SELECT seq FROM job_links)`;
+
 const selectJobsNeedingMatchStmt = db.prepare(`
   ${JOB_WITH_APPLICATION_SELECT}
   WHERE jobs.summarizedAt IS NOT NULL
     AND jobs.hidden = 0
+    AND ${NOT_LINKED_DUPLICATE}
     AND (jobs.matchProfileHash IS NULL OR jobs.matchProfileHash != ?)
 `);
 
@@ -527,10 +560,11 @@ export function getCompany(normalizedName: string): CompanyRow | undefined {
   return selectCompanyStmt.get(normalizedName) as CompanyRow | undefined;
 }
 
-// 직접 추가한 공고(seq "manual-…")의 siteUrl은 채용 사이트 공고 링크라 홈페이지 후보에서 뺀다.
+// 금투협 공고의 "사이트바로가기"만 쓴다. 직접 추가·채용 사이트 공고(숫자가 아닌 seq)의 siteUrl은 채용 사이트 공고 링크라
+// 홈페이지 후보가 아니다.
 const selectJobSiteUrlsStmt = db.prepare(`
   SELECT company, siteUrl FROM jobs
-  WHERE siteUrl != '' AND seq NOT LIKE 'manual-%' AND instr(replace(company, ' ', ''), ?) > 0
+  WHERE siteUrl != '' AND seq NOT GLOB '*[^0-9]*' AND instr(replace(company, ' ', ''), ?) > 0
   ORDER BY date DESC
 `);
 
@@ -786,7 +820,7 @@ function applicationPeriodEnd(period: string): string {
 
 const selectActiveJobsStmt = db.prepare(`
   ${JOB_WITH_APPLICATION_SELECT}
-  WHERE jobs.summarizedAt IS NOT NULL AND jobs.hidden = 0
+  WHERE jobs.summarizedAt IS NOT NULL AND jobs.hidden = 0 AND ${NOT_LINKED_DUPLICATE}
   ORDER BY
     CASE WHEN jobs.matchScore IS NULL THEN 1 ELSE 0 END,
     jobs.matchScore DESC,
@@ -794,7 +828,9 @@ const selectActiveJobsStmt = db.prepare(`
 `);
 
 // 마감일(deadline) 또는 접수기간 끝날짜가 오늘 이후면 열린 공고. 둘 다 없으면 마감 미정으로 보고 열린 것으로 친다.
-function isJobOpen(row: Pick<JobRow, "deadline" | "applicationPeriod">, today: string): boolean {
+// 채용 사이트 목록에서 내려간 공고(sourceClosedAt)는 마감일과 상관없이 닫힌 공고다.
+function isJobOpen(row: Pick<JobRow, "deadline" | "applicationPeriod"> & { sourceClosedAt?: number | null }, today: string): boolean {
+  if (row.sourceClosedAt) return false;
   if (/^\d{4}-\d{2}-\d{2}$/.test(row.deadline)) return row.deadline >= today;
   const periodEnd = applicationPeriodEnd(row.applicationPeriod);
   if (periodEnd) return periodEnd >= today;
@@ -1035,4 +1071,89 @@ export function saveMemo(scope: MemoScope, key: string, text: string, displayNam
       updatedAt = excluded.updatedAt
   `).run(scope, key, displayName, text, now, now);
   return { text, updatedAt: now };
+}
+
+export interface JobLinkRow { seq: string; canonicalSeq: string; reason: string; title: string; url: string; createdAt: number }
+
+export function insertJobLink(link: Omit<JobLinkRow, "createdAt">): void {
+  db.prepare(`
+    INSERT INTO job_links (seq, canonicalSeq, reason, title, url, createdAt) VALUES (@seq, @canonicalSeq, @reason, @title, @url, @createdAt)
+    ON CONFLICT(seq) DO NOTHING
+  `).run({ ...link, createdAt: Date.now() });
+}
+
+export function getLinkedSeqs(seqs: string[]): Set<string> {
+  const stmt = db.prepare(`SELECT seq FROM job_links WHERE seq = ?`);
+  return new Set(seqs.filter((seq) => stmt.get(seq)));
+}
+
+export function listJobLinks(): JobLinkRow[] {
+  return db.prepare(`SELECT * FROM job_links ORDER BY createdAt DESC`).all() as JobLinkRow[];
+}
+
+export interface DedupCandidateRow { seq: string; company: string; title: string; deadline: string; siteUrl: string }
+
+// 중복 판정 후보: 최근 공고(등록일 기준, 이미 다른 공고의 중복으로 연결된 것은 뺀다).
+export function getDedupCandidates(sinceDate: string): DedupCandidateRow[] {
+  return db.prepare(`
+    SELECT seq, company, title, deadline, siteUrl FROM jobs
+    WHERE date >= ? AND seq NOT IN (SELECT seq FROM job_links)
+  `).all(sinceDate) as DedupCandidateRow[];
+}
+
+// 사용자가 손댄 공고(지원 상태·찜·지원서 초안·메모). 중복을 합칠 때 이쪽을 남긴다.
+export function hasJobUserState(seq: string): boolean {
+  const row = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM applications WHERE seq = @seq AND status != '미지원')
+      + (SELECT COUNT(*) FROM jobs WHERE seq = @seq AND bookmarked = 1)
+      + (SELECT COUNT(*) FROM application_drafts WHERE seq = @seq)
+      + (SELECT COUNT(*) FROM memos WHERE scope = 'job' AND key = @seq) AS n
+  `).get({ seq }) as { n: number };
+  return row.n > 0;
+}
+
+export interface WatchRunRow {
+  company: string;
+  sourceUrl: string;
+  sourceType: string;
+  status: "ok" | "empty" | "failed" | "blocked";
+  message: string;
+  found: number;
+  added: number;
+  ranAt: number;
+}
+
+export function getWatchRuns(): WatchRunRow[] {
+  return db.prepare(`SELECT * FROM watch_runs`).all() as WatchRunRow[];
+}
+
+export function saveWatchRun(row: WatchRunRow): void {
+  db.prepare(`
+    INSERT INTO watch_runs (company, sourceUrl, sourceType, status, message, found, added, ranAt)
+    VALUES (@company, @sourceUrl, @sourceType, @status, @message, @found, @added, @ranAt)
+    ON CONFLICT(company, sourceUrl) DO UPDATE SET
+      sourceType = excluded.sourceType, status = excluded.status, message = excluded.message,
+      found = excluded.found, added = excluded.added, ranAt = excluded.ranAt
+  `).run(row);
+}
+
+// 설정 화면의 "다시 확인": 마지막 수집 기록을 지워 다음 공고 새로고침 때 바로 다시 돌게 한다.
+export function clearWatchRuns(company: string): void {
+  db.prepare(`DELETE FROM watch_runs WHERE company = ?`).run(company);
+}
+
+// 채용 사이트 목록을 받은 뒤: 이 회사의 같은 출처 공고 중 목록에 없는 것은 닫고, 다시 보이는 것은 연다.
+export function syncWatchPostingsOpen(company: string, seqPrefix: string, openSeqs: string[], now: number): void {
+  const open = new Set(openSeqs);
+  const rows = db.prepare(`SELECT seq, sourceClosedAt FROM jobs WHERE company = ? AND substr(seq, 1, ?) = ?`)
+    .all(company, seqPrefix.length, seqPrefix) as { seq: string; sourceClosedAt: number | null }[];
+  const close = db.prepare(`UPDATE jobs SET sourceClosedAt = ? WHERE seq = ?`);
+  const reopen = db.prepare(`UPDATE jobs SET sourceClosedAt = NULL WHERE seq = ?`);
+  db.transaction(() => {
+    for (const row of rows) {
+      if (open.has(row.seq)) { if (row.sourceClosedAt) reopen.run(row.seq); }
+      else if (!row.sourceClosedAt) close.run(now, row.seq);
+    }
+  })();
 }
