@@ -157,7 +157,7 @@ export function xmlParagraphsToText(xml: string, prefix: "w" | "hp"): string {
     .trim();
 }
 
-function zipDocumentText(bytes: Uint8Array, extension: ".docx" | ".hwpx"): string {
+export function zipDocumentText(bytes: Uint8Array, extension: ".docx" | ".hwpx"): string {
   const tmp = join(tmpdir(), `findar-${randomUUID()}${extension}`);
   writeFileSync(tmp, bytes);
   try {

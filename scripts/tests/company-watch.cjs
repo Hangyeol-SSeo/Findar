@@ -144,7 +144,7 @@ function nextDataPage(queries) {
     // 마감 2026-11-06T14:59:59Z는 서울 기준 11월 6일 23:59
     ['greeting-242026', '[KIS] 솔루션실', 'https://careers.kait.com/ko/o/242026', '2026-10-27 12:30:00', '2026-11-06'],
   ]);
-  assert.equal(await greetingAdapter.content(openings[0], greetingFetcher), '인재를 모집합니다.\n모집 부문\n신탁사업');
+  assert.equal((await greetingAdapter.content(openings[0], greetingFetcher)).text, '인재를 모집합니다.\n모집 부문\n신탁사업');
   await assert.rejects(greetingAdapter.list('https://x.career.greetinghr.com/', fakeFetcher({ 'https://x.career.greetinghr.com/': '<html>no data</html>' })), /그리팅 공고 목록을 찾지 못함/);
 
   // 사람인 기업 채용 사이트 (1) 채용 한 건의 첫 화면으로 가는 루트(키움): 제목 h1과 접수기간.
@@ -159,7 +159,7 @@ function nextDataPage(queries) {
   assert.deepEqual(kiwoomPostings.map((p) => [p.seq, p.title, p.deadline, p.url]), [[
     'saraminats-kiwoom-3946', '2026년 하반기 키움증권 대졸 신입사원 공개채용', '2026-09-13', 'https://kiwoom.saramin.co.kr/service/kiwoom/3946/applicant/apply/index.asp',
   ]]);
-  assert.equal(await saraminAtsAdapter.content(kiwoomPostings[0], kiwoom), '모집분야\n리스크 대체투자 모니터링');
+  assert.equal((await saraminAtsAdapter.content(kiwoomPostings[0], kiwoom)).text, '모집분야\n리스크 대체투자 모니터링');
 
   // (1') 진행 중 채용 여러 건을 소개하는 첫 화면(거래소).
   const krx = fakeFetcher({
@@ -185,7 +185,7 @@ function nextDataPage(queries) {
   assert.deepEqual(reitpiaPostings.map((p) => [p.seq, p.title, p.deadline, p.url]), [[
     'saraminats-reitpia-40001', '신규직원(신입) 채용 공고', '2026-11-05', 'https://reitpia.saramin.co.kr/apply_site/recruit/view/40001',
   ]]);
-  assert.equal(await saraminAtsAdapter.content(reitpiaPostings[0], reitpia), '회사소개\n모집부문 재무');
+  assert.equal((await saraminAtsAdapter.content(reitpiaPostings[0], reitpia)).text, '회사소개\n모집부문 재무');
   assert.deepEqual(await saraminAtsAdapter.list('https://koscom.saramin.co.kr/', fakeFetcher(
     { 'https://koscom.saramin.co.kr/ending_page.html': '<html>종료</html>' }, { 'https://koscom.saramin.co.kr/': 'https://koscom.saramin.co.kr/ending_page.html' })), []);
 
@@ -209,7 +209,7 @@ function nextDataPage(queries) {
     'recruiter-ls-sec-269740', '경력직 수시채용(고객만족센터(인바운드))', '2026-11-02', '2026-10-20 00:00:00',
     'https://ls-sec.recruiter.co.kr/app/jobnotice/view?systemKindCode=MRS2&jobnoticeSn=269740',
   ]]);
-  const recruiterContent = await recruiterAppsiteAdapter.content(recruiterPostings[0], recruiterFetcher);
+  const recruiterContent = (await recruiterAppsiteAdapter.content(recruiterPostings[0], recruiterFetcher)).text;
   assert.match(recruiterContent, /^경력직 수시채용\(고객만족센터\(인바운드\)\)\n채용 구분: 일반채용 · 수시\n접수 기간: 2026-10-20 00:00:00 ~ 2026-11-02 23:59:59\n※/);
   assert.ok(recruiterRequests.every(([, url]) => new URL(url).pathname.startsWith('/appsite/')));
   assert.equal(jobSource('recruiter-ls-sec-269740'), 'recruiterAppsite');
@@ -258,15 +258,59 @@ function nextDataPage(queries) {
   ]);
   assert.match(hanaTrust[0].seq, /^page-[0-9a-f]{12}$/);
   // 본문에 목록 제목이 없으면 앞에 붙인다(본문이 이미지·첨부뿐인 글도 요약기가 제목은 본다).
-  assert.equal(await pageWatchAdapter.content(hanaTrust[0], boardFetcher), '2026년 하나자산신탁 하반기 직원 채용\n2026년 하반기 직원 채용\n모집부문: 신탁사업 신입\n접수: 10/16 ~ 10/30');
+  assert.equal((await pageWatchAdapter.content(hanaTrust[0], boardFetcher)).text, '2026년 하나자산신탁 하반기 직원 채용\n2026년 하반기 직원 채용\n모집부문: 신탁사업 신입\n접수: 10/16 ~ 10/30');
   // 본문이 이미지뿐이고 이전글·다음글만 글로 남는 페이지(코리아에셋): 이전글·다음글은 빼고 제목만.
   boardPages['https://www.kasset.co.kr/recruit_view.do?recruitId=17'] = '<html><body><div class="board_view"><h4>IB부문 전문영업직 채용</h4><img src="/a.png"><div class="board_prev"><span>이전글</span> 신기술투자본부 인턴 채용 공고 2023-02-02</div><div><span>다음글</span> [경력]IT지원팀 모집 2022-10-12</div></div></body></html>';
-  assert.equal(await pageWatchAdapter.content({ title: 'IB부문 전문영업직 채용', contentUrl: 'https://www.kasset.co.kr/recruit_view.do?recruitId=17' }, boardFetcher), 'IB부문 전문영업직 채용');
+  assert.equal((await pageWatchAdapter.content({ title: 'IB부문 전문영업직 채용', contentUrl: 'https://www.kasset.co.kr/recruit_view.do?recruitId=17' }, boardFetcher)).text, 'IB부문 전문영업직 채용');
   const kasset = await pageWatchAdapter.list('https://www.kasset.co.kr/recruit_list.do', boardFetcher, { now: today, jsLinkTemplate: 'https://www.kasset.co.kr/recruit_view.do?recruitId={id}' });
   assert.deepEqual(kasset.map((p) => [p.title, p.url, p.deadline]), [['채권금융팀 인턴사원 모집', 'https://www.kasset.co.kr/recruit_view.do?recruitId=93', '2026-11-05']]);
   const wooriam = await pageWatchAdapter.list('https://www.wooriam.kr/company/recruit-list', boardFetcher, { now: today, itemSelector: '.recruit-item' });
   assert.deepEqual(wooriam.map((p) => [p.title, p.deadline, p.url]), [['[우리자산운용] 2027년 상반기 인턴 채용', '2026-11-10', 'https://www.wooriam.kr/company/recruit-list']]);
-  assert.match(await pageWatchAdapter.content(wooriam[0], boardFetcher), /모집분야\n?\s*운용지원/);
+  assert.match((await pageWatchAdapter.content(wooriam[0], boardFetcher)).text, /모집분야\n?\s*운용지원/);
+
+  // 본문 영역의 이미지·첨부 링크를 함께 돌려준다(공통 영역 로고는 빠짐).
+  boardPages['https://www.syfund.co.kr/board/notice/view/8064'] = `<html><body><header><img src="/logo.png"></header><div class="board_view"><h3>[채용] 2026년 하반기 신입사원 채용공고</h3>
+    <p><img src="/uploads/board/editor/2026/10/14/a.png"><img src="/uploads/board/editor/2026/10/14/b.png"></p>
+    <ul><li><a href="/user/file/download/7502">신입입사지원서_모집부문_이름.docx</a></li><li><a href="/user/file/download/7504">2026년 하반기 신입사원 채용공고.pdf</a></li></ul></div></body></html>`;
+  const syfund = await pageWatchAdapter.content({ title: '[채용] 2026년 하반기 신입사원 채용공고', contentUrl: 'https://www.syfund.co.kr/board/notice/view/8064' }, boardFetcher);
+  assert.deepEqual(syfund.images, ['https://www.syfund.co.kr/uploads/board/editor/2026/10/14/a.png', 'https://www.syfund.co.kr/uploads/board/editor/2026/10/14/b.png']);
+  assert.deepEqual(syfund.files.map((f) => f.name), ['신입입사지원서_모집부문_이름.docx', '2026년 하반기 신입사원 채용공고.pdf']);
+
+  // 얇은 본문 채우기: 양식이 아닌 첨부(PDF)를 먼저 읽고, 충분하면 이미지는 판독하지 않는다.
+  const { completeWatchContent } = load('lib/watch-content.ts');
+  const { dispositionFilename } = load('lib/watch-fetch.ts');
+  const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
+  const png = (w, h) => { const b = new Uint8Array(400); b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0); b.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8); new DataView(b.buffer).setUint32(16, w); new DataView(b.buffer).setUint32(20, h); return b; };
+  const bytesRequested = [];
+  const mediaFetcher = { async text() { throw new Error('no'); }, async bytes(url) {
+    bytesRequested.push(url);
+    if (url.endsWith('/7504')) return { url, bytes: pdfBytes, contentType: 'application/pdf', filename: '' };
+    if (url.endsWith('/7502')) return { url, bytes: new Uint8Array([0x50, 0x4b, 3, 4]), contentType: '', filename: '신입입사지원서.docx' };
+    if (url.endsWith('a.png')) return { url, bytes: png(900, 3000), contentType: 'image/png', filename: '' };
+    if (url.endsWith('b.png')) return { url, bytes: png(900, 12000), contentType: 'image/png', filename: '' };
+    if (url.endsWith('/attach1')) return { url, bytes: pdfBytes, contentType: '', filename: '입사지원서 양식_정규직.pdf' };
+    throw new Error(`unexpected ${url}`);
+  } };
+  const transcribed = [];
+  const deps = { pdfText: async () => '모집부문: 주식운용 신입\n'.repeat(30), transcribe: async (images) => { transcribed.push(images.length); return '모집부문: 채권운용\n자격: 학사 이상'; }, zipText: () => { throw new Error('form should not be read'); } };
+  const filled = await completeWatchContent({ text: '[채용] 2026년 하반기 신입사원 채용공고\n첨부 참조', images: syfund.images, files: syfund.files }, '[채용] 2026년 하반기 신입사원 채용공고', mediaFetcher, deps);
+  assert.match(filled, /\[첨부: 2026년 하반기 신입사원 채용공고\.pdf\]\n모집부문: 주식운용 신입/);
+  assert.deepEqual(transcribed, []);
+  assert.ok(!bytesRequested.some((u) => u.endsWith('/7502'))); // 이름이 입사지원서인 첨부는 받지도 않는다
+  // 첨부가 양식뿐이면(이름은 받아 봐야 아는 경우 포함) 본문 이미지를 판독한다. 한 변이 8000px를 넘는 이미지는 건너뛴다.
+  const fromImages = await completeWatchContent({ text: '2026년 하나자산신탁 하반기 직원 채용', images: syfund.images, files: [{ url: 'https://h/attach1', name: '' }] }, '2026년 하나자산신탁 하반기 직원 채용', mediaFetcher, deps);
+  assert.equal(fromImages, '2026년 하나자산신탁 하반기 직원 채용\n\n[본문 이미지 판독]\n모집부문: 채권운용\n자격: 학사 이상');
+  assert.deepEqual(transcribed, [1]);
+  // 본문이 충분하면 아무것도 받지 않는다. 판독이 실패해도 원래 글로 저장한다.
+  bytesRequested.length = 0;
+  const long = '모집부문 '.repeat(100);
+  assert.equal(await completeWatchContent({ text: long, images: syfund.images, files: syfund.files }, 't', mediaFetcher, deps), long);
+  assert.deepEqual(bytesRequested, []);
+  assert.equal(await completeWatchContent({ text: '제목', images: syfund.images, files: [] }, '제목', mediaFetcher, { ...deps, transcribe: async () => { throw new Error('model down'); } }), '제목');
+  // Content-Disposition 파일 이름: RFC 5987, 퍼센트 인코딩, latin1로 들어온 UTF-8 바이트.
+  assert.equal(dispositionFilename("attachment; filename*=UTF-8''%EC%B1%84%EC%9A%A9.pdf"), '채용.pdf');
+  assert.equal(dispositionFilename('attachment; filename="%EC%B1%84%EC%9A%A9.pdf"'), '채용.pdf');
+  assert.equal(dispositionFilename(`attachment; filename="${Buffer.from('채용공고.pdf', 'utf8').toString('latin1')}"`), '채용공고.pdf');
 
   // 수집 흐름: 감시 목록 → 새 공고만 열고, 금투협과 같은 공고는 연결만, 출처별 기록과 하루 한 번.
   const db = load('lib/db.ts');

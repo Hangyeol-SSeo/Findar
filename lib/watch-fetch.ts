@@ -72,6 +72,25 @@ export function robotsAllows(rules: RobotsRule[], path: string): boolean {
 export interface WatchFetcher {
   /** HTML·텍스트 페이지를 받는다(EUC-KR 해석 포함). 최종 주소도 돌려준다. */
   text(url: string, init?: { method?: "GET" | "POST"; body?: string; contentType?: string }): Promise<{ url: string; text: string }>;
+  /** 첨부파일·이미지를 받는다(maxBytes를 넘으면 실패). 파일 이름은 Content-Disposition에서 읽는다. */
+  bytes?(url: string, maxBytes: number): Promise<{ url: string; bytes: Uint8Array; contentType: string; filename: string }>;
+}
+
+// Content-Disposition의 파일 이름. filename*=UTF-8''… 를 먼저, 국내 사이트는 filename="…"에 UTF-8·EUC-KR 바이트를 그대로
+// 넣거나 퍼센트 인코딩하는 경우가 많다.
+export function dispositionFilename(header: string | null): string {
+  if (!header) return "";
+  const star = header.match(/filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/);
+  if (star) { try { return decodeURIComponent(star[1].trim()); } catch { /* 아래로 */ } }
+  const plain = header.match(/filename\s*=\s*"?([^";]+)"?/)?.[1]?.trim() ?? "";
+  if (!plain) return "";
+  try { if (/%[0-9a-f]{2}/i.test(plain)) return decodeURIComponent(plain.replace(/\+/g, " ")); } catch { /* 그대로 */ }
+  // fetch는 헤더를 latin1로 준다. UTF-8·EUC-KR 바이트였다면 다시 해석한다.
+  const raw = Uint8Array.from([...plain].map((c) => c.charCodeAt(0) & 0xff));
+  for (const charset of ["utf-8", "euc-kr"]) {
+    try { return new TextDecoder(charset, { fatal: true }).decode(raw); } catch { /* 다음 */ }
+  }
+  return plain;
 }
 
 export function createWatchFetcher(fetchImpl: typeof fetch = fetch, { gapMs = HOST_GAP_MS, signal }: { gapMs?: number; signal?: AbortSignal } = {}): WatchFetcher {
@@ -156,6 +175,19 @@ export function createWatchFetcher(fetchImpl: typeof fetch = fetch, { gapMs = HO
   }
 
   return {
+    async bytes(url, maxBytes) {
+      await assertAllowed(url);
+      const res = await raw(url);
+      const finalUrl = res.url || url;
+      if (finalUrl !== url) await assertAllowed(finalUrl);
+      if (res.status === 401 || res.status === 403 || res.status === 429) throw new WatchBlockedError(`HTTP ${res.status} — 자동 접근이 막힘`);
+      if (!res.ok) throw new WatchFetchError(`HTTP ${res.status}`);
+      const length = Number(res.headers.get("content-length") ?? 0);
+      if (length > maxBytes) throw new WatchFetchError("파일이 너무 큼");
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length > maxBytes) throw new WatchFetchError("파일이 너무 큼");
+      return { url: finalUrl, bytes, contentType: res.headers.get("content-type") ?? "", filename: dispositionFilename(res.headers.get("content-disposition")) };
+    },
     async text(url, init = {}) {
       await assertAllowed(url);
       const res = await raw(url, init);

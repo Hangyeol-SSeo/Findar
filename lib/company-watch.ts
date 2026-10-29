@@ -17,11 +17,13 @@ import { findDuplicate, type DedupPosting } from "./job-dedup";
 import { WATCH_SEQ_PREFIXES, isKofiaSeq, isWatchSeq } from "./job-source";
 import { isManualSeq } from "./manual-jobs";
 import { isCollectable, readWatchlist, type CollectableSourceType, type WatchCompany, type WatchSource } from "./company-watchlist";
-import { WATCH_ADAPTERS, type WatchPosting } from "./watch-adapters";
+import { WATCH_ADAPTERS, type WatchContent, type WatchPosting } from "./watch-adapters";
+import { completeWatchContent } from "./watch-content";
 import { WatchBlockedError, createWatchFetcher, type WatchFetcher } from "./watch-fetch";
 
-// 감시 목록(lib/company-watchlist.ts)의 채용 사이트를 돌며 금투협에 없는 공고를 찾는다. AI 없음 — 새 공고의 본문까지만
-// 읽어 돌려주고, 요약·매칭·저장은 공고 수집 경로(app/api/jobs/route.ts)가 금투협 공고와 똑같이 한다.
+// 감시 목록(lib/company-watchlist.ts)의 채용 사이트를 돌며 금투협에 없는 공고를 찾는다. 새 공고의 본문까지만 읽어
+// 돌려주고, 요약·매칭·저장은 공고 수집 경로(app/api/jobs/route.ts)가 금투협 공고와 똑같이 한다. AI는 본문이 이미지뿐인
+// 공고의 이미지 판독(lib/watch-content.ts)에만 쓴다.
 //  - 출처마다 하루 한 번만 돈다(watch_runs). 차단(blocked)된 출처는 일주일 동안 건너뛴다. 설정 화면의 "다시 확인"이 기록을 지운다.
 //  - 이미 저장했거나 중복으로 연결한 공고는 다시 열지 않는다. 마감이 지난 것이 확실한 공고(목록에 마감일이 있음)는 열지 않는다.
 //  - 금투협·직접 추가 공고와 같은 공고면(lib/job-dedup.ts) 저장하지 않고 job_links에 연결만 남긴다(요약 비용도 들지 않는다).
@@ -99,6 +101,8 @@ function keepPosting(posting: WatchPosting, source: WatchSource, now: Date): boo
 export interface CompanyWatchDeps {
   fetcher: WatchFetcher;
   now: () => Date;
+  /** 얇은 본문 채우기(첨부·본문 이미지). 기본은 lib/watch-content.ts — 이미지 판독은 AI를 부른다. */
+  complete: (content: WatchContent, title: string, fetcher: WatchFetcher) => Promise<string>;
 }
 
 export async function runCompanyWatch({
@@ -114,6 +118,7 @@ export async function runCompanyWatch({
 } = {}): Promise<WatchResult> {
   const now = deps.now ?? (() => new Date());
   const fetcher = deps.fetcher ?? createWatchFetcher(fetch, { signal });
+  const complete = deps.complete ?? ((content: WatchContent, title: string, f: WatchFetcher) => completeWatchContent(content, title, f));
   const tasks = dueWatchTasks(now(), force);
   const details: WatchDetail[] = [];
   let linked = 0;
@@ -152,6 +157,7 @@ export async function runCompanyWatch({
         if (opened >= (source.type === "pageWatch" ? MAX_NEW_PER_PAGE_SOURCE : MAX_NEW_PER_SOURCE)) break;
         opened += 1;
         const content = await adapter.content(posting, fetcher);
+        const text = await complete(content, posting.title, fetcher);
         details.push({
           seq: posting.seq,
           company: company.name,
@@ -163,8 +169,9 @@ export async function runCompanyWatch({
           views: "",
           applicationPeriod: "",
           siteUrl: posting.url,
-          attachments: [],
-          content,
+          // 첨부 이름은 지원 방법 판정(lib/application-method.ts: 입사지원서 양식 첨부 여부)에도 쓰인다.
+          attachments: content.files.map((file) => ({ name: file.name, url: file.url })),
+          content: text,
           knownDeadline: posting.deadline,
           mayNotBePosting: posting.mayNotBePosting === true,
         });

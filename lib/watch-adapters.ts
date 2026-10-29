@@ -37,9 +37,37 @@ export interface WatchListOptions {
   now?: Date;
 }
 
+/** 공고 본문: 글과, 글이 얇을 때 보탤 본문 이미지·첨부파일 주소(lib/watch-content.ts가 읽는다). */
+export interface WatchContent {
+  text: string;
+  images: string[];
+  files: { url: string; name: string }[];
+}
+
+const NOT_CONTENT_IMAGE = /logo|icon|btn|button|bullet|arrow|blank|spacer|banner|sns|top_|loading|ajax/i;
+const FILE_LINK = /\.(?:pdf|docx|hwpx|hwp)(?:$|[?#\s])|download|filedown|attach/i;
+
+/** 본문 영역 안의 이미지·첨부 링크(절대 주소, 중복 제거). */
+export function contentMedia($: cheerio.CheerioAPI, root: cheerio.Cheerio<never>, base: string): Pick<WatchContent, "images" | "files"> {
+  const images: string[] = [];
+  root.find("img[src]").each((_, el) => {
+    const src = ($(el).attr("src") ?? "").trim();
+    if (!src || src.startsWith("data:") || NOT_CONTENT_IMAGE.test(src)) return;
+    try { const url = new URL(src, base).toString(); if (!images.includes(url)) images.push(url); } catch { /* 건너뜀 */ }
+  });
+  const files: WatchContent["files"] = [];
+  root.find("a[href]").each((_, el) => {
+    const href = ($(el).attr("href") ?? "").trim();
+    const name = oneLine($(el).text()) || oneLine($(el).parent().text()).slice(0, 120);
+    if (!href || /^(?:javascript:|#|mailto:)/i.test(href) || !FILE_LINK.test(`${href} ${name}`)) return;
+    try { const url = new URL(href, base).toString(); if (!files.some((f) => f.url === url)) files.push({ url, name }); } catch { /* 건너뜀 */ }
+  });
+  return { images: images.slice(0, 10), files: files.slice(0, 10) };
+}
+
 export interface WatchAdapter {
   list(base: string, fetcher: WatchFetcher, options?: WatchListOptions): Promise<WatchPosting[]>;
-  content(posting: WatchPosting, fetcher: WatchFetcher): Promise<string>;
+  content(posting: WatchPosting, fetcher: WatchFetcher): Promise<WatchContent>;
 }
 
 const SEOUL_DATE_TIME = new Intl.DateTimeFormat("sv-SE", {
@@ -118,7 +146,8 @@ export const greetingAdapter: WatchAdapter = {
     const query = dehydratedQueries(nextData(page.text)).find((q) => Array.isArray(q.queryKey) && q.queryKey[1] === "getOpeningById");
     const detail = (query?.state?.data as { data?: { openingsInfo?: { detail?: string } } } | undefined)?.data?.openingsInfo?.detail;
     if (typeof detail !== "string") throw new WatchFetchError("그리팅 공고 본문을 찾지 못함");
-    return htmlToText(detail);
+    const $ = cheerio.load(detail);
+    return { text: htmlToText(detail), ...contentMedia($, $.root() as cheerio.Cheerio<never>, page.url) };
   },
 };
 
@@ -203,8 +232,8 @@ export const saraminAtsAdapter: WatchAdapter = {
   async content(posting, fetcher) {
     const page = await fetcher.text(posting.contentUrl);
     const $ = cheerio.load(page.text);
-    const container = $(".recruit").first();
-    return htmlToText(container.length ? container.html() ?? "" : $("body").html() ?? "");
+    const container = ($(".recruit").first().length ? $(".recruit").first() : $("body")) as cheerio.Cheerio<never>;
+    return { text: htmlToText(container.html() ?? ""), ...contentMedia($, container, page.url) };
   },
 };
 
@@ -260,7 +289,7 @@ export const recruiterAppsiteAdapter: WatchAdapter = {
       });
   },
   async content(posting) {
-    return posting.inlineContent ?? "";
+    return { text: posting.inlineContent ?? "", images: [], files: [] };
   },
 };
 
@@ -397,7 +426,7 @@ export const pageWatchAdapter: WatchAdapter = {
     return [...postings.values()];
   },
   async content(posting, fetcher) {
-    if (posting.inlineContent !== undefined) return posting.inlineContent;
+    if (posting.inlineContent !== undefined) return { text: posting.inlineContent, images: [], files: [] };
     const page = await fetcher.text(posting.contentUrl);
     const $ = cheerio.load(page.text);
     $("script, style, noscript, template").remove();
@@ -408,9 +437,10 @@ export const pageWatchAdapter: WatchAdapter = {
     const main = $("article, [class*=view], [class*=detail], [class*=board_read], main, #content, .content, #contents, .contents")
       .toArray().map((el) => $(el)).filter((el) => oneLine(el.text()).length >= 40)
       .sort((a, b) => oneLine(b.text()).length - oneLine(a.text()).length)[0];
-    const text = htmlToText((main ?? $("body")).html() ?? "").slice(0, 30_000);
+    const root = (main ?? $("body")) as cheerio.Cheerio<never>;
+    const text = htmlToText(root.html() ?? "").slice(0, 30_000);
     // 본문이 이미지·첨부파일뿐이면 글이 거의 없다. 요약기가 최소한 제목은 보게 한다.
-    return text.includes(posting.title) ? text : `${posting.title}\n${text}`.trim();
+    return { text: text.includes(posting.title) ? text : `${posting.title}\n${text}`.trim(), ...contentMedia($, root, page.url) };
   },
 };
 
