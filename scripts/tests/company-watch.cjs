@@ -49,7 +49,7 @@ function nextDataPage(queries) {
   process.chdir(scratch);
   const { parseRobots, robotsAllows, WatchBlockedError } = load('lib/watch-fetch.ts');
   const { companyKey, titleKey, titleSimilarity, duplicateReason } = load('lib/job-dedup.ts');
-  const { greetingAdapter, saraminAtsAdapter, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
+  const { greetingAdapter, saraminAtsAdapter, recruiterAppsiteAdapter, periodEnd, htmlToText } = load('lib/watch-adapters.ts');
   const { jobSource, postingLink, isWatchSeq, isKofiaSeq } = load('lib/job-source.ts');
 
   // robots.txt: 가장 긴 규칙이 이긴다(recruiter.co.kr 구형 테넌트는 Disallow: / 뒤에 Allow: /appsite/).
@@ -188,6 +188,32 @@ function nextDataPage(queries) {
   assert.equal(await saraminAtsAdapter.content(reitpiaPostings[0], reitpia), '회사소개\n모집부문 재무');
   assert.deepEqual(await saraminAtsAdapter.list('https://koscom.saramin.co.kr/', fakeFetcher(
     { 'https://koscom.saramin.co.kr/ending_page.html': '<html>종료</html>' }, { 'https://koscom.saramin.co.kr/': 'https://koscom.saramin.co.kr/ending_page.html' })), []);
+
+  // recruiter.co.kr 구형: /appsite/ 아래 목록만. 본문 페이지(/app/)는 robots.txt 금지라 요청하지 않고 목록 정보로 본문을 만든다.
+  const recruiterRequests = [];
+  const recruiterFetcher = {
+    async text(url, init = {}) {
+      recruiterRequests.push([init.method ?? 'GET', url, init.body ?? '']);
+      if (url === 'https://ls-sec.recruiter.co.kr/appsite/company/index') return { url, text: '<input type="hidden" id="appsiteSn" value="6179"/>' };
+      if (url === 'https://ls-sec.recruiter.co.kr/appsite/company/getMainView' && init.method === 'POST' && init.body === 'appsiteSn=6179') {
+        return { url, text: JSON.stringify({ jobnoticeInProgressList: [
+          { jobnoticeSn: 269740, jobnoticeName: '경력직 수시채용(고객만족센터(인바운드))', applyStartDate: '2026-10-20 00:00:00', applyEndDate: '2026-11-02 23:59:59', receiptState: '접수중', recruitTypeName: '일반채용', recruitClassName: '수시', systemKindCode: 'MRS2' },
+          { jobnoticeSn: 265005, jobnoticeName: '2026년 하반기 신입사원(채용전제형 인턴) 공개 채용(대졸)', applyStartDate: '2026-08-31 08:00:00', applyEndDate: '2026-09-13 23:59:59', receiptState: '접수마감', systemKindCode: 'MRS2' },
+        ] }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    },
+  };
+  const recruiterPostings = await recruiterAppsiteAdapter.list('https://ls-sec.recruiter.co.kr/', recruiterFetcher);
+  assert.deepEqual(recruiterPostings.map((p) => [p.seq, p.title, p.deadline, p.postedAt, p.url]), [[
+    'recruiter-ls-sec-269740', '경력직 수시채용(고객만족센터(인바운드))', '2026-11-02', '2026-10-20 00:00:00',
+    'https://ls-sec.recruiter.co.kr/app/jobnotice/view?systemKindCode=MRS2&jobnoticeSn=269740',
+  ]]);
+  const recruiterContent = await recruiterAppsiteAdapter.content(recruiterPostings[0], recruiterFetcher);
+  assert.match(recruiterContent, /^경력직 수시채용\(고객만족센터\(인바운드\)\)\n채용 구분: 일반채용 · 수시\n접수 기간: 2026-10-20 00:00:00 ~ 2026-11-02 23:59:59\n※/);
+  assert.ok(recruiterRequests.every(([, url]) => new URL(url).pathname.startsWith('/appsite/')));
+  assert.equal(jobSource('recruiter-ls-sec-269740'), 'recruiterAppsite');
+  assert.equal(robotsAllows(parseRobots('User-agent: *\nDisallow: /\nAllow: /appsite/\nAllow: /bbs/appsite/\nUser-agent: Googlebot\nUser-agent: Yeti\nAllow: /\n'), '/app/jobnotice/view'), false);
 
   // 수집 흐름: 감시 목록 → 새 공고만 열고, 금투협과 같은 공고는 연결만, 출처별 기록과 하루 한 번.
   const db = load('lib/db.ts');

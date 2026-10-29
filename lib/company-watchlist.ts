@@ -4,9 +4,9 @@ import { normalizeCompanyName } from "./company-normalize";
 
 // 금투협 게시판 밖에서 공고를 확인할 회사 목록(감시 목록). 설계: docs/multi-source-jobs.md 2절 D·3절.
 // 금투협에 경력·수시 공고를 올리는 회사도 신입 공채·인턴은 자체 채용 사이트에만 올리는 일이 많다(메리츠·NH·키움·DB·LS).
-// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts뿐이고,
+// 회사마다 채용 경로(source) 하나 이상을 적는다. 지금 자동으로 받는 경로는 greeting·saraminAts·recruiterAppsite이고,
 // 나머지 유형은 어댑터가 생길 때까지 설정 화면에 "채용 사이트 바로가기"로만 보인다:
-//  - recruiterAppsite·endpoint·pageWatch·workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
+//  - endpoint·pageWatch·workday: 받을 수 있는 경로를 확인했고 어댑터만 아직 없음
 //  - unknown: 목록이 브라우저에서만 보여 데이터 경로를 아직 확인하지 않음(확인 필요)
 //  - blocked: robots.txt가 데이터 경로를 금지하거나 자동 요청을 차단함(우회하지 않음). 사용자가 직접 확인한다
 //  - saraminApi: 사람인 일반 공고에만 올림. 사람인 오픈API 승인 뒤 받는다
@@ -14,7 +14,7 @@ import { normalizeCompanyName } from "./company-normalize";
 
 export type WatchSourceType = "greeting" | "saraminAts" | "recruiterAppsite" | "endpoint" | "pageWatch" | "workday" | "unknown" | "blocked" | "saraminApi";
 
-export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts"] as const;
+export const COLLECTABLE_SOURCE_TYPES = ["greeting", "saraminAts", "recruiterAppsite"] as const;
 export type CollectableSourceType = (typeof COLLECTABLE_SOURCE_TYPES)[number];
 
 export function isCollectable(type: WatchSourceType): type is CollectableSourceType {
@@ -24,7 +24,7 @@ export function isCollectable(type: WatchSourceType): type is CollectableSourceT
 export const WATCH_SOURCE_LABELS: Record<WatchSourceType, string> = {
   greeting: "그리팅",
   saraminAts: "사람인 채용 사이트",
-  recruiterAppsite: "recruiter.co.kr 구형(준비 중)",
+  recruiterAppsite: "recruiter.co.kr 채용 사이트",
   endpoint: "자체 채용 사이트(준비 중)",
   pageWatch: "자체 게시판(준비 중)",
   workday: "Workday(준비 중)",
@@ -86,11 +86,11 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("한국증권금융", "유관기관", [{ type: "saraminAts", url: "https://ksfc.saramin.co.kr/" }]),
     c("코스콤", "유관기관", [{ type: "saraminAts", url: "https://koscom.saramin.co.kr/" }]),
 
-    // recruiter.co.kr 구형(/appsite/) — 받을 수 있음, 어댑터 준비 중
+    // recruiter.co.kr 구형(/appsite/) — 목록만 자동(본문 페이지 /app/은 robots.txt가 금지)
     c("SK증권", "증권", [{ type: "recruiterAppsite", url: "https://sks.recruiter.co.kr/" }]),
     c("엘에스증권", "증권", [{ type: "recruiterAppsite", url: "https://ls-sec.recruiter.co.kr/", note: "채용전제형 인턴" }]),
-    c("코람코자산운용", "자산운용", [{ type: "recruiterAppsite", url: "https://koramco.recruiter.co.kr/" }]),
-    c("코람코자산신탁", "신탁", [{ type: "recruiterAppsite", url: "https://koramco.recruiter.co.kr/" }]),
+    c("코람코자산운용", "자산운용", [{ type: "recruiterAppsite", url: "https://koramco.recruiter.co.kr/", titleIncludes: ["코람코자산운용"], note: "코람코 통합 채용 사이트" }]),
+    c("코람코자산신탁", "신탁", [{ type: "recruiterAppsite", url: "https://koramco.recruiter.co.kr/", titleIncludes: ["코람코자산신탁"], note: "코람코 통합 채용 사이트" }]),
     c("한국펀드평가", "데이터", [{ type: "recruiterAppsite", url: "https://kfr.recruiter.co.kr/" }]),
 
     // 자체 사이트의 같은 사이트 목록 API — 받을 수 있음, 어댑터 준비 중

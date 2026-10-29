@@ -20,6 +20,8 @@ export interface WatchPosting {
   postedAt: string; // YYYY-MM-DD HH:mm:ss(서울) 또는 ""
   deadline: string; // YYYY-MM-DD 또는 ""(모름)
   contentUrl: string; // 본문을 읽을 주소
+  /** 본문을 따로 열지 않고 목록 정보로 만든 본문(recruiter 구형: 본문 페이지가 robots.txt 금지). */
+  inlineContent?: string;
 }
 
 export interface WatchAdapter {
@@ -193,7 +195,64 @@ export const saraminAtsAdapter: WatchAdapter = {
   },
 };
 
+// recruiter.co.kr 구형 채용 사이트({slug}.recruiter.co.kr/appsite/…, 마이다스아이티). robots.txt가 `Disallow: /` 뒤에
+// `Allow: /appsite/`라 목록(POST /appsite/company/getMainView, 채용 사이트 번호 appsiteSn은 /appsite/company/index의
+// hidden input)만 받는다. 공고 본문 페이지(/app/jobnotice/view)는 금지 경로라 열지 않고, 목록의 제목·채용 구분·접수 기간을
+// 본문 대신 저장한다(본문 자체도 대개 이미지다). 사용자는 공고 페이지 링크로 원문을 연다.
+interface RecruiterJobnotice {
+  jobnoticeSn?: number;
+  jobnoticeName?: string;
+  applyStartDate?: string | null;
+  applyEndDate?: string | null;
+  receiptState?: string | null;
+  recruitTypeName?: string | null;
+  recruitClassName?: string | null;
+  systemKindCode?: string | null;
+}
+
+const RECRUITER_FIELDS_ONLY = "※ 이 채용 사이트는 공고 본문 페이지의 자동 수집을 robots.txt로 막고 있어 목록 정보만 저장했습니다. 본문은 공고 페이지에서 확인하세요.";
+
+export const recruiterAppsiteAdapter: WatchAdapter = {
+  async list(base, fetcher) {
+    const origin = new URL(base).origin;
+    const index = await fetcher.text(`${origin}/appsite/company/index`);
+    const appsiteSn = index.text.match(/appsiteSn"\s+value="(\d+)"/)?.[1] ?? index.text.match(/id="appsiteSn"[^>]*value="(\d+)"/)?.[1];
+    if (!appsiteSn) throw new WatchFetchError("recruiter 채용 사이트 번호를 찾지 못함(페이지 구조가 바뀌었을 수 있음)");
+    const main = await fetcher.text(`${origin}/appsite/company/getMainView`, {
+      method: "POST", body: `appsiteSn=${appsiteSn}`, contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+    });
+    let data: { jobnoticeInProgressList?: RecruiterJobnotice[]; message?: string };
+    try { data = JSON.parse(main.text); } catch { throw new WatchFetchError("recruiter 공고 목록 응답을 읽지 못함"); }
+    if (!Array.isArray(data.jobnoticeInProgressList)) throw new WatchFetchError(`recruiter 공고 목록이 없음${data.message ? `(${data.message})` : ""}`);
+    const slug = new URL(origin).hostname.split(".")[0].toLowerCase();
+    return data.jobnoticeInProgressList
+      .filter((j) => typeof j.jobnoticeSn === "number" && typeof j.jobnoticeName === "string" && !/마감/.test(j.receiptState ?? ""))
+      .map((j) => {
+        const url = `${origin}/app/jobnotice/view?systemKindCode=${encodeURIComponent(j.systemKindCode || "MRS2")}&jobnoticeSn=${j.jobnoticeSn}`;
+        const lines = [
+          j.jobnoticeName!.trim(),
+          [j.recruitTypeName, j.recruitClassName].filter(Boolean).length ? `채용 구분: ${[j.recruitTypeName, j.recruitClassName].filter(Boolean).join(" · ")}` : "",
+          j.applyStartDate || j.applyEndDate ? `접수 기간: ${j.applyStartDate ?? ""} ~ ${j.applyEndDate ?? ""}` : "",
+          RECRUITER_FIELDS_ONLY,
+        ].filter(Boolean);
+        return {
+          seq: `${WATCH_SEQ_PREFIXES.recruiterAppsite}${slug}-${j.jobnoticeSn}`,
+          title: j.jobnoticeName!.replace(/\s+/g, " ").trim(),
+          url,
+          postedAt: (j.applyStartDate ?? "").slice(0, 19),
+          deadline: /^\d{4}-\d{2}-\d{2}/.test(j.applyEndDate ?? "") ? j.applyEndDate!.slice(0, 10) : "",
+          contentUrl: "",
+          inlineContent: lines.join("\n"),
+        };
+      });
+  },
+  async content(posting) {
+    return posting.inlineContent ?? "";
+  },
+};
+
 export const WATCH_ADAPTERS: Record<WatchAdapterType, WatchAdapter> = {
   greeting: greetingAdapter,
   saraminAts: saraminAtsAdapter,
+  recruiterAppsite: recruiterAppsiteAdapter,
 };
