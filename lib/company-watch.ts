@@ -3,6 +3,7 @@ import {
   getDedupCandidates,
   getExistingSeqs,
   getLinkedSeqs,
+  getSeparatedSeqs,
   getWatchRuns,
   hasJobUserState,
   insertJobLink,
@@ -127,13 +128,14 @@ export async function runCompanyWatch({
 
       const seqs = postings.map((p) => p.seq);
       const known = new Set([...getExistingSeqs(seqs), ...getLinkedSeqs(seqs)]);
+      const separated = getSeparatedSeqs(seqs);
       const candidates: DedupPosting[] = getDedupCandidates(daysBefore(now(), DEDUP_WINDOW_DAYS))
         .map((row) => ({ seq: row.seq, company: row.company, title: row.title, deadline: row.deadline, url: row.siteUrl }));
 
       let opened = 0;
       for (const posting of postings) {
         if (known.has(posting.seq) || details.some((d) => d.seq === posting.seq)) continue;
-        const duplicate = findDuplicate({ seq: posting.seq, company: company.name, title: posting.title, deadline: posting.deadline, url: posting.url }, candidates);
+        const duplicate = separated.has(posting.seq) ? null : findDuplicate({ seq: posting.seq, company: company.name, title: posting.title, deadline: posting.deadline, url: posting.url }, candidates);
         if (duplicate) {
           insertJobLink({ seq: posting.seq, canonicalSeq: duplicate.match.seq, reason: duplicate.reason, title: posting.title, url: posting.url });
           linked += 1;
@@ -184,7 +186,8 @@ export function linkKofiaDuplicates(kofia: DedupPosting[], now: Date = new Date(
     .map((row) => ({ seq: row.seq, company: row.company, title: row.title, deadline: row.deadline, url: row.siteUrl }));
   let linked = 0;
   for (const posting of kofia) {
-    const duplicate = findDuplicate(posting, others);
+    if (getSeparatedSeqs([posting.seq]).size > 0) continue;
+    const duplicate = findDuplicate(posting, others.filter((o) => getSeparatedSeqs([o.seq]).size === 0));
     if (!duplicate) continue;
     const other = duplicate.match;
     const keepOther = isManualSeq(other.seq) || (isWatchSeq(other.seq) && hasJobUserState(other.seq));

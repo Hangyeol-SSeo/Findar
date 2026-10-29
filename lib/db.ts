@@ -194,6 +194,11 @@ addColumnIfMissing("bookmarked", "INTEGER NOT NULL DEFAULT 0");
 // 채용 사이트 감시로 받은 공고가 그 사이트 목록에서 사라진 시각(마감일을 적지 않는 공고가 많아 이것으로 닫는다).
 // upsertJobStmt의 SET에 넣지 않는다 — 감시(lib/company-watch.ts)만 바꾼다.
 addColumnIfMissing("sourceClosedAt", "INTEGER");
+{
+  const cols = db.prepare(`PRAGMA table_info(job_links)`).all() as { name: string }[];
+  // "중복 아님"으로 푼 시각. 행을 지우지 않는 이유: 지우면 다음 수집이 같은 공고를 다시 중복으로 묶는다.
+  if (!cols.some((c) => c.name === "separatedAt")) db.exec(`ALTER TABLE job_links ADD COLUMN separatedAt INTEGER`);
+}
 
 db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_matchScore ON jobs(matchScore)`);
 
@@ -380,8 +385,8 @@ const JOB_WITH_APPLICATION_SELECT = `
   LEFT JOIN applications ON applications.seq = jobs.seq
 `;
 
-// 다른 출처의 같은 공고로 연결된 쪽(job_links.seq)은 목록·매칭에서 뺀다.
-const NOT_LINKED_DUPLICATE = `jobs.seq NOT IN (SELECT seq FROM job_links)`;
+// 다른 출처의 같은 공고로 연결된 쪽(job_links.seq)은 목록·매칭에서 뺀다. 사용자가 "중복 아님"으로 푼 연결(separatedAt)은 제외.
+const NOT_LINKED_DUPLICATE = `jobs.seq NOT IN (SELECT seq FROM job_links WHERE separatedAt IS NULL)`;
 
 const selectJobsNeedingMatchStmt = db.prepare(`
   ${JOB_WITH_APPLICATION_SELECT}
@@ -1073,18 +1078,36 @@ export function saveMemo(scope: MemoScope, key: string, text: string, displayNam
   return { text, updatedAt: now };
 }
 
-export interface JobLinkRow { seq: string; canonicalSeq: string; reason: string; title: string; url: string; createdAt: number }
+export interface JobLinkRow { seq: string; canonicalSeq: string; reason: string; title: string; url: string; createdAt: number; separatedAt: number | null }
 
-export function insertJobLink(link: Omit<JobLinkRow, "createdAt">): void {
+export function insertJobLink(link: Omit<JobLinkRow, "createdAt" | "separatedAt">): void {
   db.prepare(`
     INSERT INTO job_links (seq, canonicalSeq, reason, title, url, createdAt) VALUES (@seq, @canonicalSeq, @reason, @title, @url, @createdAt)
     ON CONFLICT(seq) DO NOTHING
   `).run({ ...link, createdAt: Date.now() });
 }
 
+/** 중복으로 연결된(풀리지 않은) seq. */
 export function getLinkedSeqs(seqs: string[]): Set<string> {
-  const stmt = db.prepare(`SELECT seq FROM job_links WHERE seq = ?`);
+  const stmt = db.prepare(`SELECT seq FROM job_links WHERE seq = ? AND separatedAt IS NULL`);
   return new Set(seqs.filter((seq) => stmt.get(seq)));
+}
+
+/** 사용자가 "중복 아님"으로 푼 seq. 다시 중복으로 판정하지 않는다. */
+export function getSeparatedSeqs(seqs: string[]): Set<string> {
+  const stmt = db.prepare(`SELECT seq FROM job_links WHERE seq = ? AND separatedAt IS NOT NULL`);
+  return new Set(seqs.filter((seq) => stmt.get(seq)));
+}
+
+/** seq 공고와 같은 공고로 묶인 다른 출처 공고들(양쪽 방향, 풀린 것 제외). */
+export function getJobLinksFor(seq: string): JobLinkRow[] {
+  return db.prepare(`SELECT * FROM job_links WHERE (canonicalSeq = ? OR seq = ?) AND separatedAt IS NULL ORDER BY createdAt`).all(seq, seq) as JobLinkRow[];
+}
+
+export function separateJobLink(seq: string): JobLinkRow | undefined {
+  const row = db.prepare(`SELECT * FROM job_links WHERE seq = ?`).get(seq) as JobLinkRow | undefined;
+  if (row && !row.separatedAt) db.prepare(`UPDATE job_links SET separatedAt = ? WHERE seq = ?`).run(Date.now(), seq);
+  return row;
 }
 
 export function listJobLinks(): JobLinkRow[] {
@@ -1097,7 +1120,7 @@ export interface DedupCandidateRow { seq: string; company: string; title: string
 export function getDedupCandidates(sinceDate: string): DedupCandidateRow[] {
   return db.prepare(`
     SELECT seq, company, title, deadline, siteUrl FROM jobs
-    WHERE date >= ? AND seq NOT IN (SELECT seq FROM job_links)
+    WHERE date >= ? AND seq NOT IN (SELECT seq FROM job_links WHERE separatedAt IS NULL)
   `).all(sinceDate) as DedupCandidateRow[];
 }
 

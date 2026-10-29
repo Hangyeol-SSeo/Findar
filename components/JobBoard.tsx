@@ -11,6 +11,7 @@ import MemoPanel, { type MemoSaved } from "./MemoPanel";
 import ManualJobForm, { type ManualJobSaved } from "./ManualJobForm";
 import { isManualSeq } from "@/lib/manual-jobs";
 import { JOB_SOURCE_LABELS, isKofiaSeq, jobSource, postingLink } from "@/lib/job-source";
+import JobLinksNotice from "@/components/JobLinksNotice";
 import { normalizeCompanyName } from "@/lib/company-normalize";
 import type { Memo, MemoIndex } from "@/lib/memo-types";
 import { categorizePositions } from "@/lib/position-categories";
@@ -1374,6 +1375,8 @@ export default function JobBoard() {
                   }
                 />
               </div>
+
+              <JobLinksNotice key={selectedJob.seq} seq={selectedJob.seq} />
 
               {selectedJob.positions.length > 0 && (
                 <Section title="모집 직무">

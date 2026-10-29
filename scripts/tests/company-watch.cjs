@@ -294,6 +294,19 @@ function nextDataPage(queries) {
   assert.ok(active.includes('greeting-242300') && !active.includes('43001'));
   assert.ok(active.includes('42872') && active.includes('greeting-242100'));
 
+  // "중복 아님": 저장된 공고는 바로 목록에 돌아오고, 다시 묶이지 않는다.
+  assert.deepEqual(db.getJobLinksFor('42783').map((l) => l.seq), ['greeting-240402']);
+  db.separateJobLink('greeting-240402');
+  assert.ok(db.getActiveJobs().some((j) => j.seq === 'greeting-240402'));
+  assert.equal(linkKofiaDuplicates([{ ...niceKofia }], now), 0);
+  assert.deepEqual(db.getJobLinksFor('42783'), []);
+  // 저장하지 않고 연결만 했던 채용 사이트 공고는 풀면 다음 수집에서 받아 온다(다시 중복으로 판정하지 않음).
+  watchPages['https://kispricing.career.greetinghr.com/ko/home'] = nextDataPage([{ queryKey: ['openings'], state: { data: [opening(242026, kisGreeting.title, '2026-11-06T14:59:59Z')] } }]);
+  watchPages['https://kispricing.career.greetinghr.com/ko/o/242026'] = nextDataPage([{ queryKey: ['career', 'getOpeningById', {}], state: { data: { data: { openingsInfo: { detail: '<p>솔루션실 본문</p>' } } } } }]);
+  db.separateJobLink('greeting-242026');
+  const afterSeparate = await runCompanyWatch({ force: true, deps: { fetcher: watchFetcher, now: () => now } });
+  assert.deepEqual(afterSeparate.details.map((d) => d.seq), ['greeting-242026']);
+
   console.log('company-watch tests passed');
 })().catch((error) => {
   console.error(error);
