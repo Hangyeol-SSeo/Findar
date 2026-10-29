@@ -1376,7 +1376,7 @@ export default function JobBoard() {
                 />
               </div>
 
-              <JobLinksNotice key={selectedJob.seq} seq={selectedJob.seq} />
+              <JobLinksNotice key={`links:${selectedJob.seq}`} seq={selectedJob.seq} />
 
               {selectedJob.positions.length > 0 && (
                 <Section title="모집 직무">
