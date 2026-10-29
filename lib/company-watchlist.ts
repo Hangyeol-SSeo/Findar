@@ -53,6 +53,8 @@ export interface WatchCompany {
   segment: string;
   sources: WatchSource[];
   enabled: boolean;
+  /** 공채 시즌 감지 대상(lib/hiring-season.ts): 공고를 자동으로 받지 못하는데 신입 공채를 하는 회사. */
+  season?: boolean;
 }
 
 export interface Watchlist {
@@ -182,6 +184,19 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("우리펀드서비스", "사무관리", [{ type: "saraminApi", url: "https://www.saramin.co.kr/" }]),
   ],
 };
+
+// 공채 시즌 감지 기본 대상: 신입 공채를 하는데 그 공고를 자동으로 받지 못하는 회사(recruiter.co.kr 신형·나인하이어·한화인·
+// robots.txt 금지·요청 암호화·확인 필요). 저장된 감시 목록에 season 값이 없으면 이 목록을 따른다.
+export const DEFAULT_SEASON_COMPANIES = new Set([
+  "NH투자증권", "KB증권", "하나증권", "DB증권", "메리츠증권", "삼성증권", "미래에셋증권", "한국투자증권", "신한투자증권",
+  "교보증권", "현대차증권", "유안타증권", "한화투자증권", "아이엠증권", "유진투자증권", "흥국증권", "다올투자증권",
+  "미래에셋자산운용", "삼성자산운용", "한화자산운용", "한국투자신탁운용", "케이비자산운용", "엔에이치아문디자산운용",
+  "이지스자산운용", "한국신용평가",
+]);
+
+export function isSeasonTarget(company: WatchCompany): boolean {
+  return company.season ?? DEFAULT_SEASON_COMPANIES.has(company.name);
+}
 
 const WATCHLIST_PATH = () => join(process.cwd(), "data", "company-watchlist.json");
 

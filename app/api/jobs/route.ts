@@ -16,6 +16,8 @@ import {
 import { ensureProfile, getCachedProfile, type Profile } from "@/lib/profile";
 import { matchJobBatch, FALLBACK_MATCH, type JobMatch } from "@/lib/matcher";
 import { FreeRideRequestError } from "@/lib/job-ai";
+import { after } from "next/server";
+import { runSeasonCheck } from "@/lib/hiring-season";
 import { isNotPosting, linkKofiaDuplicates, recordNotPosting, runCompanyWatch } from "@/lib/company-watch";
 import { jobSource } from "@/lib/job-source";
 import {
@@ -51,6 +53,13 @@ export async function GET(request: Request) {
   // 회사 채용 사이트 확인: 기본은 출처마다 하루 한 번, "force"는 지금 전부, "off"는 건너뜀.
   const watchParam = searchParams.get("watch");
   const watchMode = watchParam === "off" || watchParam === "force" ? watchParam : "daily";
+
+  // 공채 시즌 감지는 웹 검색이라 몇 분 걸린다. 새로고침 응답을 막지 않게 응답이 끝난 뒤 돌린다(시즌 중, 회사마다 주 1회).
+  if (watchMode !== "off") {
+    after(() => runSeasonCheck().then((result) => {
+      if (result.checked || result.failed) console.info("[hiring-season]", JSON.stringify(result));
+    }).catch((error) => console.error("[hiring-season] 실패:", error)));
+  }
 
   const encoder = new TextEncoder();
   let closed = false;

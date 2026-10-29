@@ -171,6 +171,27 @@ db.exec(`
     createdAt INTEGER NOT NULL
   );
 
+  -- 공채 시즌 감지(lib/hiring-season.ts): 회사별 마지막 확인과, 찾은 공채 소식(공고가 아니라 알림). 닫은 알림은 dismissedAt.
+  CREATE TABLE IF NOT EXISTS season_checks (
+    company TEXT PRIMARY KEY,
+    checkedAt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS season_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT NOT NULL,
+    season TEXT NOT NULL,
+    title TEXT NOT NULL,
+    deadline TEXT NOT NULL DEFAULT '',
+    recruitUrl TEXT NOT NULL DEFAULT '',
+    articleUrl TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    foundAt INTEGER NOT NULL,
+    dismissedAt INTEGER,
+    UNIQUE (company, season, title)
+  );
+
   -- 채용 사이트 감시(lib/company-watch.ts)의 출처별 마지막 결과. 하루 한 번만 돌리는 기준이자 설정 화면의 상태 표시.
   CREATE TABLE IF NOT EXISTS watch_runs (
     company TEXT NOT NULL,
@@ -1198,4 +1219,40 @@ export function insertNotPosting(row: { seq: string; company: string; title: str
 export function getNotPostingSeqs(seqs: string[]): Set<string> {
   const stmt = db.prepare(`SELECT seq FROM watch_not_postings WHERE seq = ?`);
   return new Set(seqs.filter((seq) => stmt.get(seq)));
+}
+
+export interface SeasonCheckRow { company: string; checkedAt: number; status: string; message: string }
+
+export function getSeasonChecks(): SeasonCheckRow[] {
+  return db.prepare(`SELECT * FROM season_checks`).all() as SeasonCheckRow[];
+}
+
+export function saveSeasonCheck(row: SeasonCheckRow): void {
+  db.prepare(`INSERT INTO season_checks (company, checkedAt, status, message) VALUES (@company, @checkedAt, @status, @message)
+    ON CONFLICT(company) DO UPDATE SET checkedAt = excluded.checkedAt, status = excluded.status, message = excluded.message`).run(row);
+}
+
+export interface SeasonAlertRow {
+  id: number; company: string; season: string; title: string; deadline: string;
+  recruitUrl: string; articleUrl: string; evidence: string; foundAt: number; dismissedAt: number | null;
+}
+
+// 같은 회사·시즌·제목이면 한 건으로 두고 마감일·주소만 새 값으로 바꾼다(닫은 알림은 그대로 닫혀 있다).
+export function upsertSeasonAlert(row: Omit<SeasonAlertRow, "id" | "foundAt" | "dismissedAt">): void {
+  db.prepare(`
+    INSERT INTO season_alerts (company, season, title, deadline, recruitUrl, articleUrl, evidence, foundAt)
+    VALUES (@company, @season, @title, @deadline, @recruitUrl, @articleUrl, @evidence, @foundAt)
+    ON CONFLICT(company, season, title) DO UPDATE SET
+      deadline = CASE WHEN excluded.deadline != '' THEN excluded.deadline ELSE season_alerts.deadline END,
+      recruitUrl = CASE WHEN excluded.recruitUrl != '' THEN excluded.recruitUrl ELSE season_alerts.recruitUrl END,
+      articleUrl = excluded.articleUrl, evidence = excluded.evidence
+  `).run({ ...row, foundAt: Date.now() });
+}
+
+export function listSeasonAlerts(): SeasonAlertRow[] {
+  return db.prepare(`SELECT * FROM season_alerts ORDER BY CASE WHEN deadline = '' THEN 1 ELSE 0 END, deadline, foundAt DESC`).all() as SeasonAlertRow[];
+}
+
+export function dismissSeasonAlert(id: number): boolean {
+  return db.prepare(`UPDATE season_alerts SET dismissedAt = ? WHERE id = ? AND dismissedAt IS NULL`).run(Date.now(), id).changes > 0;
 }

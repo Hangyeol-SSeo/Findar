@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { WatchRunStatus, WatchlistCompanyView, WatchlistResponse, WatchlistSourceView } from "@/lib/watchlist-types";
+import type { SeasonAlertsResponse } from "@/lib/season-alert-types";
 
 const STATUS_LABELS: Record<WatchRunStatus, { text: string; className: string }> = {
   ok: { text: "확인함", className: "bg-emerald-50 text-emerald-700" },
@@ -67,6 +68,7 @@ export default function WatchlistSettings({ showToast }: { showToast: (message: 
 
   return (
     <div className="space-y-8">
+      <SeasonCheckLine showToast={showToast} />
       <div>
         <h3 className="text-sm font-semibold text-gray-700">자동으로 확인하는 채용 사이트 ({collected.length}곳)</h3>
         <p className="mt-1 text-xs text-gray-500">
@@ -146,6 +148,53 @@ function SourceLine({ source }: { source: WatchlistSourceView }) {
       ) : (
         <span className="text-gray-400">아직 확인 전</span>
       )}
+    </div>
+  );
+}
+
+// 공채 시즌 감지(lib/hiring-season.ts) 상태와 수동 확인. 시즌(3~5월·8~11월)에는 공고 새로고침 뒤 회사마다 주 1회 저절로 돈다.
+function SeasonCheckLine({ showToast }: { showToast: (message: string) => void }) {
+  const [season, setSeason] = useState<SeasonAlertsResponse | null>(null);
+  const [requested, setRequested] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/season-alerts", { cache: "no-store", signal: controller.signal })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((result: SeasonAlertsResponse | null) => { if (result) setSeason(result); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [requested]);
+
+  async function checkNow() {
+    const response = await fetch("/api/season-alerts", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "check" }),
+    }).catch(() => null);
+    showToast(response?.ok ? "공채 소식 확인을 시작했습니다. 몇 분 뒤 보드 위에 나타납니다." : "확인을 시작하지 못했습니다.");
+    setTimeout(() => setRequested((n) => n + 1), 1500);
+  }
+
+  if (!season) return null;
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-gray-700">공채 소식 확인</h3>
+        <span className="text-xs text-gray-500">
+          {season.inSeason ? `${season.season} 시즌 중 · 회사마다 주 1회` : "시즌(3~5월·8~11월)이 아니라 쉬는 중"} · 대상 {season.targetCount}곳
+          {season.lastCheckedAt ? ` · 마지막 확인 ${formatRanAt(season.lastCheckedAt)}` : " · 아직 확인 전"}
+        </span>
+        <button
+          type="button"
+          disabled={season.running}
+          onClick={checkNow}
+          className="ml-auto text-xs text-blue-600 hover:underline disabled:text-gray-300 disabled:no-underline"
+        >
+          {season.running ? "확인 중..." : "지금 확인"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-gray-500">
+        자동으로 공고를 받지 못하는 회사(NH·하나·DB·KB 공채·삼성·한화 등)의 이번 시즌 신입 공채 보도를 웹 검색으로 찾아 보드 위에 알려 줍니다. 공고로 저장하지는 않습니다.
+      </p>
     </div>
   );
 }
