@@ -84,6 +84,15 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       assert.equal(entries[1].title, '두 번째 질문');
       assert.equal(entries[1].lines[0].text, '두 번째 답변 그대로입니다.');
     });
+    test('resume prioritizes core records while full experience descriptions remain in details', () => {
+      const longDetail = '실제 수행한 활동의 상세 설명을 보존합니다. '.repeat(80);
+      const result = buildFreeformDocument('회사', role, { ...profile, activities: [{ ...profile.activities[0], detail: longDetail }] }, draft, defaults);
+      assert.equal(JSON.stringify(result.pages[0]).includes(longDetail), false);
+      assert.ok(JSON.stringify(result.pages[1]).includes(longDetail.trim()));
+      assert.equal(JSON.stringify(result.pages[0]).includes('테스트 교육'), false, 'detail identities are not duplicated on the resume');
+      const withoutDetails = buildFreeformDocument('회사', role, profile, draft, { ...defaults, includeDetails: false });
+      assert.ok(JSON.stringify(withoutDetails.pages[0]).includes('테스트 교육'), 'record identities remain when detail pages are omitted');
+    });
     test('military/personal details are optional; defaults from unsaved profiles are never facts', () => {
       assert.equal(JSON.stringify(built.pages).includes('비공개 주소'), false);
       assert.equal(JSON.stringify(built.pages).includes('군필'), false);

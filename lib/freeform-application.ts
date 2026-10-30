@@ -85,25 +85,31 @@ export function buildFreeformDocument(
     ...(p?.awards ?? []).map((a) => ["수상", text(a.date), text(a.name), join(a.organizer, a.detail)]),
   ];
   // Resume identities stay compact; unabridged descriptions live in detail pages.
-  if (blank || experienceRows.length) blocks.push({ type: "entries", title: "관련 경험 및 활용 역량", entries: [{ title: "", lines: blank
+  const showExperienceSummary = blank || !options.includeDetails;
+  if (showExperienceSummary && (blank || experienceRows.length)) blocks.push({ type: "entries", title: "관련 경험 및 활용 역량", entries: [{ title: "", lines: blank
     ? [{ label: "관련 경험", text: "[프로젝트·교육·활동명 / 기간 / 본인 역할]" }]
     : experienceRows.map(([category, when, name]) => ({ label: category, text: join(name, when) })) }] });
   if (blank || p?.skillsNote.trim() || p?.foreignLanguageSkills.length || p?.portfolioLinks.trim()) blocks.push({
-    type: "entries", title: experienceRows.length || blank ? "" : "관련 경험 및 활용 역량", entries: [{ title: "", lines: [
+    type: "entries", title: (showExperienceSummary && experienceRows.length) || (!blank && !p?.skillsNote.trim() && !p?.portfolioLinks.trim()) ? "" : "활용 역량 및 참고 자료", entries: [{ title: "", lines: [
       ...(blank || p?.skillsNote.trim() ? [{ label: "활용 역량", text: field(p?.skillsNote, "실제 활용 가능한 지식 및 도구") }] : []),
       ...(p?.foreignLanguageSkills ?? []).map((l) => ({ label: text(l.language), text: join(l.reading && `읽기 ${l.reading}`, l.writing && `쓰기 ${l.writing}`, l.speaking && `말하기 ${l.speaking}`) })),
       ...(blank || p?.portfolioLinks.trim() ? [{ label: "참고 자료", text: field(p?.portfolioLinks, "포트폴리오 등 자료 링크") }] : []),
     ] }],
   });
-  if (options.includeMilitary) blocks.push({ type: "entries", title: "병역", entries: [{ title: "", lines: [
-    { label: "복무 사항", text: blank ? "[병역 구분 / 군별 / 병과 / 계급 / 제대 구분]" : join(p?.militaryStatus, p?.militaryBranch, p?.militarySpecialty, p?.militaryRank, p?.militaryDischargeType) },
-    { label: "복무 기간", text: blank ? "[복무 기간]" : period(p?.militaryServiceStart ?? "", p?.militaryServiceEnd ?? "") },
-  ] }] });
-  if (options.includePersonalDetails) blocks.push({ type: "entries", title: "추가 인적사항", entries: [{ title: "", lines: [
-    { label: "생년월일", text: field(p?.birthDate, "생년월일") },
-    { label: "성별 및 국적", text: blank ? "[성별 / 국적]" : join(p?.gender, p?.nationality) },
-    { label: "주소", text: blank ? "[주소]" : [p?.postalCode, p?.address, p?.addressDetail].map(text).filter(Boolean).join(" ") },
-  ] }] });
+  const additionalLines: FreeformEntry["lines"] = [];
+  if (options.includeMilitary) {
+    const militaryPeriod = period(p?.militaryServiceStart ?? "", p?.militaryServiceEnd ?? "");
+    additionalLines.push({ label: "병역", text: blank ? "[병역 구분 / 군별 / 계급 / 복무 기간]"
+      : [join(p?.militaryStatus, p?.militaryBranch, p?.militarySpecialty, p?.militaryRank, p?.militaryDischargeType), militaryPeriod && `(${militaryPeriod})`].filter(Boolean).join("  ") });
+  }
+  if (options.includePersonalDetails) {
+    const genderNationality = join(p?.gender, p?.nationality);
+    additionalLines.push(
+      { label: "인적사항", text: blank ? "[생년월일 / 성별 / 국적]" : [p?.birthDate && `생년월일 ${p.birthDate}`, genderNationality && `성별 및 국적 ${genderNationality}`].filter(Boolean).join("  |  ") },
+      { label: "주소", text: blank ? "[주소]" : [p?.postalCode, p?.address, p?.addressDetail].map(text).filter(Boolean).join(" ") },
+    );
+  }
+  if (additionalLines.length) blocks.push({ type: "entries", title: "추가 기재사항", entries: [{ title: "", lines: additionalLines }] });
   const pages: FreeformPage[] = [{ title: "입사지원서", blocks }];
   if (options.includeDetails) {
     const details: FreeformBlock[] = [];
