@@ -42,7 +42,7 @@ class GenerateApplicationTests(unittest.TestCase):
             self.assertIn('PAGE', archive.read('word/footer1.xml').decode())
 
     def test_reference_package_parts_and_geometry_remain_unchanged(self):
-        payload = {'mode': 'blank', 'company': '[지원 회사]', 'role': '[지원 직무]', 'name': '[성명]', 'pages': [
+        payload = {'mode': 'blank', 'company': '[지원 회사]', 'role': '[지원 팀 또는 직무]', 'name': '[성명]', 'pages': [
             {'title': '입사지원서', 'blocks': []}, {'title': '경력 및 경험 상세', 'blocks': []}, {'title': '자기소개서', 'blocks': []},
         ]}
         with zipfile.ZipFile(module.TEMPLATE) as source, zipfile.ZipFile(io.BytesIO(base64.b64decode(module.generate(payload)['document']))) as output:
@@ -53,9 +53,21 @@ class GenerateApplicationTests(unittest.TestCase):
                     self.assertEqual(source.read(name), output.read(name), name)
             original = ET.fromstring(source.read('word/document.xml'))
             result = ET.fromstring(output.read('word/document.xml'))
-            # The blank form is the approved three-page prototype's exact elements.
+            # Blank output uses the current designed template's exact elements.
             self.assertEqual(ET.tostring(original), ET.tostring(result))
             self.assertIn('updateFields', output.read('word/settings.xml').decode())
+
+    def test_company_and_team_are_prominent_in_body_not_header_only(self):
+        payload = {'company': '지원 대상 회사', 'role': '리서치운용팀', 'name': '지원자', 'contacts': [], 'pages': [{'title': '입사지원서', 'blocks': []}]}
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(module.generate(payload)['document']))) as archive:
+            root = ET.fromstring(archive.read('word/document.xml'))
+            paragraphs = root.findall('w:body/w:p', NS)
+            self.assertEqual(''.join(paragraphs[1].itertext()), '지원 대상 회사')
+            self.assertIn('리서치운용팀', ''.join(paragraphs[2].itertext()))
+            self.assertEqual(paragraphs[1].find('w:r/w:rPr/w:sz', NS).get(module.tag('val')), '44')
+            self.assertEqual(paragraphs[2].findall('w:r', NS)[-1].find('w:rPr/w:sz', NS).get(module.tag('val')), '28')
+            self.assertIn('지원자', ''.join(paragraphs[3].itertext()))
+            self.assertFalse(root.findall('.//w:bookmarkStart', NS), 'authoring anchors must not be duplicated in generated text')
 
     def test_xml_invalid_controls_removed_without_dropping_korean_or_emoji(self):
         self.assertEqual(module.clean('한글\x00\x0b\n😀\t'), '한글\n😀\t')
