@@ -63,6 +63,8 @@ export interface WatchCompany {
 export interface Watchlist {
   version: 1;
   companies: WatchCompany[];
+  /** 이 목록을 저장할 때 있던 초기값 회사 이름. 그 뒤 초기값에 추가된 회사만 읽을 때 붙인다(없으면 옛 파일이라 빠진 초기값을 모두 붙인다). */
+  knownDefaults?: string[];
 }
 
 const c = (name: string, segment: string, sources: WatchSource[], enabled = true): WatchCompany => ({ name, segment, sources, enabled });
@@ -188,6 +190,26 @@ export const DEFAULT_WATCHLIST: Watchlist = {
     c("우리자산신탁", "신탁", [{ type: "blocked", url: "https://recruit.incruit.com/", note: "인크루트(robots.txt 금지)" }]),
     c("대한토지신탁", "신탁", [{ type: "blocked", url: "https://reitpia.saramin.co.kr/", note: "사람인 채용 사이트지만 이 회사만 robots.txt가 전체 금지" }]),
 
+    // 은행·보험(2026-10-30 추가) — 공채 소식만 본다(DEFAULT_SEASON_COMPANIES). 수시 공고까지 받으면 지점·콜센터 공고가 많아
+    // 보드가 커지므로 자동 수집은 기존 어댑터로 바로 되는 AIA생명(Workday)만. 채용 사이트는 금투협 공고에 적힌 것만 적었다.
+    c("국민은행", "은행", []),
+    c("신한은행", "은행", [{ type: "blocked", url: "https://shinhan.recruiter.co.kr/", note: "recruiter.co.kr 신형" }]),
+    c("하나은행", "은행", [{ type: "blocked", url: "https://hanabankhr.career.co.kr/", note: "career.co.kr: robots.txt 전체 금지" }]),
+    c("우리은행", "은행", [{ type: "blocked", url: "https://recruit.incruit.com/wooribank/", note: "인크루트 공용 채용: robots.txt 금지" }]),
+    c("NH농협은행", "은행", [{ type: "unknown", url: "https://with.nonghyup.com/" }]),
+    c("IBK기업은행", "은행", [{ type: "unknown", url: "https://ibk.incruit.com/", note: "인크루트 기업용(지원서 경로만 robots 금지)" }]),
+    c("한국산업은행", "은행", [{ type: "unknown", url: "https://recruit.kdb.co.kr/" }]),
+    c("수협은행", "은행", [{ type: "blocked", url: "https://recruit.incruit.com/suhyup-bank/", note: "인크루트 공용 채용: robots.txt 금지" }]),
+    c("삼성생명보험", "보험", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용: 목록 API가 브라우저 세션을 요구함" }]),
+    c("삼성화재해상보험", "보험", [{ type: "unknown", url: "https://www.samsungcareers.com/", note: "삼성 채용: 목록 API가 브라우저 세션을 요구함" }]),
+    c("한화생명보험", "보험", [{ type: "blocked", url: "https://www.hanwhain.com/", note: "한화인(접속 대기열)" }]),
+    c("교보생명보험", "보험", []),
+    c("DB손해보험", "보험", []),
+    c("현대해상화재보험", "보험", []),
+    c("KB손해보험", "보험", []),
+    c("메리츠화재해상보험", "보험", []),
+    c("AIA생명보험", "보험", [{ type: "workday", url: "https://aia.wd3.myworkdayjobs.com/External" }]),
+
     // 사람인 일반 공고 — 오픈API 승인 뒤
     c("상상인증권", "증권", [{ type: "saraminApi", url: "https://www.saramin.co.kr/" }]),
     c("에셋플러스자산운용", "자산운용", [{ type: "saraminApi", url: "https://www.saramin.co.kr/", note: "자체 사이트는 robots.txt가 금지" }]),
@@ -204,6 +226,9 @@ export const DEFAULT_SEASON_COMPANIES = new Set([
   "교보증권", "현대차증권", "유안타증권", "한화투자증권", "아이엠증권", "유진투자증권", "흥국증권", "다올투자증권",
   "미래에셋자산운용", "삼성자산운용", "한화자산운용", "한국투자신탁운용", "케이비자산운용", "엔에이치아문디자산운용",
   "이지스자산운용", "한국신용평가",
+  // 은행·보험(공채 소식만)
+  "국민은행", "신한은행", "하나은행", "우리은행", "NH농협은행", "IBK기업은행", "한국산업은행", "수협은행",
+  "삼성생명보험", "삼성화재해상보험", "한화생명보험", "교보생명보험", "DB손해보험", "현대해상화재보험", "KB손해보험", "메리츠화재해상보험",
 ]);
 
 export function isSeasonTarget(company: WatchCompany): boolean {
@@ -217,7 +242,16 @@ export function readWatchlist(): Watchlist {
   if (!existsSync(path)) return DEFAULT_WATCHLIST;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as Watchlist;
-    if (parsed?.version === 1 && Array.isArray(parsed.companies)) return parsed;
+    if (parsed?.version === 1 && Array.isArray(parsed.companies)) {
+      // 저장된 목록(회사를 끄거나 켠 적이 있으면 생긴다)을 만든 뒤 초기값에 추가된 회사는 뒤에 붙인다(은행·보험 등).
+      const saved = new Set(parsed.companies.map((company) => normalizeCompanyName(company.name)));
+      const known = new Set((parsed.knownDefaults ?? []).map(normalizeCompanyName));
+      const added = DEFAULT_WATCHLIST.companies.filter((company) => {
+        const key = normalizeCompanyName(company.name);
+        return !saved.has(key) && !known.has(key);
+      });
+      return added.length ? { ...parsed, companies: [...parsed.companies, ...added] } : parsed;
+    }
   } catch (error) {
     console.error("[watchlist] data/company-watchlist.json을 읽지 못해 초기값을 씁니다:", error);
   }
@@ -228,7 +262,8 @@ export function writeWatchlist(list: Watchlist): void {
   const path = WATCHLIST_PATH();
   mkdirSync(join(process.cwd(), "data"), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(list, null, 2)}\n`);
+  const knownDefaults = DEFAULT_WATCHLIST.companies.map((company) => company.name);
+  writeFileSync(tmp, `${JSON.stringify({ ...list, knownDefaults }, null, 2)}\n`);
   renameSync(tmp, path);
 }
 

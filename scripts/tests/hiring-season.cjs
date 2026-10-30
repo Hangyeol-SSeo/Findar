@@ -31,6 +31,21 @@ function load(relative) {
   const { writeWatchlist } = load('lib/company-watchlist.ts');
   const hs = load('lib/hiring-season.ts');
 
+  // 기본 공채 대상은 모두 감시 목록 초기값에 있다(은행·보험 포함). 저장된 목록에 없는 초기값 회사는 읽을 때 붙는다.
+  const { DEFAULT_WATCHLIST, DEFAULT_SEASON_COMPANIES, readWatchlist } = load('lib/company-watchlist.ts');
+  const defaultNames = new Set(DEFAULT_WATCHLIST.companies.map((c) => c.name));
+  assert.deepEqual([...DEFAULT_SEASON_COMPANIES].filter((name) => !defaultNames.has(name)), []);
+  assert.ok(DEFAULT_SEASON_COMPANIES.has('국민은행') && DEFAULT_SEASON_COMPANIES.has('메리츠화재해상보험'));
+  // 이 기능 전에 저장된 파일(knownDefaults 없음): 빠진 초기값을 붙인다. writeWatchlist로 저장한 목록은 그대로다.
+  fs.mkdirSync(path.join(scratch, 'data'), { recursive: true });
+  fs.writeFileSync(path.join(scratch, 'data', 'company-watchlist.json'), JSON.stringify({ version: 1, companies: [{ name: 'NH투자증권', segment: '증권', enabled: false, sources: [] }] }));
+  const merged = readWatchlist();
+  assert.equal(merged.companies[0].enabled, false); // 사용자가 끈 값은 그대로
+  assert.ok(merged.companies.some((c) => c.name === '국민은행'));
+  assert.equal(merged.companies.filter((c) => c.name === 'NH투자증권').length, 1);
+  writeWatchlist({ version: 1, companies: [{ name: 'NH투자증권', segment: '증권', enabled: false, sources: [] }] });
+  assert.deepEqual(readWatchlist().companies.map((c) => c.name), ['NH투자증권']);
+
   // 시즌: 3~5월·8~11월(서울 기준). 시즌 이름은 상·하반기.
   assert.equal(hs.isHiringSeason(new Date('2026-10-29T03:00:00Z')), true);
   assert.equal(hs.isHiringSeason(new Date('2026-07-15T03:00:00Z')), false);
