@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  outputFileTracingIncludes: {
+    "/api/applications/*/fill/freeform": [
+      "./scripts/generate-application-docx.py",
+      "./assets/templates/freeform-application.docx",
+    ],
+  },
 };
 
 export default nextConfig;
