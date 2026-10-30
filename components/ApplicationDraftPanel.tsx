@@ -3,11 +3,13 @@
 import { useState, useEffect, useRef } from "react";
 import { detectBrowserExtension } from "@/lib/browser-extension-client";
 import { characterCount, type EssayAnswer } from "@/lib/essay-contract";
-import { taskActive, type ApplicationTask } from "@/lib/application-task-types";
+import { taskActive, type ApplicationTask, type DocumentFillResult } from "@/lib/application-task-types";
+import type { FreeformOptions } from "@/lib/freeform-application";
 import type { ApplicationDraft } from "@/lib/application-draft";
 import type { SubmissionMethodInfo } from "@/lib/application-method";
 import { EssayImportForm, EssayReviewTools, type AnswerAction } from "./EssayReviewTools";
 import ApplicationTaskCancelButton from "./ApplicationTaskCancelButton";
+import FreeformApplicationForm from "./FreeformApplicationForm";
 import Toast, { useToast } from "./Toast";
 
 const inputStyle = "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200";
@@ -65,6 +67,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   const [extension, setExtension] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [documentResult, setDocumentResult] = useState<{ href: string; filename: string; filled: number; skipped: { label: string; reason: string }[]; note: string } | null>(null);
+  const [freeformResult, setFreeformResult] = useState<DocumentFillResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const controller = useRef<AbortController | null>(null);
 
@@ -75,6 +78,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
       receiveDraft(data.draft); setFinals(data.finals ?? []); setMethod(data.submissionMethod); setUrl(data.siteUrl || ""); setResearchNotice(data.companyResearchNotice ?? null);
+      if (data.submissionMethod?.freeform?.status === "freeform") setWorkspace("fill");
     }).catch((e) => { if (!abort.signal.aborted) setError(e.message); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
@@ -117,7 +121,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
           handledTasks.current.add(task.id);
           const watched = watchedTasks.current.has(task.id);
           if (task.status === "cancelled") {
-            if (task.kind !== "document") reloadDraft = true;
+            if (task.kind !== "document" && task.kind !== "freeform") reloadDraft = true;
             if (watched) showToast("작업을 취소했습니다. 기존 결과는 유지됩니다.");
             continue;
           }
@@ -136,7 +140,11 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
           }
           if (task.status === "failed") setError(task.error ?? "작업에 실패했습니다.");
           const document = task.result?.document;
-          if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
+          if (document && task.kind === "freeform") {
+            setFreeformResult(document);
+            if (watched && task.status === "completed") setNotice("자유양식 지원서를 만들었습니다. 아래에서 내려받을 수 있습니다.");
+          }
+          else if (document) setDocumentResult({ href: document.downloadUrl, filename: document.filename, filled: document.filled, skipped: document.skipped, note: document.note });
         }
         if (reloadDraft) {
           const draftResponse = await fetch(`/api/applications/${seq}/draft`, { cache: "no-store", signal: abort.signal });
@@ -175,6 +183,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
   const reviewBusy = busy === "review" || !!reviewTask;
   const essayBusy = reviewBusy || busy.startsWith("save") || ["final", "answer-action", "import", "move"].includes(busy);
   const documentBusy = busy === "document";
+  const freeformBusy = busy === "freeform" || tasks.some((t) => t.kind === "freeform" && taskActive(t));
   function acceptTask(task: ApplicationTask) {
     watchedTasks.current.add(task.id);
     setTasks((prev) => [...prev.filter((t) => t.id !== task.id), task]);
@@ -286,22 +295,30 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
       setNotice("Word 작성을 시작했습니다. 화면을 이동해도 작업이 계속됩니다.");
     });
   }
+  async function generateFreeform(options: FreeformOptions) {
+    await run("freeform", async () => {
+      if (options.mode === "filled") await save();
+      const data = await api("fill/freeform", options);
+      acceptTask(data.task);
+      setNotice("자유양식 지원서를 생성하고 있습니다. 완료되면 다운로드할 수 있습니다.");
+    });
+  }
   if (loading) return <p className="py-8 text-center text-sm text-gray-400">지원 정보를 불러오는 중...</p>;
   const currentAnswers = draft?.essayAnswers.map((a, index) => ({ a, index })).filter(({ a }) => a.source === "user_question") ?? [];
   const legacyAnswers = draft?.essayAnswers.map((a, index) => ({ a, index })).filter(({ a }) => a.source !== "user_question") ?? [];
 
   return <div className="space-y-6">
     <nav aria-label="지원 도우미 작업" className="flex gap-2 rounded-lg bg-gray-100 p-1">
-      {([['essay', '문항별 자기소개서'], ['fill', '지원서 자동 입력']] as const).map(([value, label]) => <button key={value} onClick={() => { setWorkspace(value); setError(""); setNotice(""); }} aria-pressed={workspace === value} className={`flex-1 rounded-md px-3 py-2 text-sm ${workspace === value ? "bg-white font-semibold text-blue-700 shadow-sm" : "text-gray-500"}`}>{label}</button>)}
+      {([['essay', '문항별 자기소개서'], ['fill', '지원서 생성·자동 입력']] as const).map(([value, label]) => <button key={value} onClick={() => { setWorkspace(value); setError(""); setNotice(""); }} aria-pressed={workspace === value} className={`flex-1 rounded-md px-3 py-2 text-sm ${workspace === value ? "bg-white font-semibold text-blue-700 shadow-sm" : "text-gray-500"}`}>{label}</button>)}
     </nav>
     {tasks.length > 0 && <section aria-label="백그라운드 작업" className="rounded-lg border border-blue-100 p-3 text-xs space-y-2">
       <p className="font-medium">작업 현황 · 탭을 이동해도 계속 진행됩니다</p>
       <button type="button" className="text-blue-600 underline" onClick={() => setPollRevision((value) => value + 1)}>작업 상태 새로고침</button>
       {tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center gap-2">
-        <span>{task.kind === "revision" ? "첨삭" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
+        <span>{task.kind === "revision" ? "첨삭" : task.kind === "freeform" ? "자유양식 지원서 생성" : "Word 입력"} · {task.status === "queued" ? "대기 중" : task.status === "running" ? `진행 중 ${task.done}/${task.total}` : task.status === "cancelling" ? "취소 중..." : task.status === "cancelled" ? "취소됨" : task.status === "completed" ? "완료" : "실패"}</span>
         <ApplicationTaskCancelButton task={task} onUpdate={acceptTask} onError={setError} />
         {task.error && <span className="text-red-600">{task.error}</span>}
-        {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.result.document.filled}/{task.result.document.total}칸 입력 · 다운로드</a>}
+        {task.result?.document && <a className="text-blue-600 underline" href={task.result.document.downloadUrl} download={task.result.document.filename}>{task.result.document.filename} · {task.kind === "freeform" ? "지원서 생성 완료" : `${task.result.document.filled}/${task.result.document.total}칸 입력`} · 다운로드</a>}
       </div>)}
     </section>}
     <div data-draft-status className="space-y-2">
@@ -310,8 +327,9 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     </div>
     <Toast message={toastMessage} />
     {workspace === "fill" && <section className="rounded-xl border border-gray-200 p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서에 개인정보·자기소개서 입력</h3><a className="text-xs text-blue-600 underline" href="/profile#applicant">지원 정보 수정</a></div>
+      <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서 만들기·자동 입력</h3><a className="text-xs text-blue-600 underline" href="/profile#applicant">지원 정보 수정</a></div>
       <p className="text-xs leading-5 text-gray-500">내 지원 자료에 저장한 지원 정보와 이 공고에 저장된 자기소개서 답변을 실제 양식에 채웁니다. 작성 중인 답변은 완료 후 다시 입력해주세요. 입력 결과를 확인한 뒤 제출해주세요.</p>
+      <FreeformApplicationForm method={method} busy={freeformBusy || essayBusy || !!busy} generating={freeformBusy} result={freeformResult} onGenerate={generateFreeform} />
       {!!method?.templateAttachments.length && <div className="flex flex-wrap gap-2">{method.templateAttachments.map((a) => <a key={a.url} href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">{a.name} 내려받기</a>)}</div>}
       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
         <h4 className="text-sm font-medium">Word 양식 작성</h4>

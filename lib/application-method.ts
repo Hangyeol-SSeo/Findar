@@ -14,6 +14,7 @@ export interface SubmissionMethodInfo {
   submissionEmail: string | null;
   templateAttachments: Attachment[]; // 입사지원서/자기소개서 등 작성해서 제출해야 하는 양식
   consentAttachments: Attachment[]; // 개인정보 수집·이용 동의서 등 서명만 하면 되는 첨부
+  freeform?: { status: "freeform" | "essay_only" | "mixed" | "provided" | "unknown"; evidence: string };
 }
 
 const TEMPLATE_NAME_PATTERN = /입사지원|지원서|이력서.*양식|자기소개서.*양식|application.*form/i;
@@ -50,5 +51,21 @@ export function detectSubmissionMethod(
     method = "web_form";
   }
 
-  return { method, submissionEmail, templateAttachments, consentAttachments };
+  return { method, submissionEmail, templateAttachments, consentAttachments,
+    freeform: detectFreeformSubmission(rawContent, templateAttachments.length > 0) };
+}
+
+// A hint, not permission to replace the employer's required form. HTML line breaks
+// are retained so unrelated clauses do not turn a negated instruction positive.
+export function detectFreeformSubmission(rawContent: string, hasTemplate: boolean): NonNullable<SubmissionMethodInfo["freeform"]> {
+  const content = rawContent.replace(/<(?:br\s*\/?|\/p|\/div|\/li)>/gi, "\n").replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/gi, " ");
+  const clauses = content.split(/[\n;。]+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  const free = /자유\s*(?:양식|서식|형식)|(?:양식|서식|형식)\s*[:：]?\s*자유|(?:양식|서식|형식)\s*(?:의\s*)?제한(?:이)?\s*없/;
+  const negative = /(?:자유\s*(?:양식|서식|형식)|(?:양식|서식|형식)\s*자유)[^,;\n]{0,15}(?:불가|금지|불허|받지|접수하지|제출하지|사용하지|인정하지|아님|아니며|안\s*됨)/;
+  const evidence = clauses.find((clause) => free.test(clause) && !negative.test(clause));
+  const prescribed = hasTemplate || clauses.some((s) => /(?:당사|자사|지정|첨부(?:된)?)\s*(?:입사\s*지원서\s*)?양식|첨부된?\s*(?:입사)?지원서/.test(s) && !/양식[^,;\n]{0,12}(?:없|제공하지|사용하지)/.test(s));
+  const essayOnly = evidence && /자기\s*소개서|자소서/.test(evidence) && !/이력서|입사\s*지원서|경력\s*기술서|(?:전체|모든)\s*서류/.test(evidence);
+  return evidence
+    ? { status: prescribed ? "mixed" : essayOnly ? "essay_only" : "freeform", evidence: evidence.slice(0, 220) }
+    : { status: prescribed ? "provided" : "unknown", evidence: "" };
 }

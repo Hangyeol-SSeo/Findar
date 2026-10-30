@@ -1,0 +1,48 @@
+import base64
+import importlib.util
+import io
+from pathlib import Path
+import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+
+spec = importlib.util.spec_from_file_location('generate_application', Path(__file__).parents[1] / 'generate-application-docx.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+NS = {'w': module.W}
+
+
+class GenerateApplicationTests(unittest.TestCase):
+    def test_ooxml_package_preserves_text_and_editable_layout(self):
+        essay = '첫 번째 문단 <>& 😀\n\n둘째 문단입니다.'
+        long_text = '긴 업무 내용입니다. ' * 1200
+        payload = {'company': '테스트 회사', 'role': '분석', 'name': '지원자', 'contacts': ['candidate@example.test'], 'pages': [
+            {'title': '입사지원서', 'blocks': [{'type': 'table', 'title': '경력', 'headers': ['회사', '업무'], 'widths': [30, 70], 'rows': [['회사 A', long_text], ['회사 B', '다른 업무']]}]},
+            {'title': '자기소개서', 'blocks': [{'type': 'entries', 'title': '', 'entries': [{'title': '지원동기', 'lines': [{'label': '', 'text': essay}]}]}]},
+        ]}
+        blob = base64.b64decode(module.generate(payload)['document'])
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            for path in archive.namelist():
+                ET.fromstring(archive.read(path))
+            root = ET.fromstring(archive.read('word/document.xml'))
+            text = '\n'.join(t.text or '' for t in root.findall('.//w:t', NS))
+            self.assertIn(long_text, text)
+            self.assertIn('첫 번째 문단 <>& 😀', text)
+            self.assertIn('둘째 문단입니다.', text)
+            self.assertEqual(len(root.findall('.//w:tr', NS)), 3)
+            self.assertEqual(len(root.findall('.//w:tblHeader', NS)), 1)
+            self.assertEqual(len(root.findall('.//w:pageBreakBefore', NS)), 1)
+            self.assertFalse(root.findall('.//w:trHeight', NS))
+            self.assertFalse(root.findall('.//w:cantSplit', NS))
+            self.assertFalse(root.findall('.//w:drawing', NS))
+            self.assertFalse(root.findall('.//w:sectPr', NS)[0].findall('w:docGrid', NS))
+            self.assertIn('candidate@example.test', text)
+            self.assertIn('테스트 회사', ''.join(ET.fromstring(archive.read('word/header1.xml')).itertext()))
+            self.assertIn('PAGE', archive.read('word/footer1.xml').decode())
+
+    def test_xml_invalid_controls_removed_without_dropping_korean_or_emoji(self):
+        self.assertEqual(module.clean('한글\x00\x0b\n😀\t'), '한글\n😀\t')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -61,6 +61,8 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     let taskRequests = 0;
     let webRequests = 0;
     const tasks = [];
+    const freeformRequests = [];
+    let freeformHint;
     let releaseWriting;
     let profilePayload = { name: '테스트 이름', address: '기존 기본주소', addressDetail: '101호', updatedAt: 1 };
     const downloadBytes = Buffer.from('test-document-bytes');
@@ -70,6 +72,11 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
       if (url.origin === downloadOrigin) return route.continue();
       if (url.pathname === '/api/jobs') data = { jobs: [job], hasProfile: true };
       else if (url.pathname === '/api/jobs/hide') data = { jobs: [] };
+      // All profile sections stay mounted, even while another section is visible.
+      else if (url.pathname === '/api/profile/resume') data = { files: [], status: 'missing', analyzing: false, profile: null };
+      else if (url.pathname === '/api/experience-cards') data = { cards: [], sourceCount: 0, running: false, essayRunning: false };
+      else if (url.pathname === '/api/essay-sources') data = { files: [], finals: [], progress: { running: false, done: 0, total: 0, current: '' } };
+      else if (url.pathname === '/api/profile/narrative') data = { profile: null };
       else if (url.pathname === '/api/profile/applicant') {
         if (req.method() === 'PUT') { profilePayload = req.postDataJSON(); data = { ok: true }; }
         else data = { profile: profilePayload };
@@ -79,7 +86,14 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
         return route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) });
       }
       else if (url.pathname.endsWith('/tasks')) { taskRequests++; data = { tasks }; }
+      else if (url.pathname.endsWith('/role')) data = { role: '운영', revision: 'fixture-role' };
       else if (url.pathname.endsWith('/fill/web')) { webRequests++; data = { token: 'a'.repeat(64) }; }
+      else if (url.pathname.endsWith('/fill/freeform')) {
+        const options = req.postDataJSON(); freeformRequests.push(options);
+        const document = { total: 10, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '자유양식-입사지원서.docx', downloadBytes.toString('base64')), filename: '자유양식-입사지원서.docx', filled: 8, skipped: [{ label: '확인 항목', reason: '테스트용 누락 안내' }], note: '저장한 내용으로 생성했습니다.' };
+        const task = { id: 'freeform-' + tasks.length, kind: 'freeform', status: 'completed', done: 1, total: 1, result: { document } };
+        tasks.push(task); data = { task }; status = 202;
+      }
       else if (url.pathname.endsWith('/fill/document')) { const document = { total: 3, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '지원서-작성본.docx', downloadBytes.toString('base64')), filename: '지원서-작성본.docx', filled: 3, skipped: [], note: '작성본을 확인해주세요.' }; const task = { id: 'doc-' + tasks.length, kind: 'document', status: 'completed', done: 1, total: 1, result: { document } }; tasks.push(task); data = { task }; status = 202; }
       else if (url.pathname.endsWith('/draft/import')) {
         const body = req.postDataJSON(); assert.ok(['팀의 문제를 해결한 경험을 설명해주세요.', '입사 후 포부를 적어주세요.'].includes(body.question));
@@ -107,7 +121,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
         if (req.method() === 'PUT') {
           if (failSave) { data = { error: '테스트 저장 실패' }; status = 500; }
           else { saved = { ...req.postDataJSON(), revision: 'edited' }; data = { draft: saved }; }
-        } else data = { draft: saved, finals: [], siteUrl: job.siteUrl, submissionMethod: { method: 'web_form', templateAttachments: [], consentAttachments: [], submissionEmail: null } };
+        } else data = { draft: saved, finals: [], siteUrl: job.siteUrl, submissionMethod: { method: 'web_form', templateAttachments: [], consentAttachments: [], submissionEmail: null, freeform: freeformHint } };
       } else { status = 400; data = { error: 'Unexpected API in fixture test' }; }
       await route.fulfill({ status, json: data });
     });
@@ -121,7 +135,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     const idleRequests = taskRequests;
     await page.waitForTimeout(4500);
     assert.equal(taskRequests, idleRequests, 'no idle task polling');
-    await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
+    await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).click();
     const connect = page.getByRole('button', { name: '웹 지원서 연결', exact: true });
     assert.equal(await connect.isEnabled(), true, 'missing handshake must not permanently disable connect');
     await connect.click();
@@ -147,7 +161,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByRole('button', { name: '첨삭 받기', exact: true }).click();
     await page.getByRole('button', { name: '첨삭 받기', exact: true }).click();
     await page.getByText(/첨삭을 시작했습니다/).waitFor();
-    await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
+    await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).isEnabled(), true);
     await page.getByLabel('Word 지원서 양식').setInputFiles({ name: '동시작업.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('fixture') });
     await page.getByRole('button', { name: '개인정보·답변 채운 Word 만들기', exact: true }).click();
@@ -197,7 +211,7 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     fs.mkdirSync('/tmp/findar-assistant-qa', { recursive: true });
     await page.screenshot({ path: '/tmp/findar-assistant-qa/ui.png', fullPage: true });
     console.log('PASS UI essay save without AI, background review, concurrent Word task, tab switch/unmount recovery, legacy preservation, editing, failed-save recovery, question reorder keeps unsaved edits');
-    await page.getByRole('button', { name: '지원서 자동 입력', exact: true }).click();
+    await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).click();
     const picker = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Word 파일 선택', exact: true }).click();
     await (await picker).setFiles({ name: '지원서.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('fixture') });
@@ -231,6 +245,42 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(await page.getByLabel('한자 이름', { exact: true }).inputValue(), '洪吉童');
     assert.equal(await page.getByLabel('취미', { exact: true }).inputValue(), '독서');
     console.log('PASS personal profile new fields save/reload and existing address preserved');
+
+    freeformHint = { status: 'freeform', evidence: '이력서와 자기소개서 자유양식 제출' };
+    await page.goto(process.env.FINDAR_TEST_URL || 'http://localhost:3000');
+    await page.getByText(job.title, { exact: true }).click();
+    await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
+    await page.getByRole('heading', { name: '자유양식 지원서 만들기', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByLabel('병역', { exact: true }).isChecked(), false);
+    assert.equal(await page.getByLabel('생년월일·성별·국적·주소', { exact: true }).isChecked(), false);
+    await page.getByLabel('병역', { exact: true }).check();
+    const aiBefore = generationRequests;
+    await page.getByRole('button', { name: '저장 정보로 지원서 만들기', exact: true }).click();
+    const freeformDownload = page.getByRole('link', { name: '생성한 지원서 다운로드', exact: true });
+    await freeformDownload.waitFor();
+    assert.equal(freeformRequests.length, 1);
+    assert.deepEqual(freeformRequests[0], { mode: 'filled', includeDetails: true, includeEssays: true, includeMilitary: true, includePersonalDetails: false });
+    await page.getByText('확인 항목: 테스트용 누락 안내', { exact: true }).waitFor();
+    const freeformEvent = page.waitForEvent('download');
+    await freeformDownload.click();
+    const generatedDownload = await freeformEvent;
+    assert.equal(generatedDownload.suggestedFilename(), '자유양식-입사지원서.docx');
+    assert.deepEqual(fs.readFileSync(await generatedDownload.path()), downloadBytes);
+    await page.getByLabel('이 공고의 자기소개서', { exact: true }).uncheck();
+    await page.getByRole('button', { name: '빈 양식 만들기', exact: true }).click();
+    await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).some(b => b.textContent === '지원서 생성 중...'));
+    assert.equal(freeformRequests[1].mode, 'blank'); assert.equal(freeformRequests[1].includeEssays, false);
+    assert.equal(generationRequests, aiBefore, 'freeform generation makes no AI call');
+    await page.screenshot({ path: '/tmp/findar-assistant-qa/freeform-ui.png', fullPage: true });
+    freeformHint = { status: 'mixed', evidence: '자기소개서 자유양식, 입사지원서는 자사 양식' };
+    await page.reload();
+    await page.getByText(job.title, { exact: true }).click();
+    await page.getByRole('button', { name: '지원 도우미', exact: true }).click();
+    await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).click();
+    await page.getByText(/회사 지정 양식도 확인됩니다/).waitFor();
+    await page.getByRole('link', { name: '생성한 지원서 다운로드', exact: true }).waitFor();
+    console.log('PASS freeform recommendation, optional fields, filled/blank modes, download, missing-data notice, no AI, reload recovery, mixed-template guidance');
 
   } finally { await browser.close(); await new Promise((resolve) => downloadServer.close(resolve)); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

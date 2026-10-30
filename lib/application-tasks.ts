@@ -24,6 +24,8 @@ export function createApplicationTask(seq: string, kind: ApplicationTask["kind"]
     throw new Error("이 공고의 첨삭이 이미 진행 중입니다. 끝난 뒤 다시 실행해주세요. 다른 공고나 자동입력 작업은 함께 실행할 수 있습니다.");
   if (kind === "tailoring" && listApplicationTasks(seq).some((t) => t.kind === kind && taskActive(t)))
     throw new Error("이 공고의 이력 평가가 이미 진행 중입니다.");
+  if (kind === "freeform" && listApplicationTasks(seq).some((t) => t.kind === kind && taskActive(t)))
+    throw new Error("이 공고의 자유양식 지원서를 이미 생성하고 있습니다.");
   if ([...tasks.values()].filter(taskActive).length >= 12) throw new Error("동시 작업이 많습니다. 진행 중인 작업이 끝나면 다시 실행해주세요.");
   const now = Date.now();
   const task: ApplicationTask = { id: randomUUID(), seq, kind, status: "queued", createdAt: now, updatedAt: now, done: 0, total, ...(question ? { question } : {}) };
