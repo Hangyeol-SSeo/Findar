@@ -580,7 +580,11 @@ export const workdayAdapter: WatchAdapter = {
       if (!Array.isArray(data.jobPostings)) throw new WatchFetchError("Workday 목록 형식이 아님");
       for (const job of data.jobPostings) {
         if (!job.title || !job.externalPath || !KOREA.test(job.locationsText ?? "")) continue;
-        const reqId = job.bulletFields?.[0] || job.externalPath.split("_").pop() || job.externalPath;
+        // 첫 bulletField는 보통 공고 번호(JR045380)지만 고용 형태("Permanent")를 두는 테넌트가 있다(AIA). 숫자가 든 값만 번호로 쓰고,
+        // 아니면 주소 끝의 번호, 그것도 없으면 주소 해시.
+        const bullet = job.bulletFields?.find((value) => /\d/.test(value));
+        const tail = job.externalPath.match(/_([A-Za-z0-9-]*\d[A-Za-z0-9-]*)$/)?.[1];
+        const reqId = bullet || tail || createHash("sha1").update(job.externalPath).digest("hex").slice(0, 12);
         postings.push({
           seq: `${WATCH_SEQ_PREFIXES.workday}${tenant}-${reqId}`.replace(/[^\w-]/g, ""),
           title: oneLine(job.title),

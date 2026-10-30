@@ -297,6 +297,14 @@ function nextDataPage(queries) {
   assert.equal(wdContent.postedAt, '2026-10-20 00:00:00');
   assert.equal(wdRequests.length, 2); // total 3 ≤ 한 쪽(20)이라 다음 쪽은 부르지 않는다
   await assert.rejects(workdayAdapter.list('https://x.wd1.myworkdayjobs.com/', wdFetcher), /사이트 이름/);
+  // 첫 bulletField가 고용 형태인 테넌트(AIA): 주소 끝 번호를 쓴다. 공고마다 seq가 달라야 한다.
+  const aiaFetcher = { async text(url) {
+    return { url, text: JSON.stringify({ total: 2, jobPostings: [
+      { title: '[AIAPP] Data Analysis Manager', externalPath: '/job/Seoul-KR-AIA-Korea/AIAPP--Data-Analysis-Manager_JR-118207', locationsText: 'Seoul, KR-AIA Korea', bulletFields: ['Permanent'] },
+      { title: 'Product Strategy & Governance', externalPath: '/job/Seoul-KR-AIA-Korea/Product-Strategy---Governance_JR-117810', locationsText: 'Seoul, KR-AIA Korea', bulletFields: ['Permanent'] },
+    ] }) };
+  } };
+  assert.deepEqual((await workdayAdapter.list('https://aia.wd3.myworkdayjobs.com/External', aiaFetcher)).map((p) => p.seq), ['workday-aia-JR-118207', 'workday-aia-JR-117810']);
   assert.equal(robotsAllows(parseRobots('User-agent: *\nAllow: /BlackRock_Professional/\nDisallow: /BlackRock_AIG/\nDisallow: /refreshFacet/\n'), '/wday/cxs/blackrock/BlackRock_Professional/jobs'), true);
 
   // 토스 채용: 계열사 통합 목록 JSON 한 번(본문 포함)에서 이 계열사 공고만. 같은 공고가 여러 묶음에 나오면 한 번만.
