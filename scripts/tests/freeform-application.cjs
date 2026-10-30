@@ -37,7 +37,7 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
     const { buildFreeformDocument, DEFAULT_FREEFORM_OPTIONS: defaults, parseFreeformOptions, freeformFilename } = load('lib/freeform-application.ts');
     const { emptyApplicantProfile, writeApplicantProfile } = load('lib/applicant-profile.ts');
     const profile = { ...emptyApplicantProfile(), name: '테스트 지원자', phone: '010-0000-0000', email: 'candidate@example.test', address: '비공개 주소', birthDate: '2000-01-01', militaryStatus: '군필', militaryBranch: '테스트 군별', militaryRank: '테스트 계급', militaryServiceStart: '2020-01', militaryServiceEnd: '2021-07', skillsNote: '도구 A로 데이터 확인', updatedAt: 1,
-      education: [{ schoolLevel: '고등학교', schoolName: '테스트 고등학교', major: '', startDate: '2014-03', endDate: '2017-02', status: '졸업' }, { schoolLevel: '대학교', schoolName: '테스트 대학교', major: '테스트 전공', degreeType: '학사', gpa: '4.0', gpaMax: '4.5', startDate: '2017-03', endDate: '2021-02', status: '졸업' }],
+      education: [{ schoolLevel: '고등학교', schoolName: '테스트 고등학교', major: '', startDate: '2014-03', endDate: '2017-02', status: '졸업', gpa: '', gpaMax: '4.5' }, { schoolLevel: '대학교', schoolName: '테스트 대학교', major: '테스트 전공', degreeType: '학사', gpa: '4.0', gpaMax: '4.5', startDate: '2017-03', endDate: '2021-02', status: '졸업' }],
       workExperiences: [{ companyName: '회사 A', department: '부서 A', position: '사원', employmentType: '정규직', startDate: '2021-03', endDate: '2022-05', duties: '사용자가 저장한 업무 내용', isCurrent: false }, { companyName: '회사 B', position: '연구원', startDate: '2022-06', duties: '검증 절차를 기록했습니다.', isCurrent: true }],
       certifications: [{ name: '테스트 자격', issuer: '테스트 기관', issuedDate: '2024-05' }],
       languageTests: [{ testName: '테스트 어학', date: '2024-06', score: '800', scoreMax: '990' }],
@@ -72,6 +72,9 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       for (const name of ['테스트 고등학교', '테스트 대학교', '회사 A', '회사 B', '학습 프로젝트', '테스트 교육', '테스트 연구', '테스트 수상', '테스트 자격', '테스트 어학']) assert.ok(body.includes(name), name);
       assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows.length, 2);
       assert.equal(built.pages[0].blocks.find(b => b.title === '경력').rows.length, 2);
+      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').headers.length, 3);
+      assert.equal(built.pages[0].blocks.filter(b => b.type === 'table').length, 3, 'long activity details must not create another resume table');
+      assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows[0][3], '', 'do not print an unsupplied GPA just because the scale is set');
       assert.ok(body.includes('50%')); assert.ok(body.includes('재직 중'));
       assert.equal(built.pages.length, 3);
     });
@@ -122,6 +125,8 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
     process.chdir(scratch);
     // Route tests use the real subprocess against a copied script in the isolated CWD.
     fs.mkdirSync('scripts', { recursive: true }); fs.copyFileSync(path.join(root, 'scripts/generate-application-docx.py'), 'scripts/generate-application-docx.py');
+    fs.mkdirSync('assets/templates', { recursive: true });
+    fs.copyFileSync(path.join(root, 'assets/templates/freeform-application.docx'), 'assets/templates/freeform-application.docx');
     writeApplicantProfile(profile);
     const route = load('app/api/applications/[seq]/fill/freeform/route.ts');
     const tasks = load('lib/application-tasks.ts');
