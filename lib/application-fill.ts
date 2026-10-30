@@ -3,12 +3,16 @@ import { getAIModelId } from "./ai-model-settings";
 import { readApplicantProfile } from "./applicant-profile";
 import type { ApplicantProfile } from "./applicant-profile";
 
-export interface FillTarget { id: string; label: string; context?: string; type?: string; options?: string[]; section?: string; rowIndex?: number }
+export interface FillTarget {
+  id: string; label: string; context?: string; type?: string; options?: string[]; section?: string; rowIndex?: number;
+  // 서식에 미리 적힌 안내문(예: "년 월 ~ 년 월", "백만원")을 값으로 바꿔 넣는 칸, 소제목 줄(예: "대학교 학력정보 1")
+  mode?: string; placeholder?: string; heading?: string;
+}
 export interface FillSource { id: string; label: string; value: string; kind?: "essay" }
 export interface FillPlan { assignments: { targetId: string; sourceId: string; value: string; label: string }[]; skipped: { label: string; reason: string }[] }
 const SENSITIVE = /주민(?:등록)?번호|계좌|카드번호|비밀번호|여권|서명|동의|인증번호|password|captcha|verification|consent|signature|ssn|passport/i;
 export function permittedTarget(target: FillTarget) {
-  return !SENSITIVE.test(`${target.label} ${target.context ?? ""}`) && !/가족|보호자|추천인/.test(`${target.section ?? ""} ${target.context ?? ""} ${target.label}`) && !/^(?:password|checkbox|radio|file|hidden|submit|button)$/i.test(target.type ?? "");
+  return !SENSITIVE.test(`${target.label} ${target.context ?? ""} ${(target.options ?? []).join(" ")}`) && !/가족|보호자|추천인/.test(`${target.section ?? ""} ${target.context ?? ""} ${target.label}`) && !/^(?:password|checkbox|radio|file|hidden|submit|button)$/i.test(target.type ?? "");
 }
 
 const labels: Record<string, string> = {
@@ -64,6 +68,7 @@ export function buildFillSources(profile: ApplicantProfile): FillSource[] {
     combine(`workExperiences.${i}.period`, `경력 ${i + 1} 기간`, [e.startDate, e.isCurrent ? "재직중" : e.endDate], " ~ ");
     combine(`workExperiences.${i}.departmentPosition`, `경력 ${i + 1} 부서/직위`, [e.department, e.position]);
   });
+  combine("hobbySpecialty", "취미/특기", [profile.hobbies, profile.specialties], " / ");
   combine("militaryPeriod", "병역 복무기간", [profile.militaryServiceStart, profile.militaryServiceEnd], " ~ ");
   return sources;
 }
@@ -77,10 +82,13 @@ export function validateFillTargets(value: unknown): FillTarget[] {
       (v.rowIndex !== undefined && (!Number.isInteger(v.rowIndex) || v.rowIndex < 0 || v.rowIndex > 250)) ||
       (v.context !== undefined && (typeof v.context !== "string" || v.context.length > 4000)) ||
       (v.type !== undefined && (typeof v.type !== "string" || v.type.length > 40)) ||
+      (v.mode !== undefined && v.mode !== "replace" && v.mode !== "choice") ||
+      (v.placeholder !== undefined && (typeof v.placeholder !== "string" || v.placeholder.length > 200)) ||
+      (v.heading !== undefined && (typeof v.heading !== "string" || v.heading.length > 200)) ||
       (v.options !== undefined && (!Array.isArray(v.options) || v.options.length > 300 || v.options.some((o: unknown) => typeof o !== "string" || o.length > 500))))
       throw new Error("지원서 입력칸 정보가 올바르지 않습니다.");
     ids.add(v.id);
-    return { id: v.id, label: v.label, context: v.context, type: v.type, options: v.options, section: v.section, rowIndex: v.rowIndex };
+    return { id: v.id, label: v.label, context: v.context, type: v.type, options: v.options, section: v.section, rowIndex: v.rowIndex, mode: v.mode, placeholder: v.placeholder, heading: v.heading };
   });
 }
 
@@ -115,10 +123,14 @@ export function resolveFillPlan(raw: unknown, targets: FillTarget[], sources: Fi
     else if (!sourceMatchesTargetSemantics(target, source)) plan.skipped.push({ label: reportLabel, reason: "저장된 항목 유형과 일치하지 않습니다." });
     else if (source.kind !== "essay" && /자기소개서|지원동기|성장과정|입사후포부/.test(compact(`${target.label} ${target.context ?? ""} ${target.section ?? ""}`))) plan.skipped.push({ label: reportLabel, reason: "저장된 자기소개서 답변이 필요합니다." });
     else if (source.kind === "essay" && !essayTarget(target, source)) plan.skipped.push({ label: reportLabel, reason: "자기소개서 문항을 확실하게 연결하지 못했습니다." });
-    else if (target.options && !target.options.includes(source.value)) plan.skipped.push({ label: reportLabel, reason: "저장된 값과 일치하는 선택지가 없습니다." });
+    else if (target.mode !== "choice" && target.options && !target.options.includes(source.value)) plan.skipped.push({ label: reportLabel, reason: "저장된 값과 일치하는 선택지가 없습니다." });
     else {
-      plan.assignments.push({ targetId: target.id, sourceId: source.id, label: reportLabel, value: source.value });
-      usedSources.add(source.id);
+      const final = finalValue(target, source);
+      if ("reason" in final) plan.skipped.push({ label: reportLabel, reason: final.reason });
+      else {
+        plan.assignments.push({ targetId: target.id, sourceId: source.id, label: reportLabel, value: final.value });
+        usedSources.add(source.id);
+      }
     }
   }
   return plan;
@@ -126,7 +138,8 @@ export function resolveFillPlan(raw: unknown, targets: FillTarget[], sources: Fi
 
 type SavedAnswer = { question: string; answer: string; source?: string; status?: string };
 export function buildEssayFillSources(answers: SavedAnswer[]): FillSource[] {
-  return answers.flatMap((a, i) => a.source === "user_question" && a.status === "draft" && a.answer.trim()
+  // "ㅇ" 한 글자처럼 자리만 잡아 둔 답변은 쓰지 않는다 (예전에는 그대로 서류에 들어갔다).
+  return answers.flatMap((a, i) => a.source === "user_question" && a.status === "draft" && a.answer.trim().replace(/[ㅇ.\s]/g, "").length >= 3
     ? [{ id: `essay.${i}`, label: a.question, value: a.answer, kind: "essay" as const }] : []);
 }
 // 실제 라벨엔 "(100자 이내)", "(10,000자 이내)", "*", "(필수)" 같은 부가 안내가 자주 붙는데
@@ -136,6 +149,77 @@ const compact = (s: string) => s.toLowerCase()
   .replace(/\(?[\d,]+\s*자\s*(?:이내|이하|내외|제한)\)?/g, "")
   .replace(/[*※]|\(?필수\)?|\(?선택\)?/g, "")
   .replace(/[\s\p{P}]/gu, "");
+// ---- 서식 칸의 모양에 맞게 저장된 값을 바꿔 쓰는 규칙 (값은 항상 저장된 정보에서 나온다) ----------------
+const DATE_RE = /(\d{4})[-./](\d{1,2})(?:[-./](\d{1,2}))?/g;
+const LEVEL_WORDS: Record<string, string> = { beginner: "하", basic: "하", low: "하", intermediate: "중", medium: "중", advanced: "상", high: "상", fluent: "상", native: "상" };
+type FinalValue = { value: string } | { reason: string };
+// "년 월 ~ 년 월" 같은 안내문을 "2015년 03월 ~ 2018년 02월"로 채운다. 칸이 일(日)까지 요구하는데 저장된 날짜에 일이 없으면 채우지 않는다.
+function formatDateSkeleton(skeleton: string, value: string): FinalValue {
+  const dates = [...value.matchAll(DATE_RE)];
+  const slots = [...skeleton.matchAll(/년\s*월(\s*일)?/g)];
+  if (!slots.length || dates.length !== slots.length) return { reason: "날짜 칸의 형식과 저장된 날짜(재직 중 포함)가 맞지 않습니다." };
+  let index = 0;
+  let missingDay = false;
+  const out = skeleton.replace(/년\s*월(\s*일)?/g, (whole, day) => {
+    const date = dates[index++];
+    const month = date[2].padStart(2, "0");
+    if (!day) return `${date[1]}년 ${month}월`;
+    if (!date[3]) { missingDay = true; return whole; }
+    return `${date[1]}년 ${month}월 ${date[3].padStart(2, "0")}일`;
+  });
+  return missingDay ? { reason: "이 칸은 일(日)까지 적어야 하지만 저장된 날짜는 연·월까지입니다." } : { value: out.replace(/\s{2,}/g, " ") };
+}
+function pickOption(options: string[], source: FillSource): string | undefined {
+  const saved = source.value.trim();
+  const exact = options.find((option) => compact(option) === compact(saved));
+  if (exact) return exact;
+  if (/^foreignLanguageSkills\.\d+\.(?:speaking|writing|reading)$/.test(source.id)) {
+    const level = LEVEL_WORDS[saved.toLowerCase()];
+    return level && options.includes(level) ? level : undefined;
+  }
+  if (source.id === "militaryStatus") return options.find((option) => compact(option) === compact(saved.replace(/^군/, "")));
+  return undefined;
+}
+function finalValue(target: FillTarget, source: FillSource): FinalValue {
+  if (target.mode === "choice") {
+    const option = pickOption(target.options ?? [], source);
+    return option ? { value: option } : { reason: "저장된 값과 일치하는 선택지가 없습니다." };
+  }
+  if (target.mode === "replace") {
+    const hint = target.placeholder ?? "";
+    if (/년\s*월/.test(hint)) return formatDateSkeleton(hint, source.value);
+    if (/단위까지/.test(hint)) return { reason: "주소를 동 단위까지만 적도록 되어 있어 직접 입력이 필요합니다." };
+    if (/^(?:백?만원|원)/.test(hint)) return { reason: "저장된 연봉 정보가 없습니다." };
+    if (/^\//.test(hint)) return /^education\.\d+\.grade$/.test(source.id) ? { value: hint.includes("평점") ? `${source.value} (평점/만점)` : source.value.replace(" / ", "/") } : { reason: "평점과 만점을 함께 적는 칸입니다." };
+  }
+  return { value: source.value };
+}
+// 학력 칸의 소제목(고등학교 학력정보, 대학교 학력정보 2 …)이나 줄 머리말(고등학교, (전문)대학 …)로 저장된 학력 중 맞는 줄을 고른다.
+// undefined: 학교 구분 단서 없음, null: 단서는 있는데 저장된 학력에 해당 줄이 없음.
+function educationIndexForTarget(target: FillTarget, sources: FillSource[]): number | null | undefined {
+  const hint = compact(target.heading ?? "");
+  const level = /대학원/.test(hint) ? "대학원" : /전문/.test(hint) ? "전문" : /고등/.test(hint) ? "고등학교" : /대학/.test(hint) ? "대학교" : undefined;
+  if (!level) return undefined;
+  const rows = sources.flatMap((source) => {
+    const match = source.id.match(/^education\.(\d+)\.schoolLevel$/);
+    return match ? [{ index: Number(match[1]), level: source.value }] : [];
+  }).filter((row) => level === "전문" ? /전문/.test(row.level) : level === "대학교" ? /^대학교$|^대학$/.test(row.level.trim()) : row.level.includes(level)).sort((a, b) => a.index - b.index);
+  const nth = /\d\s*$/.test(target.heading ?? "") ? (target.rowIndex ?? 0) : 0;
+  return rows[nth]?.index ?? null;
+}
+function choiceSourceId(target: FillTarget, sources: FillSource[]): string | undefined {
+  const text = compact(target.label);
+  const options = target.options ?? [];
+  const has = (id: string) => sources.some((source) => source.id === id);
+  if (/성별/.test(text) || (options.includes("남") && options.includes("여"))) return has("gender") ? "gender" : undefined;
+  if (/병역|군필/.test(text) || (options.includes("필") && options.includes("미필"))) return has("militaryStatus") ? "militaryStatus" : undefined;
+  const skill = /회화|말하기|speaking/.test(text) ? "speaking" : /작문|쓰기|writing/.test(text) ? "writing" : /독해|읽기|reading/.test(text) ? "reading" : undefined;
+  if (skill) {
+    const id = `foreignLanguageSkills.${target.rowIndex ?? 0}.${skill}`;
+    return has(id) ? id : undefined;
+  }
+  return undefined;
+}
 function sourceRow(sourceId: string) {
   const match = sourceId.match(/^(education|workExperiences|projects|certifications|languageTests|foreignLanguageSkills|awards|activities|research)\.(\d+)\./);
   return match ? { group: match[1], index: Number(match[2]) } : undefined;
@@ -147,9 +231,9 @@ const REPEATED_GROUP_HINTS: [string, string[]][] = [
   ["research", ["연구실적", "연구과제", "학술연구", "research", "연구"]],
   ["awards", ["수상내역", "수상경력", "수상사항", "포상내역", "awards", "수상"]],
   ["activities", ["학내외활동", "대외활동", "활동사항", "사회활동", "activities", "활동"]],
-  ["certifications", ["자격증", "자격사항", "자격면허", "certifications"]],
+  ["certifications", ["자격증", "자격사항", "자격면허", "자격증면허사항", "certifications"]],
   ["languageTests", ["공인어학시험", "어학시험", "어학성적", "languageTests", "어학"]],
-  ["foreignLanguageSkills", ["외국어능력", "외국어활용능력", "어학능력", "foreignlanguageskills"]],
+  ["foreignLanguageSkills", ["외국어능력", "외국어활용능력", "어학능력", "foreignlanguageskills", "외국어"]],
   ["overseasExperiences", ["해외경험", "해외활동"]],
   ["computerSkills", ["컴퓨터활용능력", "컴퓨터능력"]],
 ];
@@ -172,6 +256,11 @@ function targetRepeatedGroup(target: FillTarget) {
 function sourceMatchesRow(target: FillTarget, source: FillSource, sources: FillSource[]) {
   const row = sourceRow(source.id);
   if (!row) return true;
+  if (row.group === "education") {
+    const index = educationIndexForTarget(target, sources);
+    if (index === null) return false;
+    if (index !== undefined) return index === row.index;
+  }
   const targetGroup = targetRepeatedGroup(target);
   if (targetGroup === null) return false;
   if (targetGroup && targetGroup !== row.group) return false;
@@ -207,19 +296,19 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
     ["성명", "name"], ["이름", "name"], ["생년월일", "birthDate"], ["우편번호", "postalCode"],
     ["상세주소", "addressDetail"], ["기본주소", "address"], ["주소", "fullAddress"], ["이메일", "email"], ["email", "email"],
     ["휴대전화", "phone"], ["휴대폰", "phone"], ["연락처", "phone"], ["전화번호", "phone"],
-    ["취미", "hobbies"], ["특기", "specialties"], ["종교", "religion"], ["국적", "nationality"],
+    ["취미특기", "hobbySpecialty"], ["취미", "hobbies"], ["특기", "specialties"], ["종교", "religion"], ["국적", "nationality"],
   ];
   const groups: MappingGroup[] = [
     { headings: ["학력", "학력사항", "학력정보", "교육사항"], prefix: "education", fields: [
       ["평점만점", "grade"], ["성적평점만점", "grade"], ["학교명구분", "school"], ["학교구분", "school"], ["학교및구분", "school"], ["학교명", "schoolName"],
-      ["졸업구분", "status"], ["졸업여부", "status"], ["학위", "degreeType"], ["전공", "major"], ["입학일", "startDate"], ["구분", "school"],
-      ["졸업일", "endDate"], ["재학기간", "period"], ["학력기간", "period"], ["기간", "period"], ["평점", "gpa"], ["학점", "gpa"],
+      ["졸업구분", "status"], ["졸업여부", "status"], ["학위", "degreeType"], ["전공", "major"], ["소재지", "schoolLocation"], ["학교", "schoolName"], ["입학일", "startDate"], ["구분", "school"],
+      ["졸업일", "endDate"], ["입학년월", "startDate"], ["졸업년월", "endDate"], ["재학기간", "period"], ["학력기간", "period"], ["기간", "period"], ["평점", "gpa"], ["학점", "gpa"],
     ] },
     { headings: ["경력", "경력사항", "경력정보", "근무경력", "근무경력사항", "직장경력", "직장경력사항", "회사경력", "회사경력사항", "사회경력", "career", "workexperience"], prefix: "workExperiences", fields: [
       ["부서및직급직책", "departmentPosition"], ["부서직급직책", "departmentPosition"], ["근무부서직급", "departmentPosition"], ["부서직위", "departmentPosition"], ["부서직급", "departmentPosition"],
       ["이직퇴사사유", "resignReason"], ["이직퇴직사유", "resignReason"], ["퇴직사유", "resignReason"], ["퇴사사유", "resignReason"], ["이직사유", "resignReason"],
       ["회사명", "companyName"], ["직장명", "companyName"], ["근무처", "companyName"], ["담당업무내용", "duties"], ["주요업무", "duties"],
-      ["해당업무", "duties"], ["담당업무", "duties"], ["업무내용", "duties"], ["근무부서", "department"], ["소속부서", "department"], ["부서", "department"],
+      ["해당업무", "duties"], ["담당업무", "duties"], ["업무내용", "duties"], ["상세경력", "duties"], ["근무부서", "department"], ["소속부서", "department"], ["부서", "department"],
       ["직급및직책", "position"], ["직급직책", "position"], ["직급", "position"], ["직책", "position"], ["직위", "position"], ["고용형태", "employmentType"], ["근무형태", "employmentType"],
       ["재직기간", "period"], ["근무기간", "period"], ["기간", "period"], ["입사일", "startDate"], ["근무시작일", "startDate"], ["퇴사일", "endDate"], ["근무종료일", "endDate"],
     ] },
@@ -240,13 +329,13 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
       ["기여도", "contributionPercent"], ["시작일", "startDate"], ["종료일", "endDate"], ["수행기간", "period"], ["역할", "role"], ["명칭", "name"],
     ] },
     { headings: ["공인어학시험", "어학시험", "어학성적", "외국어시험", "languageTests", "어학"], prefix: "languageTests", fields: [
-      ["시험명", "testName"], ["어학시험", "testName"], ["시험종류", "testName"], ["점수급", "score"], ["성적", "score"], ["점수", "score"], ["취득일", "date"], ["응시일", "date"],
+      ["시험명", "testName"], ["어학시험", "testName"], ["시험종류", "testName"], ["점수급", "score"], ["성적", "score"], ["점수", "score"], ["취득일", "date"], ["취득년월", "date"], ["응시일", "date"],
     ] },
-    { headings: ["외국어능력", "어학능력", "외국어구사능력", "외국어활용능력", "foreignlanguageskills"], prefix: "foreignLanguageSkills", fields: [
+    { headings: ["외국어능력", "어학능력", "외국어구사능력", "외국어활용능력", "외국어", "foreignlanguageskills"], prefix: "foreignLanguageSkills", fields: [
       ["외국어명", "language"], ["언어", "language"], ["외국어", "language"], ["읽기", "reading"], ["독해", "reading"], ["쓰기", "writing"], ["작문", "writing"], ["말하기", "speaking"], ["회화", "speaking"],
     ] },
-    { headings: ["자격사항", "자격증", "자격증사항", "자격면허", "certifications"], prefix: "certifications", fields: [
-      ["자격증명", "name"], ["발급기관", "issuer"], ["취득일", "issuedDate"], ["자격명", "name"], ["자격", "name"], ["구분", "name"],
+    { headings: ["자격사항", "자격증", "자격증사항", "자격면허", "자격증면허사항", "자격증면허", "certifications"], prefix: "certifications", fields: [
+      ["자격증면허명", "name"], ["자격증명", "name"], ["발급기관", "issuer"], ["인증기관", "issuer"], ["취득갱신년월", "issuedDate"], ["취득년월", "issuedDate"], ["취득일", "issuedDate"], ["자격명", "name"], ["자격", "name"], ["구분", "name"],
     ] },
   ];
   const findGroup = (section: string) => {
@@ -300,14 +389,22 @@ export function deterministicFillAssignments(targets: FillTarget[], sources: Fil
     const languageTestGroup = groups.find((candidate) => candidate.prefix === "languageTests");
     const languageTestField = languageTestGroup && findField(languageTestGroup.fields, target.label);
     if (languageTestGroup && (languageTestField === "testName" || languageTestField === "score")) group = languageTestGroup;
-    if (group) {
-      const field = findField(group.fields, target.label) ?? findField(group.fields, target.context ?? "");
-      if (field) id = sourceForField(group, field, target.rowIndex);
+    const educationIndex = educationIndexForTarget(target, sources);
+    if (target.mode === "choice") {
+      id = choiceSourceId(target, sources);
+    } else if (group) {
+      let field = findField(group.fields, target.label) ?? findField(group.fields, target.context ?? "");
+      if (group.prefix === "education" && field === "gpa" && /만점|^\//.test(compact(target.placeholder ?? ""))) field = "grade";
+      if (group.prefix === "education" && educationIndex === null) field = undefined;
+      // 외국어 칸의 줄 번호는 "시험종류 2"처럼 열 제목 끝 숫자로도 알 수 있다.
+      const trailing = group.prefix === "languageTests" ? Number(label.match(/(\d)$/)?.[1]) - 1 : NaN;
+      if (field) id = sourceForField(group, field, group.prefix === "education" ? educationIndex ?? target.rowIndex : Number.isInteger(trailing) && trailing >= 0 ? trailing : target.rowIndex);
     } else if (section === "병역") {
       const military: [string, string][] = [["복무기간", "militaryPeriod"], ["군별", "militaryBranch"], ["계급", "militaryRank"], ["병과", "militarySpecialty"]];
       id = military.find(([alias]) => label.includes(compact(alias)))?.[1];
     } else {
-      id = findField(personal, target.label);
+      const exactName: Record<string, string> = { 한글: "name", 영문: "nameEn", 한자: "nameHanja" };
+      id = exactName[label] ?? findField(personal, target.label);
       if (id === "fullAddress" && targets.some((other) => other.id !== target.id && /상세주소/.test(compact(`${other.label} ${other.context ?? ""}`)))) {
         id = "address";
       }
@@ -342,6 +439,7 @@ export async function planApplicationFill(targets: FillTarget[], signal?: AbortS
 문자열 값을 작성하지 말고 정확한 targetId와 sourceId만 반환한다. label에 placeholder 문구만 있으면 context와 section에서 실제 항목명/문항을 찾는다. 회사/학교/경력의 반복 행 번호를 반드시 맞춰라. rowIndex가 없으면 그 그룹에서 후보 저장 정보가 하나뿐일 때만 연결하고, 후보가 여러 개면 생략한다. 구분/기간/평점/부서와 직위처럼 합쳐진 칸은 준비된 school/period/grade/departmentPosition 값을 사용한다.
 회사명, 근무부서, 직급/직책, 담당업무, 이직/퇴사 사유는 경력 section의 workExperiences 항목과만 연결한다. 주최기관과 수여기관을 같은 뜻으로 취급하지 않는다. 프로그램명은 저장된 프로그램명 source가 있을 때만 연결하고, 프로젝트명으로 대신 채우지 않는다. 내용은 수상/활동 section의 detail처럼 같은 종류의 저장 source가 있을 때만 연결한다. 연봉/급여 등 저장 정보에 없는 값은 추정하거나 계산하지 않는다.
 이름은 지원자 성명 칸에만 넣는다. 직장명, 보호자/추천인 이름, 서명란, 개인정보 동의, 비밀번호, 로그인, 인증 칸은 제외한다. 자기소개서 문항에는 kind=essay인 저장된 답변 중 문항의 의미가 일치하는 값만 연결하고, textarea라는 이유만으로 연결하지 않는다. 개인정보 값을 자기소개서로 사용하지 않는다. 하나의 source를 여러 입력칸에 반복 배치하지 않는다.
+type=choice 입력칸(options가 있는 칸)은 그 선택지에 해당하는 저장 정보(성별, 병역, 외국어 능력 등)만 연결한다. mode=replace 입력칸은 placeholder 자리에 값이 들어가므로 같은 종류의 저장 정보만 연결한다(날짜 형식 변환은 코드가 한다). heading은 "대학교 학력정보 2"처럼 반복 구역의 소제목이다.
 문맥이 부족하거나 확신할 수 없는 매칭은 생략한다. 날짜/전화번호를 쪼개거나 값을 변형하지 않는다.
 주소가 한 칸이면 fullAddress를 연결하고, 기본 주소/상세 주소가 나뉘어 있으면 각각 address/addressDetail을 연결한다. 우편번호는 우편번호 칸에만 넣는다. 한자 성명은 nameHanja를 사용하며 한글 이름을 한자로 추론하지 않는다. 종교·취미·특기는 저장된 값이 없으면 비워둔다. 일대일로 정확하게 들어맞는 입력칸만 채운다.
 순수 JSON {"assignments":[{"targetId":"...","sourceId":"..."}]}만 반환한다.
