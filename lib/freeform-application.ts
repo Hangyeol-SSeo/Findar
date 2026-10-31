@@ -3,13 +3,14 @@ import type { ApplicationDraft } from "./application-draft";
 
 export interface FreeformOptions {
   mode: "filled" | "blank";
+  applicationType: "" | "신입" | "경력" | "인턴";
   includeDetails: boolean;
   includeEssays: boolean;
   includeMilitary: boolean;
   includePersonalDetails: boolean;
 }
 export const DEFAULT_FREEFORM_OPTIONS: FreeformOptions = {
-  mode: "filled", includeDetails: true, includeEssays: true,
+  mode: "filled", applicationType: "", includeDetails: true, includeEssays: true,
   includeMilitary: false, includePersonalDetails: false,
 };
 export function parseFreeformOptions(value: unknown): FreeformOptions {
@@ -21,6 +22,9 @@ export function parseFreeformOptions(value: unknown): FreeformOptions {
     if (key === "mode") {
       if (input.mode !== "filled" && input.mode !== "blank") throw new Error("지원서 생성 방식을 확인해주세요.");
       options.mode = input.mode;
+    } else if (key === "applicationType") {
+      if (!["", "신입", "경력", "인턴"].includes(input.applicationType as string)) throw new Error("지원 구분을 확인해주세요.");
+      options.applicationType = input.applicationType as FreeformOptions["applicationType"];
     } else {
       if (typeof input[key] !== "boolean") throw new Error("지원서 포함 항목을 확인해주세요.");
       (options as unknown as Record<string, unknown>)[key] = input[key];
@@ -37,6 +41,8 @@ export interface FreeformPage { title: string; blocks: FreeformBlock[] }
 export interface FreeformDocument {
   mode: FreeformOptions["mode"];
   company: string; role: string; name: string; contacts: string[];
+  applicationType: string;
+  personalRows: string[][];
   pages: FreeformPage[]; warnings: { label: string; reason: string }[];
   filled: number; total: number;
 }
@@ -65,13 +71,15 @@ export function buildFreeformDocument(
     type: "table" as const, title, headers, widths,
     rows: rows.length ? rows : [placeholders.map((v) => field("", v))],
   });
+  const longDuties = (p?.workExperiences ?? []).filter((w) => text(w.duties).length > 160);
   const blocks: FreeformBlock[] = [
     table("학력", ["재학 기간", "학교 및 전공", "학위 및 상태", "학점"], (p?.education ?? []).map((e) => [
       period(e.startDate, e.endDate), [text(e.schoolName), text(e.major)].filter(Boolean).join("\n"), join(e.degreeType || e.schoolLevel, e.status), text(e.gpa) ? join(e.gpa, e.gpaMax) : "",
     ]), [20,35,25,20], ["재학 기간", "학교명 / 전공", "학위 / 졸업 상태", "취득 / 만점"]),
-    table("경력", ["재직 기간", "회사 및 소속", "직위 및 고용 형태"], (p?.workExperiences ?? []).map((w) => [
+    table("경력", ["근무 기간", "회사 및 소속", "직위 및 고용 형태", "담당업무"], (p?.workExperiences ?? []).map((w) => [
       period(w.startDate, w.isCurrent ? "재직 중" : w.endDate), [text(w.companyName), text(w.department)].filter(Boolean).join("\n"), [text(w.position), text(w.employmentType)].filter(Boolean).join("\n"),
-    ]), [22,50,28], ["재직 기간", "회사 / 부서", "직위 / 고용 형태"]),
+      text(w.duties).length > 160 ? options.includeDetails ? "경력 및 경험 상세 참조" : "아래 담당업무 상세 참조" : text(w.duties),
+    ]), [18,28,20,34], ["근무 기간", "회사 / 부서", "직위 / 고용 형태", "담당업무"]),
     table("자격 및 어학", ["구분", "명칭", "발급 또는 시행 기관", "취득일", "등급 및 점수"], [
       ...(blank ? [["자격", "[자격명]", "[발급 기관]", "[취득일]", "[등급]"], ["어학", "[시험명]", "[시행 기관]", "[응시일]", "[점수]"]] : []),
       ...(p?.certifications ?? []).map((c) => ["자격", text(c.name), text(c.issuer), text(c.issuedDate), ""]),
@@ -85,12 +93,12 @@ export function buildFreeformDocument(
     ...(p?.awards ?? []).map((a) => ["수상", text(a.date), text(a.name), join(a.organizer, a.detail)]),
   ];
   // Resume identities stay compact; unabridged descriptions live in detail pages.
-  const showExperienceSummary = blank || !options.includeDetails;
+  const showExperienceSummary = !options.includeDetails;
   if (showExperienceSummary && (blank || experienceRows.length)) blocks.push({ type: "entries", title: "관련 경험 및 활용 역량", entries: [{ title: "", lines: blank
     ? [{ label: "관련 경험", text: "[프로젝트·교육·활동명 / 기간 / 본인 역할]" }]
     : experienceRows.map(([category, when, name]) => ({ label: category, text: join(name, when) })) }] });
   if (blank || p?.skillsNote.trim() || p?.foreignLanguageSkills.length || p?.portfolioLinks.trim()) blocks.push({
-    type: "entries", title: (showExperienceSummary && experienceRows.length) || (!blank && !p?.skillsNote.trim() && !p?.portfolioLinks.trim()) ? "" : "활용 역량 및 참고 자료", entries: [{ title: "", lines: [
+    type: "entries", title: "활용 역량 및 참고 자료", entries: [{ title: "", lines: [
       ...(blank || p?.skillsNote.trim() ? [{ label: "활용 역량", text: field(p?.skillsNote, "실제 활용 가능한 지식 및 도구") }] : []),
       ...(p?.foreignLanguageSkills ?? []).map((l) => ({ label: text(l.language), text: join(l.reading && `읽기 ${l.reading}`, l.writing && `쓰기 ${l.writing}`, l.speaking && `말하기 ${l.speaking}`) })),
       ...(blank || p?.portfolioLinks.trim() ? [{ label: "참고 자료", text: field(p?.portfolioLinks, "포트폴리오 등 자료 링크") }] : []),
@@ -102,14 +110,21 @@ export function buildFreeformDocument(
     additionalLines.push({ label: "병역", text: blank ? "[병역 구분 / 군별 / 계급 / 복무 기간]"
       : [join(p?.militaryStatus, p?.militaryBranch, p?.militarySpecialty, p?.militaryRank, p?.militaryDischargeType), militaryPeriod && `(${militaryPeriod})`].filter(Boolean).join("  ") });
   }
-  if (options.includePersonalDetails) {
-    const genderNationality = join(p?.gender, p?.nationality);
-    additionalLines.push(
-      { label: "인적사항", text: blank ? "[생년월일 / 성별 / 국적]" : [p?.birthDate && `생년월일 ${p.birthDate}`, genderNationality && `성별 및 국적 ${genderNationality}`].filter(Boolean).join("  |  ") },
-      { label: "주소", text: blank ? "[주소]" : [p?.postalCode, p?.address, p?.addressDetail].map(text).filter(Boolean).join(" ") },
-    );
-  }
-  if (additionalLines.length) blocks.push({ type: "entries", title: "추가 기재사항", entries: [{ title: "", lines: additionalLines }] });
+  if (additionalLines.length) blocks.push({ type: "entries", title: "병역사항", entries: [{ title: "", lines: additionalLines }] });
+  if (!options.includeDetails && longDuties.length) blocks.push({
+    type: "entries", title: "담당업무 상세", entries: longDuties.map((w) => ({
+      title: join(w.companyName, w.department, w.position),
+      lines: [{ label: "담당업무", text: text(w.duties) }],
+    })),
+  });
+  const personalRows = [
+    ["성명", field(p?.name, "성명"), "연락처", field(p?.phone, "연락처")],
+    ["이메일", field(p?.email, "이메일")],
+  ];
+  if (options.includePersonalDetails) personalRows.push(
+    ["생년월일", field(p?.birthDate, "생년월일"), "성별 및 국적", blank ? "[성별 / 국적]" : join(p?.gender, p?.nationality)],
+    ["주소", blank ? "[주소]" : [p?.postalCode, p?.address, p?.addressDetail].map(text).filter(Boolean).join(" ")],
+  );
   const pages: FreeformPage[] = [{ title: "입사지원서", blocks }];
   if (options.includeDetails) {
     const details: FreeformBlock[] = [];
@@ -139,10 +154,11 @@ export function buildFreeformDocument(
     }
     pages.push({ title: "자기소개서", blocks: [{ type: "entries", title: "", entries: answers }] });
   }
-  const values = [text(company), text(selection.role), p?.name ?? "", p?.email ?? "", p?.phone ?? "", ...pages.flatMap((page) => page.blocks.flatMap((b) => b.type === "table" ? b.rows.flat() : b.entries.flatMap((e) => e.lines.map((l) => l.text))))];
+  const values = [text(company), text(selection.role), options.applicationType, ...personalRows.flatMap((row) => row.filter((_, i) => i % 2)), ...pages.flatMap((page) => page.blocks.flatMap((b) => b.type === "table" ? b.rows.flat() : b.entries.flatMap((e) => e.lines.map((l) => l.text))))];
   return {
     mode: options.mode, company: text(company), role: text(selection.role), name: field(p?.name, "성명"),
     contacts: blank ? ["[연락처]", "[이메일]"] : [p?.phone, p?.email].map(text).filter(Boolean),
+    applicationType: options.applicationType || (blank ? "[신입 / 경력 / 인턴]" : ""), personalRows,
     pages, warnings, filled: blank ? 0 : values.filter(Boolean).length, total: values.length,
   };
 }
