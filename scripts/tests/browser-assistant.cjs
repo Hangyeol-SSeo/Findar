@@ -63,6 +63,12 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     const tasks = [];
     const freeformRequests = [];
     let freeformHint;
+    let compositionPlan;
+    const compositionItems = [
+      { id: 'work:1', kind: 'work', title: '개발 회사', category: '근무 경력', period: '2025', summary: '앱 개발', detail: '개발 상세 수행 내용', source: '지원 정보', status: 'confirmed', tags: [], required: false, recommended: 'brief', reason: '근무 사실을 짧게 남깁니다.' },
+      { id: 'experience:1', kind: 'experience', title: '자료 검증 프로젝트', category: '개인 프로젝트', period: '', summary: '수집 자료 확인', detail: '구체적으로 확인한 범위', source: '확인한 코드', status: 'confirmed', tags: ['risk'], required: false, recommended: 'detail', reason: '관련 경험을 자세히 표시합니다.' },
+      { id: 'material:card-EXP-01', kind: 'experience', title: '확인 전 경험', category: '경험 자료', period: '', summary: '확인 필요', detail: '수치가 서로 다릅니다.', source: '과거 글', status: 'review', tags: [], required: false, recommended: 'exclude', reason: '실제 수행 내용을 확인해주세요.' },
+    ];
     let releaseWriting;
     let profilePayload = { name: '테스트 이름', address: '기존 기본주소', addressDetail: '101호', updatedAt: 1 };
     const downloadBytes = Buffer.from('test-document-bytes');
@@ -89,7 +95,14 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
       else if (url.pathname.endsWith('/role')) data = { role: '운영', revision: 'fixture-role' };
       else if (url.pathname.endsWith('/fill/web')) { webRequests++; data = { token: 'a'.repeat(64) }; }
       else if (url.pathname.endsWith('/fill/freeform')) {
-        const options = req.postDataJSON(); freeformRequests.push(options);
+        if (req.method() === 'GET') {
+          const focus = url.searchParams.get('focus') || compositionPlan?.focus || 'risk';
+          const catalog = { version: 'fixture-version', roleRevision: 'fixture-role', focus, items: compositionItems };
+          const plan = url.searchParams.get('reset') || !compositionPlan ? { version: catalog.version, roleRevision: catalog.roleRevision, focus, choices: compositionItems.map(i => ({ id: i.id, level: i.recommended })) } : compositionPlan;
+          return route.fulfill({ json: { catalog, plan, materials: [], notice: '' } });
+        }
+        if (req.method() === 'PUT') { compositionPlan = req.postDataJSON(); return route.fulfill({ json: { saved: true } }); }
+        const options = req.postDataJSON(); freeformRequests.push(options); compositionPlan = options.composition;
         const document = { total: 10, downloadUrl: downloadOrigin + storeDocumentDownload(job.seq, '자유양식-입사지원서.docx', downloadBytes.toString('base64')), filename: '자유양식-입사지원서.docx', filled: 8, skipped: [{ label: '확인 항목', reason: '테스트용 누락 안내' }], note: '저장한 내용으로 생성했습니다.' };
         const task = { id: 'freeform-' + tasks.length, kind: 'freeform', status: 'completed', done: 1, total: 1, result: { document } };
         tasks.push(task); data = { task }; status = 202;
@@ -256,11 +269,21 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     assert.equal(await page.getByLabel('생년월일·성별·국적·주소', { exact: true }).isChecked(), false);
     await page.getByLabel('병역', { exact: true }).check();
     const aiBefore = generationRequests;
-    await page.getByRole('button', { name: '저장 정보로 지원서 만들기', exact: true }).click();
+    const compositionSection = page.getByRole('region', { name: '지원서 이력 구성', exact: true });
+    await compositionSection.getByLabel('개발 회사 기재 방식').selectOption('exclude');
+    await compositionSection.getByLabel('자료 검증 프로젝트 기재 방식').selectOption('brief');
+    await compositionSection.getByText('제출할 설명 확인·수정', { exact: true }).click();
+    await compositionSection.getByLabel('한 줄 설명', { exact: true }).fill('이 공고에서 확인한 수행 내용');
+    await compositionSection.getByRole('button', { name: '이 공고의 구성 저장', exact: true }).click();
+    await compositionSection.getByText('이 공고의 구성을 저장했습니다.', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '선택한 이력으로 지원서 만들기', exact: true }).click();
     const freeformDownload = page.getByRole('link', { name: '생성한 지원서 다운로드', exact: true });
     await freeformDownload.waitFor();
     assert.equal(freeformRequests.length, 1);
-    assert.deepEqual(freeformRequests[0], { mode: 'filled', includeDetails: true, includeEssays: true, includeMilitary: true, includePersonalDetails: false });
+    assert.equal(freeformRequests[0].includeMilitary, true);
+    assert.equal(freeformRequests[0].applicationType, '');
+    assert.equal(freeformRequests[0].composition.choices.find(c => c.id === 'work:1').level, 'exclude');
+    assert.deepEqual(freeformRequests[0].composition.choices.find(c => c.id === 'experience:1'), { id: 'experience:1', level: 'brief', summary: '이 공고에서 확인한 수행 내용' });
     await page.getByText('확인 항목: 테스트용 누락 안내', { exact: true }).waitFor();
     const freeformEvent = page.waitForEvent('download');
     await freeformDownload.click();
@@ -280,6 +303,17 @@ const { storeDocumentDownload, documentDownloadResponse } = downloadModule.expor
     await page.getByRole('button', { name: '지원서 생성·자동 입력', exact: true }).click();
     await page.getByText(/회사 지정 양식도 확인됩니다/).waitFor();
     await page.getByRole('link', { name: '생성한 지원서 다운로드', exact: true }).waitFor();
+    await page.getByLabel('개발 회사 기재 방식').selectOption('brief');
+    await page.getByLabel('자료 검증 프로젝트 기재 방식').selectOption('detail');
+    await page.getByText('확인 후 추가할 경험 자료 1개', { exact: true }).click();
+    await page.getByRole('button', { name: '내용 확인·추가', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '선택한 이력으로 지원서 만들기', exact: true }).isEnabled(), false, 'unfinished material edit blocks generation');
+    assert.equal(await page.getByLabel('실제로 수행한 내용', { exact: true }).inputValue(), '수치가 서로 다릅니다.');
+    await page.getByRole('button', { name: '닫기', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '선택한 이력으로 지원서 만들기', exact: true }).isEnabled(), true);
+    await page.getByLabel('구성 기준').selectOption('macro');
+    await page.getByText('상세 1개 · 한 줄 1개 · 제외 1개', { exact: true }).waitFor();
+    console.log('PASS three selection levels, per-posting explanation, save, unconfirmed editor and focus reset');
     console.log('PASS freeform recommendation, optional fields, filled/blank modes, download, missing-data notice, no AI, reload recovery, mixed-template guidance');
 
   } finally { await browser.close(); await new Promise((resolve) => downloadServer.close(resolve)); }

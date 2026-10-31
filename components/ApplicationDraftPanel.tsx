@@ -329,7 +329,7 @@ export default function ApplicationDraftPanel({ seq, roleRevision }: { seq: stri
     {workspace === "fill" && <section className="rounded-xl border border-gray-200 p-4 space-y-3">
       <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-gray-800">지원서 만들기·자동 입력</h3><a className="text-xs text-blue-600 underline" href="/profile#applicant">지원 정보 수정</a></div>
       <p className="text-xs leading-5 text-gray-500">내 지원 자료에 저장한 지원 정보와 이 공고에 저장된 자기소개서 답변을 실제 양식에 채웁니다. 작성 중인 답변은 완료 후 다시 입력해주세요. 입력 결과를 확인한 뒤 제출해주세요.</p>
-      <FreeformApplicationForm method={method} busy={freeformBusy || essayBusy || !!busy} generating={freeformBusy} result={freeformResult} onGenerate={generateFreeform} />
+      <FreeformApplicationForm key={`${seq}:${roleRevision ?? ""}`} seq={seq} method={method} busy={freeformBusy || essayBusy || !!busy} generating={freeformBusy} result={freeformResult} onGenerate={generateFreeform} />
       {!!method?.templateAttachments.length && <div className="flex flex-wrap gap-2">{method.templateAttachments.map((a) => <a key={a.url} href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">{a.name} 내려받기</a>)}</div>}
       <div className="rounded-lg bg-gray-50 p-3 space-y-2">
         <h4 className="text-sm font-medium">Word 양식 작성</h4>
