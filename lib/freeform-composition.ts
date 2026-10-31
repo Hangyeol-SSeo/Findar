@@ -27,7 +27,16 @@ export interface CompositionCatalog {
 }
 export const str = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const join = (...v: unknown[]) => v.map(str).filter(Boolean).join(" / ");
-const period = (a: string, b: string) => [str(a), str(b)].filter(Boolean).join(" - ");
+/** 저장된 `2019-03`, `2026-05-21`을 서류에서 흔한 `2019.03`, `2026.05.21` 꼴로 보인다. 그 밖의 글(재직 중 등)은 그대로 둔다. */
+export function fmtDate(value: unknown): string {
+  const v = str(value);
+  const m = v.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/);
+  return m ? [m[1], m[2].padStart(2, "0"), m[3]?.padStart(2, "0")].filter(Boolean).join(".") : v;
+}
+export const period = (a: string, b: string) => [fmtDate(a), fmtDate(b)].filter(Boolean).join(" ~ ");
+// 외국어 수준은 자유 입력칸이라 영어 단어(Intermediate)로 저장된 경우가 많다. 한국어 서류에는 한국어로 쓴다.
+const LEVEL_KO: Record<string, string> = { beginner: "초급", basic: "초급", low: "초급", intermediate: "중급", medium: "중급", advanced: "상급", high: "상급", fluent: "상급", native: "원어민" };
+export const levelLabel = (v: unknown) => LEVEL_KO[str(v).toLowerCase()] ?? str(v);
 export function isFocus(v: unknown): v is CompositionFocus { return typeof v === "string" && Object.hasOwn(COMPOSITION_FOCUS, v); }
 export function inferCompositionFocus(role: string): CompositionFocus {
   if (/퀀트|매크로|자산배분|투자전략|quant|macro/i.test(role)) return "macro";
@@ -63,17 +72,17 @@ export function profileCompositionItems(profile: ApplicantProfile): CompositionI
   profile.education.forEach((e, i) => add("education", i, join(e.schoolName, e.major), e.schoolLevel, period(e.startDate, e.endDate), join(e.degreeType || e.schoolLevel, e.status), "", [
     period(e.startDate, e.endDate), [str(e.schoolName), str(e.major)].filter(Boolean).join("\n"), join(e.degreeType || e.schoolLevel, e.status), str(e.gpa) ? join(e.gpa, e.gpaMax) : "",
   ]));
-  profile.certifications.forEach((c, i) => add("credential", i, str(c.name), "자격", str(c.issuedDate), str(c.issuer), "", ["자격", str(c.name), str(c.issuer), str(c.issuedDate), ""]));
-  profile.languageTests.forEach((l, i) => add("language", i, str(l.testName), "어학", str(l.date), join(l.score, l.scoreMax), "", ["어학", str(l.testName), "", str(l.date), join(l.score, l.scoreMax)]));
+  profile.certifications.forEach((c, i) => add("credential", i, str(c.name), "자격", str(c.issuedDate), str(c.issuer), "", ["자격", str(c.name), str(c.issuer), fmtDate(c.issuedDate), ""]));
+  profile.languageTests.forEach((l, i) => add("language", i, str(l.testName), "어학", fmtDate(l.date), join(l.score, l.scoreMax), "", ["어학", str(l.testName), "", fmtDate(l.date), join(l.score, l.scoreMax)]));
   profile.workExperiences.forEach((w, i) => add("work", i, join(w.companyName, w.department), "근무 경력", period(w.startDate, w.isCurrent ? "재직 중" : w.endDate), str(w.duties).length <= 160 ? str(w.duties) : join(w.position, w.employmentType), str(w.duties), [
     period(w.startDate, w.isCurrent ? "재직 중" : w.endDate), [str(w.companyName), str(w.department)].filter(Boolean).join("\n"), [str(w.position), str(w.employmentType)].filter(Boolean).join("\n"), str(w.duties),
   ]));
   profile.projects.forEach((p, i) => add("experience", i, str(p.name), "프로젝트", period(p.startDate, p.endDate), str(p.role), join(p.role, p.workplace && `근무처 ${p.workplace}`, p.client && `발주처 ${p.client}`, p.contributionPercent && `기여도 ${p.contributionPercent}%`)));
   profile.activities.forEach((a, i) => add("experience", i, str(a.organization), str(a.category) || "활동", period(a.startDate, a.endDate), str(a.role), join(a.role, a.detail)));
-  profile.research.forEach((r, i) => add("experience", i, str(r.title), "학술 연구", str(r.date), join(r.organizer, r.role), join(r.organizer, r.role, r.authorRank && `저자 순위 ${r.authorRank}`)));
-  profile.awards.forEach((a, i) => add("experience", i, str(a.name), "수상", str(a.date), join(a.organizer, a.detail), join(a.organizer, a.detail)));
+  profile.research.forEach((r, i) => add("experience", i, str(r.title), "학술 연구", fmtDate(r.date), join(r.organizer, r.role), join(r.organizer, r.role, r.authorRank && `저자 순위 ${r.authorRank}`)));
+  profile.awards.forEach((a, i) => add("experience", i, str(a.name), "수상", fmtDate(a.date), join(a.organizer, a.detail), join(a.organizer, a.detail)));
   if (str(profile.skillsNote)) add("skill", 0, "활용 역량", "활용 역량", "", str(profile.skillsNote), str(profile.skillsNote));
-  profile.foreignLanguageSkills.forEach((l, i) => add("skill", i, str(l.language), "언어 활용", "", join(l.reading && `읽기 ${l.reading}`, l.writing && `쓰기 ${l.writing}`, l.speaking && `말하기 ${l.speaking}`), ""));
+  profile.foreignLanguageSkills.forEach((l, i) => add("skill", i, str(l.language), "언어 활용", "", join(l.reading && `독해 ${levelLabel(l.reading)}`, l.writing && `작문 ${levelLabel(l.writing)}`, l.speaking && `회화 ${levelLabel(l.speaking)}`), ""));
   if (str(profile.portfolioLinks)) add("skill", 0, "참고 자료", "참고 자료", "", str(profile.portfolioLinks), "");
   return items;
 }

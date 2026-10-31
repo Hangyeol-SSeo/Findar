@@ -135,8 +135,8 @@ class Prototype:
                 for item in row.findall("w:trPr/w:cantSplit", NS):
                     row.find("w:trPr", NS).remove(item)
             for cell, value in zip(row.findall("w:tc", NS), values):
-                if cell is row.findall("w:tc", NS)[0] and index in ("education.table", "work.table") and " - " in value:
-                    value = value.replace(" - ", "\n- ", 1)
+                if cell is row.findall("w:tc", NS)[0] and index in ("education.table", "work.table") and " ~ " in value:
+                    value = value.replace(" ~ ", "\n~ ", 1)
                 paragraph = cell.find("w:p", NS)
                 for extra in cell.findall("w:p", NS)[1:]:
                     cell.remove(extra)
@@ -288,5 +288,7 @@ if __name__ == "__main__":
     try:
         print(json.dumps(generate(json.load(sys.stdin)), ensure_ascii=False))
     except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({"error": "지원서 문서를 생성하지 못했습니다. 기준 양식 파일을 확인해주세요."}, ensure_ascii=False))
         sys.exit(1)

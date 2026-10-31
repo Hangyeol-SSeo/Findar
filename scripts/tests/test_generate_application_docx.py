@@ -17,7 +17,7 @@ class GenerateApplicationTests(unittest.TestCase):
         essay = '첫 번째 문단 <>& 😀\n\n둘째 문단입니다.'
         long_text = '긴 업무 내용입니다. ' * 1200
         payload = {'company': '테스트 회사', 'role': '분석', 'name': '지원자', 'contacts': ['candidate@example.test'], 'pages': [
-            {'title': '입사지원서', 'blocks': [{'type': 'table', 'title': '경력', 'headers': ['기간', '회사', '직위', '담당업무'], 'widths': [18, 28, 20, 34], 'rows': [['2020-01 - 2021-01', '회사 A', '사원', long_text], ['2021-02 - 2022-02', '회사 B', '연구원', '다른 업무']]}]},
+            {'title': '입사지원서', 'blocks': [{'type': 'table', 'title': '경력', 'headers': ['기간', '회사', '직위', '담당업무'], 'widths': [18, 28, 20, 34], 'rows': [['2020.01 ~ 2021.01', '회사 A', '사원', long_text], ['2021.02 ~ 2022.02', '회사 B', '연구원', '다른 업무']]}]},
             {'title': '자기소개서', 'blocks': [{'type': 'entries', 'title': '', 'entries': [{'title': '지원동기', 'lines': [{'label': '', 'text': essay}]}]}]},
         ]}
         blob = base64.b64decode(module.generate(payload)['document'])

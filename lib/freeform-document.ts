@@ -22,11 +22,13 @@ export function generateFreeformDocx(document: FreeformDocument, signal?: AbortS
       if (size > 20 * 1024 * 1024) { proc.kill(); finish(new Error("생성한 지원서가 너무 큽니다.")); }
       else chunks.push(chunk);
     });
-    proc.stderr.resume();
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => { if (stderr.length < 4000) stderr += chunk.toString(); });
     proc.stdin.on("error", () => {});
     proc.on("error", () => finish(new Error("지원서 생성에는 Python 3가 필요합니다. FINDAR_PYTHON 경로를 확인해주세요.")));
     proc.on("close", (code) => {
       if (settled) return;
+      if (code !== 0 && stderr) console.error("[freeform-document] Python 생성기 오류:\n" + stderr);
       try {
         const result = JSON.parse(Buffer.concat(chunks).toString());
         if (code !== 0 || result.error || typeof result.document !== "string") throw new Error(result.error || "지원서를 만들지 못했습니다.");

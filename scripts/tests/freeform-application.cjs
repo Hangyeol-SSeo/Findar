@@ -167,7 +167,7 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       assert.equal(built.personalRows.length, 2);
       assert.equal(JSON.stringify(built.pages).includes('군필'), false);
       const opted = buildFreeformDocument('회사', role, profile, null, { ...defaults, includeMilitary: true, includePersonalDetails: true });
-      assert.ok(JSON.stringify(opted.personalRows).includes('비공개 주소')); assert.ok(JSON.stringify(opted.pages).includes('2020-01 - 2021-07'));
+      assert.ok(JSON.stringify(opted.personalRows).includes('비공개 주소')); assert.ok(JSON.stringify(opted.pages).includes('2020.01 ~ 2021.07'));
       const unsaved = buildFreeformDocument('회사', role, emptyApplicantProfile(), null, { ...defaults, includePersonalDetails: true });
       assert.equal(JSON.stringify(unsaved).includes('대한민국'), false); assert.ok(unsaved.warnings.some(w => w.label === '지원 정보'));
       assert.equal(built.applicationType, '', 'prior work experience must not determine the application category');

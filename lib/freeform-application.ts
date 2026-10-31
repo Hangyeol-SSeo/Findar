@@ -1,6 +1,6 @@
 import type { ApplicantProfile } from "./applicant-profile";
 import type { ApplicationDraft } from "./application-draft";
-import { inferCompositionFocus, parseComposition, recommendComposition, resolveComposition, type CompositionCatalog, type FreeformComposition } from "./freeform-composition";
+import { fmtDate, levelLabel, period, inferCompositionFocus, parseComposition, recommendComposition, resolveComposition, type CompositionCatalog, type FreeformComposition } from "./freeform-composition";
 
 export interface FreeformOptions {
   mode: "filled" | "blank";
@@ -97,12 +97,12 @@ export function buildFreeformDocument(company: string, selection: { role: string
   }
   if (options.includeMilitary) blocks.push(entryBlock("병역사항", [{ label: "병역", text: blank ? "[병역 구분 / 군별 / 계급 / 복무 기간]" : [
     join(p?.militaryStatus, p?.militaryBranch, p?.militarySpecialty, p?.militaryRank, p?.militaryDischargeType),
-    [text(p?.militaryServiceStart), text(p?.militaryServiceEnd)].filter(Boolean).join(" - "),
+    period(text(p?.militaryServiceStart), text(p?.militaryServiceEnd)),
   ].filter(Boolean).join("  ") }]));
   const personalRows = [["성명", field(p?.name, "성명"), "연락처", field(p?.phone, "연락처")], ["이메일", field(p?.email, "이메일")]];
   if (options.includePersonalDetails) personalRows.push(
-    ["생년월일", field(p?.birthDate, "생년월일"), "성별 및 국적", blank ? "[성별 / 국적]" : join(p?.gender, p?.nationality)],
-    ["주소", blank ? "[주소]" : [p?.postalCode, p?.address, p?.addressDetail].map(text).filter(Boolean).join(" ")]);
+    ["생년월일", field(fmtDate(p?.birthDate), "생년월일"), "성별 및 국적", blank ? "[성별 / 국적]" : join(p?.gender, p?.nationality)],
+    ["주소", blank ? "[주소]" : [text(p?.postalCode) && `(${text(p?.postalCode)})`, text(p?.address), text(p?.addressDetail)].filter(Boolean).join(" ")]);
   const pages: FreeformPage[] = [{ title: "입사지원서", blocks }];
   if (detailBlocks.length) pages.push({ title: "경력 및 경험 상세", blocks: detailBlocks });
   if (options.includeEssays) {
