@@ -135,8 +135,8 @@ class Prototype:
                 for item in row.findall("w:trPr/w:cantSplit", NS):
                     row.find("w:trPr", NS).remove(item)
             for cell, value in zip(row.findall("w:tc", NS), values):
-                if cell is row.findall("w:tc", NS)[0] and index in ("education.table", "work.table") and " - " in value:
-                    value = value.replace(" - ", "\n- ", 1)
+                if cell is row.findall("w:tc", NS)[0] and index in ("education.table", "work.table") and " ~ " in value:
+                    value = value.replace(" ~ ", "\n~ ", 1)
                 paragraph = cell.find("w:p", NS)
                 for extra in cell.findall("w:p", NS)[1:]:
                     cell.remove(extra)
@@ -244,10 +244,16 @@ def filled_nodes(proto, payload):
                 if entry.get("meta"):
                     nodes.append(proto.paragraph("details.meta", entry["meta"], keep=True))
                 for line in entry["lines"]:
+                    following_heading = False
                     for j, part in enumerate(line["text"].replace("\r\n", "\n").split("\n")):
                         label = line["label"] if j == 0 else ""
                         pattern = 'essay.body' if essay_page else 'details.work.line'
-                        nodes.append(proto.paragraph(pattern, part, label=label, essay=essay_page))
+                        # Applicant-written [subheadings] must stay with their
+                        # following prose, including any intervening blank line.
+                        subheading = essay_page and bool(re.fullmatch(r'\[[^\[\]\n]{1,80}\]', part.strip()))
+                        keep = subheading or (following_heading and not part.strip())
+                        nodes.append(proto.paragraph(pattern, part, label=label, essay=essay_page, keep=keep))
+                        following_heading = bool(keep)
     return nodes
 
 
@@ -282,5 +288,7 @@ if __name__ == "__main__":
     try:
         print(json.dumps(generate(json.load(sys.stdin)), ensure_ascii=False))
     except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({"error": "지원서 문서를 생성하지 못했습니다. 기준 양식 파일을 확인해주세요."}, ensure_ascii=False))
         sys.exit(1)

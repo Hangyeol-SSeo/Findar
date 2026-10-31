@@ -17,7 +17,7 @@ class GenerateApplicationTests(unittest.TestCase):
         essay = '첫 번째 문단 <>& 😀\n\n둘째 문단입니다.'
         long_text = '긴 업무 내용입니다. ' * 1200
         payload = {'company': '테스트 회사', 'role': '분석', 'name': '지원자', 'contacts': ['candidate@example.test'], 'pages': [
-            {'title': '입사지원서', 'blocks': [{'type': 'table', 'title': '경력', 'headers': ['기간', '회사', '직위', '담당업무'], 'widths': [18, 28, 20, 34], 'rows': [['2020-01 - 2021-01', '회사 A', '사원', long_text], ['2021-02 - 2022-02', '회사 B', '연구원', '다른 업무']]}]},
+            {'title': '입사지원서', 'blocks': [{'type': 'table', 'title': '경력', 'headers': ['기간', '회사', '직위', '담당업무'], 'widths': [18, 28, 20, 34], 'rows': [['2020.01 ~ 2021.01', '회사 A', '사원', long_text], ['2021.02 ~ 2022.02', '회사 B', '연구원', '다른 업무']]}]},
             {'title': '자기소개서', 'blocks': [{'type': 'entries', 'title': '', 'entries': [{'title': '지원동기', 'lines': [{'label': '', 'text': essay}]}]}]},
         ]}
         blob = base64.b64decode(module.generate(payload)['document'])
@@ -75,6 +75,20 @@ class GenerateApplicationTests(unittest.TestCase):
 
     def test_xml_invalid_controls_removed_without_dropping_korean_or_emoji(self):
         self.assertEqual(module.clean('한글\x00\x0b\n😀\t'), '한글\n😀\t')
+
+    def test_essay_subheadings_and_blank_lines_stay_with_following_prose(self):
+        payload = {'company': '회사', 'role': '분석팀', 'name': '지원자', 'pages': [
+            {'title': '입사지원서', 'blocks': []},
+            {'title': '자기소개서', 'blocks': [{'type': 'entries', 'title': '', 'entries': [
+                {'title': '자유문항', 'lines': [{'label': '', 'text': '[실제 경험]\n\n원문 내용입니다.'}]},
+            ]}]},
+        ]}
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(module.generate(payload)['document']))) as archive:
+            paragraphs = ET.fromstring(archive.read('word/document.xml')).findall('w:body/w:p', NS)
+            index = next(i for i, p in enumerate(paragraphs) if ''.join(p.itertext()) == '[실제 경험]')
+            self.assertIsNotNone(paragraphs[index].find('w:pPr/w:keepNext', NS))
+            self.assertIsNotNone(paragraphs[index + 1].find('w:pPr/w:keepNext', NS))
+            self.assertIsNone(paragraphs[index + 2].find('w:pPr/w:keepNext', NS))
 
     def test_long_resume_details_are_full_width_paragraphs(self):
         text = '긴 설명 원문을 넓은 문단에 보존합니다.'

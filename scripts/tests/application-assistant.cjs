@@ -67,6 +67,39 @@ try {
     assert.equal(resolveFillPlan([{ targetId: 'essay', sourceId: 'name' }, { targetId: 'family', sourceId: 'name' }], targets, values).assignments.length, 0);
     assert.equal(resolveFillPlan(deterministicFillAssignments(targets, essays), targets, essays).assignments[0].value, '저장한 답변');
   });
+  const planFor = (ts, sources) => resolveFillPlan(deterministicFillAssignments(ts, sources), ts, sources);
+  const multiProfile = { ...profile, gender: '남', militaryStatus: '군필',
+    education: [{ schoolName: '고교', schoolLevel: '고등학교', schoolLocation: '서울', startDate: '2015-03', endDate: '2018-02', gpa: '', gpaMax: '4.5' },
+      { schoolName: '대학', schoolLevel: '대학교', schoolLocation: '경기', major: '소프트웨어', startDate: '2019-03', endDate: '2026-02', gpa: '3.98', gpaMax: '4.5' }],
+    workExperiences: [{ companyName: 'A사', startDate: '2025-01', endDate: '2025-08', department: '개발팀', position: '사원', duties: '앱 개발' }, { companyName: 'B사', startDate: '2025-12', endDate: '2026-03' }],
+    foreignLanguageSkills: [{ language: '영어', reading: 'advanced', writing: 'intermediate', speaking: 'beginner' }] };
+  const multi = buildFillSources(multiProfile);
+  test('year/month placeholders are formatted, and a form needing the day is not guessed', () => {
+    const ts = [{ id: 'p', label: '재학기간', section: '학력정보', heading: '대학교 학력정보 1', rowIndex: 0, mode: 'replace', placeholder: '년   월 ~     년   월' },
+      { id: 'd', label: '입학일', section: '학력정보', heading: '대학교 학력정보 1', rowIndex: 0, mode: 'replace', placeholder: '년 월 일' }];
+    const plan = planFor(ts, multi);
+    assert.equal(plan.assignments.find((a) => a.targetId === 'p').value, '2019년 03월 ~ 2026년 02월');
+    assert.match(plan.skipped.find((x) => x.label.includes('입학일')).reason, /일\(日\)/);
+  });
+  test('banner headings choose the education row by school level, not by position', () => {
+    const ts = [{ id: 'h', label: '학교명', section: '학력정보', heading: '고등학교 학력정보', rowIndex: 0, mode: 'replace', placeholder: '고등학교' },
+      { id: 'u1', label: '학교명', section: '학력정보', heading: '대학교 학력정보 1', rowIndex: 0, mode: 'replace', placeholder: '대학교' },
+      { id: 'u2', label: '학교명', section: '학력정보', heading: '대학교 학력정보 2', rowIndex: 1, mode: 'replace', placeholder: '대학교' },
+      { id: 'loc', label: '소재지', section: '학력정보', heading: '대학교 학력정보 1', rowIndex: 0, mode: 'replace', placeholder: '(시/도 단위로 입력)' }];
+    assert.deepEqual(planFor(ts, multi).assignments.map((a) => [a.targetId, a.value]), [['h', '고교'], ['u1', '대학'], ['loc', '경기']]);
+  });
+  test('choice cells map saved gender, military status and language levels only to real options', () => {
+    const ts = [{ id: 'g', label: '성별', type: 'choice', mode: 'choice', options: ['남', '여'] }, { id: 'm', label: '병역여부', type: 'choice', mode: 'choice', options: ['필', '미필', '면제'] },
+      { id: 'sp', label: '회화', section: '외국어', rowIndex: 0, type: 'choice', mode: 'choice', options: ['상', '중', '하'] }, { id: 'rd', label: '독해', section: '외국어', rowIndex: 0, type: 'choice', mode: 'choice', options: ['상', '중', '하'] },
+      { id: 'v', label: '보훈대상여부', type: 'choice', mode: 'choice', options: ['대상', '비대상'] }];
+    assert.deepEqual(planFor(ts, multi).assignments.map((a) => [a.targetId, a.value]), [['g', '남'], ['m', '필'], ['sp', '하'], ['rd', '상']]);
+  });
+  test('consent boxes are never offered as choices', () => assert.equal(permittedTarget({ id: 'c', label: '항목', type: 'choice', mode: 'choice', options: ['동의', '거부'] }), false));
+  test('placeholder essays ("ㅇ") are not written into the form', () => assert.equal(buildEssayFillSources([{ question: '지원동기', answer: 'ㅇ', source: 'user_question', status: 'draft' }]).length, 0));
+  test('hobby and specialty share one box when the form has a single 취미/특기 cell', () =>
+    assert.equal(planFor([{ id: 'hs', label: '취미/특기' }], buildFillSources({ ...profile, hobbies: '달리기', specialties: '코딩' })).assignments[0].value, '달리기 / 코딩'));
+  test('위치 label 한글/영문/한자 map to name fields', () =>
+    assert.deepEqual(planFor([{ id: 'k', label: '한글' }, { id: 'e', label: '영문' }], buildFillSources({ ...profile, nameEn: 'HONG GILDONG' })).assignments.map((a) => a.value), ['홍길동', 'HONG GILDONG']));
   const { storeDocumentDownload, documentDownloadResponse } = load('lib/document-download.ts');
   test('Word attachment download retains Korean filename and is scoped to the job', () => {
     const url = storeDocumentDownload('job-a', '입사지원서-작성본.docx', Buffer.from('document-bytes').toString('base64'));

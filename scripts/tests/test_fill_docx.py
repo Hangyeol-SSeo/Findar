@@ -105,4 +105,66 @@ class StructuredTableTests(unittest.TestCase):
         self.assertIn('두 번째 문단', ''.join(root.itertext()))
         self.assertEqual(len(module.process({'document': result['document']})['targets']), 0)
 
+
+class PlaceholderAndChoiceTests(unittest.TestCase):
+    def document(self, content):
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as z:
+            z.writestr('word/document.xml', f'<w:document xmlns:w="{W}"><w:body>{content}</w:body></w:document>')
+        return base64.b64encode(out.getvalue()).decode()
+
+    def cell(self, text='', span=None, fill=None):
+        pr = ''.join([f'<w:gridSpan w:val="{span}"/>' if span else '', f'<w:shd w:fill="{fill}"/>' if fill else ''])
+        body = f'<w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>{text}</w:t></w:r>' if text else ''
+        return f'<w:tc><w:tcPr>{pr}</w:tcPr><w:p>{body}</w:p></w:tc>'
+
+    def result_text(self, doc, assignments):
+        result = module.process({'document': doc, 'assignments': assignments})
+        xml = zipfile.ZipFile(io.BytesIO(base64.b64decode(result['document']))).read('word/document.xml')
+        ET.fromstring(xml)
+        return ''.join(ET.fromstring(xml).itertext()), xml.decode()
+
+    def test_banner_sections_number_the_repeated_blocks(self):
+        row = lambda *cells: '<w:tr>' + ''.join(cells) + '</w:tr>'
+        doc = self.document('<w:tbl>' + row(self.cell('> 경력사항 1', 4)) + row(self.cell('회사명'), self.cell(), self.cell('직위'), self.cell())
+                            + row(self.cell('> 경력사항 2', 4)) + row(self.cell('회사명'), self.cell(), self.cell('직위'), self.cell()) + '</w:tbl>')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual([(t['section'], t['rowIndex'], t['label']) for t in targets], [('경력사항', 0, '회사명'), ('경력사항', 0, '직위'), ('경력사항', 1, '회사명'), ('경력사항', 1, '직위')])
+
+    def test_date_skeleton_placeholder_is_replaced_and_style_kept(self):
+        doc = self.document('<w:tbl><w:tr>' + self.cell('재학기간') + self.cell('년   월 ~     년   월      □ 현재 재직 중') + '</w:tr></w:tbl>')
+        target = module.process({'document': doc})['targets'][0]
+        self.assertEqual((target['mode'], target['placeholder']), ('replace', '년   월 ~     년   월'))
+        text, xml = self.result_text(doc, [{'targetId': target['id'], 'value': '2015년 03월 ~ 2018년 02월'}])
+        self.assertIn('2015년 03월 ~ 2018년 02월      □ 현재 재직 중', text)
+        self.assertIn('<w:sz w:val="20"/>', xml)
+
+    def test_real_values_are_never_treated_as_placeholders(self):
+        doc = self.document('<w:tbl><w:tr>' + self.cell('학교명') + self.cell('서울대학교') + self.cell('기간') + self.cell('2015.03 ~ 2018.02') + '</w:tr></w:tbl>')
+        self.assertEqual(module.process({'document': doc})['targets'], [])
+
+    def test_choice_cells_mark_the_selected_option(self):
+        doc = self.document('<w:tbl><w:tr>' + self.cell('성별') + self.cell('□ 남 □ 여') + self.cell('회화') + self.cell('상 / 중 / 하') + '</w:tr></w:tbl>')
+        targets = module.process({'document': doc})['targets']
+        self.assertEqual([(t['label'], t['type'], t['options']) for t in targets], [('성별', 'choice', ['남', '여']), ('회화', 'choice', ['상', '중', '하'])])
+        text, xml = self.result_text(doc, [{'targetId': targets[0]['id'], 'value': '남'}, {'targetId': targets[1]['id'], 'value': '중'}])
+        self.assertIn('■ 남 □ 여', text)
+        self.assertIn('<w:b/>', xml)
+        with self.assertRaises(ValueError):
+            module.process({'document': doc, 'assignments': [{'targetId': targets[0]['id'], 'value': '기타'}]})
+
+    def test_shaded_label_cells_and_consent_boxes_are_not_choices(self):
+        doc = self.document('<w:tbl><w:tr>' + self.cell('신입 / 경력', fill='D9D9D9') + self.cell() + self.cell('동의 □ 거부 □') + '</w:tr></w:tbl>')
+        self.assertEqual([t['label'] for t in module.process({'document': doc})['targets']], ['신입 / 경력'])
+
+    def test_header_row_table_gets_section_and_row_numbers(self):
+        row = lambda *cells: '<w:tr>' + ''.join(cells) + '</w:tr>'
+        doc = self.document('<w:tbl>' + row(self.cell('입학년월'), self.cell('학교'), self.cell('전공'), self.cell('졸업구분'))
+                            + row(self.cell('년 월'), self.cell('고등학교'), self.cell(), self.cell())
+                            + row(self.cell('년 월'), self.cell('대학교'), self.cell(), self.cell()) + '</w:tbl>')
+        targets = module.process({'document': doc})['targets']
+        self.assertTrue(all(t['section'] == '학력' for t in targets))
+        self.assertEqual([(t['rowIndex'], t['label'], t.get('heading')) for t in targets][:4], [(0, '입학년월', '고등학교'), (0, '학교', '고등학교'), (0, '전공', '고등학교'), (0, '졸업구분', '고등학교')])
+        self.assertEqual({t['heading'] for t in targets[4:]}, {'대학교'})
+
 if __name__ == '__main__': unittest.main()
