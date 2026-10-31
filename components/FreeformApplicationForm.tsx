@@ -26,6 +26,11 @@ export default function FreeformApplicationForm({ method, busy, generating, resu
     {status === "essay_only" && <p className="text-xs leading-5 text-gray-600">자기소개서에 자유양식 안내가 있습니다. 이력서까지 자유양식인지 확인하고 필요한 서류만 선택해주세요. 인터넷 접수 공고라면 자기소개서 본문을 지원 사이트에 입력해주세요.</p>}
     <fieldset disabled={busy} className="space-y-2">
       <legend className="mb-2 text-xs font-medium">포함할 내용</legend>
+      <label className="flex items-center gap-2 text-sm">지원 구분
+        <select value={options.applicationType} onChange={(event) => setOptions((prev) => ({ ...prev, applicationType: event.target.value as FreeformOptions["applicationType"] }))} className="rounded border border-gray-300 bg-white px-2 py-1">
+          <option value="">선택 안 함</option><option value="신입">신입</option><option value="경력">경력</option><option value="인턴">인턴</option>
+        </select>
+      </label>
       <p className="text-xs text-gray-500">이력서 기본 항목: 이름·연락처·학력·경력·자격·어학·활동·활용 역량</p>
       <div className="grid gap-2 text-sm sm:grid-cols-2">
         {([

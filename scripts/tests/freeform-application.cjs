@@ -63,7 +63,8 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
     });
     test('option validation rejects wrong types, unknown and inherited keys', () => {
       assert.deepEqual(parseFreeformOptions({}), defaults);
-      for (const input of [null, [], { mode: 'pdf' }, { includeEssays: 'false' }, { extra: true }, { toString: true }, JSON.parse('{"__proto__":true}')]) assert.throws(() => parseFreeformOptions(input));
+      for (const input of [null, [], { mode: 'pdf' }, { applicationType: '추정 신입' }, { applicationType: true }, { includeEssays: 'false' }, { extra: true }, { toString: true }, JSON.parse('{"__proto__":true}')]) assert.throws(() => parseFreeformOptions(input));
+      assert.equal(parseFreeformOptions({ applicationType: '신입' }).applicationType, '신입');
     });
     draft = { essayAnswers: [entry({}), entry({ question: '두 번째 질문', answer: '두 번째 답변 그대로입니다.' })] };
     const built = buildFreeformDocument('테스트 회사', role, profile, draft, defaults);
@@ -72,7 +73,8 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       for (const name of ['테스트 고등학교', '테스트 대학교', '회사 A', '회사 B', '학습 프로젝트', '테스트 교육', '테스트 연구', '테스트 수상', '테스트 자격', '테스트 어학']) assert.ok(body.includes(name), name);
       assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows.length, 2);
       assert.equal(built.pages[0].blocks.find(b => b.title === '경력').rows.length, 2);
-      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').headers.length, 3);
+      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').headers.length, 4);
+      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').rows[0][3], profile.workExperiences[0].duties);
       assert.equal(built.pages[0].blocks.filter(b => b.type === 'table').length, 3, 'long activity details must not create another resume table');
       assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows[0][3], '', 'do not print an unsupplied GPA just because the scale is set');
       assert.ok(body.includes('50%')); assert.ok(body.includes('재직 중'));
@@ -93,13 +95,28 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       const withoutDetails = buildFreeformDocument('회사', role, profile, draft, { ...defaults, includeDetails: false });
       assert.ok(JSON.stringify(withoutDetails.pages[0]).includes('테스트 교육'), 'record identities remain when detail pages are omitted');
     });
+    test('long duties use a wide section while the career table retains a reference', () => {
+      const duties = '긴 업무 원문과 문단을 보존합니다. '.repeat(40) + '\n두 번째 문단 끝';
+      const longProfile = { ...profile, workExperiences: [{ ...profile.workExperiences[0], duties }] };
+      const withDetails = buildFreeformDocument('회사', role, longProfile, draft, defaults);
+      assert.equal(withDetails.pages[0].blocks.find(b => b.title === '경력').rows[0][3], '경력 및 경험 상세 참조');
+      assert.equal(JSON.stringify(withDetails.pages[0]).includes(duties), false);
+      assert.equal(withDetails.pages[1].blocks[0].entries[0].lines[0].text, duties);
+      const withoutDetails = buildFreeformDocument('회사', role, longProfile, draft, { ...defaults, includeDetails: false });
+      assert.equal(withoutDetails.pages[0].blocks.find(b => b.title === '경력').rows[0][3], '아래 담당업무 상세 참조');
+      assert.equal(withoutDetails.pages[0].blocks.find(b => b.title === '담당업무 상세').entries[0].lines[0].text, duties);
+    });
     test('military/personal details are optional; defaults from unsaved profiles are never facts', () => {
       assert.equal(JSON.stringify(built.pages).includes('비공개 주소'), false);
+      assert.equal(JSON.stringify(built.personalRows).includes('비공개 주소'), false);
+      assert.equal(built.personalRows.length, 2);
       assert.equal(JSON.stringify(built.pages).includes('군필'), false);
       const opted = buildFreeformDocument('회사', role, profile, null, { ...defaults, includeMilitary: true, includePersonalDetails: true });
-      assert.ok(JSON.stringify(opted.pages).includes('비공개 주소')); assert.ok(JSON.stringify(opted.pages).includes('2020-01 - 2021-07'));
+      assert.ok(JSON.stringify(opted.personalRows).includes('비공개 주소')); assert.ok(JSON.stringify(opted.pages).includes('2020-01 - 2021-07'));
       const unsaved = buildFreeformDocument('회사', role, emptyApplicantProfile(), null, { ...defaults, includePersonalDetails: true });
-      assert.equal(JSON.stringify(unsaved.pages).includes('대한민국'), false); assert.ok(unsaved.warnings.some(w => w.label === '지원 정보'));
+      assert.equal(JSON.stringify(unsaved).includes('대한민국'), false); assert.ok(unsaved.warnings.some(w => w.label === '지원 정보'));
+      assert.equal(built.applicationType, '', 'prior work experience must not determine the application category');
+      assert.equal(buildFreeformDocument('회사', role, profile, null, { ...defaults, applicationType: '신입' }).applicationType, '신입');
     });
     test('blank template copies no candidate facts or saved answers', () => {
       const blank = buildFreeformDocument('테스트 회사', role, profile, draft, { ...defaults, mode: 'blank' });
@@ -107,6 +124,10 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       for (const secret of [profile.name, profile.phone, profile.email, '회사 A', '저장한 첫 문단']) assert.equal(value.includes(secret), false);
       assert.equal(blank.filled, 0); assert.equal(blank.pages.length, 3);
       assert.ok(value.includes('[성명]')); assert.ok(value.includes('[내용을 입력해주세요.]'));
+      const opted = buildFreeformDocument('회사', role, profile, draft, { ...defaults, mode: 'blank', includePersonalDetails: true, includeMilitary: true });
+      assert.equal(opted.personalRows.length, 4);
+      assert.ok(JSON.stringify(opted).includes('[주소]'));
+      for (const secret of ['비공개 주소', profile.birthDate, profile.phone, profile.name, '군필']) assert.equal(JSON.stringify(opted).includes(secret), false);
     });
     test('stale, needs-info and old generic answers are reported, never exported', () => {
       const result = buildFreeformDocument('회사', role, profile, { essayAnswers: [entry({ answer: 'old-role', roleRevision: 'old' }), entry({ question: '보완', answer: 'needs-info', status: 'needs_info' }), { question: '이전', answer: 'generic-old' }] }, defaults);
