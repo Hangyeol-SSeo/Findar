@@ -68,17 +68,26 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
     });
     draft = { essayAnswers: [entry({}), entry({ question: '두 번째 질문', answer: '두 번째 답변 그대로입니다.' })] };
     const built = buildFreeformDocument('테스트 회사', role, profile, draft, defaults);
-    test('all stored education/employment and experience categories are retained', () => {
+    const composition = load('lib/freeform-composition.ts');
+    const store = load('lib/freeform-composition-store.ts');
+    const catalogFor = (p = profile, focus = 'general', materials = [], jobText = '') => ({ version: 'fixture-v1', roleRevision: role.revision, focus, items: composition.recommendComposition(p, materials, role.role, jobText, focus) });
+    const selectAll = catalog => ({ ...composition.defaultComposition(catalog), choices: catalog.items.map(i => ({ id: i.id, level: ['work', 'experience'].includes(i.kind) && i.detail ? 'detail' : 'brief' })) });
+    test('defaults retain university, languages and concise employment, excluding unrelated records', () => {
       const body = JSON.stringify(built.pages);
-      for (const name of ['테스트 고등학교', '테스트 대학교', '회사 A', '회사 B', '학습 프로젝트', '테스트 교육', '테스트 연구', '테스트 수상', '테스트 자격', '테스트 어학']) assert.ok(body.includes(name), name);
-      assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows.length, 2);
+      for (const name of ['테스트 대학교', '회사 A', '회사 B', '테스트 어학']) assert.ok(body.includes(name), name);
+      for (const name of ['테스트 고등학교', '학습 프로젝트', '테스트 교육', '테스트 연구', '테스트 수상', '테스트 자격']) assert.equal(body.includes(name), false, name);
+      assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows.length, 1);
       assert.equal(built.pages[0].blocks.find(b => b.title === '경력').rows.length, 2);
-      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').headers.length, 4);
-      assert.equal(built.pages[0].blocks.find(b => b.title === '경력').rows[0][3], profile.workExperiences[0].duties);
-      assert.equal(built.pages[0].blocks.filter(b => b.type === 'table').length, 3, 'long activity details must not create another resume table');
-      assert.equal(built.pages[0].blocks.find(b => b.title === '학력').rows[0][3], '', 'do not print an unsupplied GPA just because the scale is set');
+      assert.equal(built.pages.length, 2, 'no detail page without selected detailed experiences');
+    });
+    test('explicit selection preserves all saved records and original detail without fabrication', () => {
+      const catalog = catalogFor();
+      const result = buildFreeformDocument('회사', role, profile, draft, { ...defaults, composition: selectAll(catalog) }, catalog);
+      const body = JSON.stringify(result.pages);
+      for (const name of ['테스트 고등학교', '학습 프로젝트', '테스트 교육', '테스트 연구', '테스트 수상', '테스트 자격']) assert.ok(body.includes(name), name);
+      assert.equal(result.pages[0].blocks.find(b => b.title === '학력').rows[0][3], '');
       assert.ok(body.includes('50%')); assert.ok(body.includes('재직 중'));
-      assert.equal(built.pages.length, 3);
+      assert.equal(result.pages.length, 3);
     });
     test('saved essays preserve wording, paragraph breaks, Unicode and order', () => {
       const entries = built.pages.at(-1).blocks[0].entries;
@@ -86,25 +95,71 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
       assert.equal(entries[1].title, '두 번째 질문');
       assert.equal(entries[1].lines[0].text, '두 번째 답변 그대로입니다.');
     });
-    test('resume prioritizes core records while full experience descriptions remain in details', () => {
-      const longDetail = '실제 수행한 활동의 상세 설명을 보존합니다. '.repeat(80);
-      const result = buildFreeformDocument('회사', role, { ...profile, activities: [{ ...profile.activities[0], detail: longDetail }] }, draft, defaults);
-      assert.equal(JSON.stringify(result.pages[0]).includes(longDetail), false);
-      assert.ok(JSON.stringify(result.pages[1]).includes(longDetail.trim()));
-      assert.equal(JSON.stringify(result.pages[0]).includes('테스트 교육'), false, 'detail identities are not duplicated on the resume');
-      const withoutDetails = buildFreeformDocument('회사', role, profile, draft, { ...defaults, includeDetails: false });
-      assert.ok(JSON.stringify(withoutDetails.pages[0]).includes('테스트 교육'), 'record identities remain when detail pages are omitted');
+    test('brief and excluded experiences never leak full detail; detailed selections alone create detail sections', () => {
+      const material = { id: 'verified', title: '데이터 검증 프로젝트', category: '개인 프로젝트', period: '', summary: '자료 정합성 확인', detail: '원본 데이터 오류를 확인한 구체적인 수행 내용', tags: ['risk'], status: 'confirmed', source: '실제 코드', updatedAt: 1 };
+      const catalog = catalogFor(profile, 'risk', [material]);
+      const plan = composition.defaultComposition(catalog);
+      assert.equal(plan.choices.find(c => c.id === 'material:verified').level, 'detail');
+      const build = level => buildFreeformDocument('회사', role, profile, draft, { ...defaults, composition: { ...plan, choices: plan.choices.map(c => c.id === 'material:verified' ? { ...c, level } : c) } }, catalog);
+      const brief = build('brief');
+      assert.ok(JSON.stringify(brief).includes(material.summary));
+      assert.equal(JSON.stringify(brief).includes(material.detail), false);
+      assert.equal(brief.pages.length, 2);
+      assert.equal(JSON.stringify(build('exclude')).includes(material.title), false);
+      const detailed = build('detail');
+      assert.equal(detailed.pages[1].blocks[0].entries[0].lines[0].text, material.detail);
+      const inline = buildFreeformDocument('회사', role, profile, draft, { ...defaults, composition: plan, includeDetails: false }, catalog);
+      assert.equal(inline.pages.length, 2);
+      assert.ok(JSON.stringify(inline.pages[0]).includes(material.detail));
     });
-    test('long duties use a wide section while the career table retains a reference', () => {
+    test('long employment details are exported only when explicitly selected', () => {
       const duties = '긴 업무 원문과 문단을 보존합니다. '.repeat(40) + '\n두 번째 문단 끝';
-      const longProfile = { ...profile, workExperiences: [{ ...profile.workExperiences[0], duties }] };
-      const withDetails = buildFreeformDocument('회사', role, longProfile, draft, defaults);
-      assert.equal(withDetails.pages[0].blocks.find(b => b.title === '경력').rows[0][3], '경력 및 경험 상세 참조');
+      const p = { ...profile, workExperiences: [{ ...profile.workExperiences[0], duties }] }, catalog = catalogFor(p);
+      const brief = buildFreeformDocument('회사', role, p, draft, defaults);
+      assert.equal(JSON.stringify(brief).includes(duties), false);
+      const withDetails = buildFreeformDocument('회사', role, p, draft, { ...defaults, composition: selectAll(catalog) }, catalog);
       assert.equal(JSON.stringify(withDetails.pages[0]).includes(duties), false);
       assert.equal(withDetails.pages[1].blocks[0].entries[0].lines[0].text, duties);
-      const withoutDetails = buildFreeformDocument('회사', role, longProfile, draft, { ...defaults, includeDetails: false });
-      assert.equal(withoutDetails.pages[0].blocks.find(b => b.title === '경력').rows[0][3], '아래 담당업무 상세 참조');
-      assert.equal(withoutDetails.pages[0].blocks.find(b => b.title === '담당업무 상세').entries[0].lines[0].text, duties);
+    });
+    test('focus changes relevance; finance credentials stay and development research stays auxiliary', () => {
+      const p = { ...profile, certifications: [{ name: '투자자산운용사' }, { name: '재무위험관리사' }, { name: '정보처리기사' }], activities: [{ organization: 'Babylon 연구', category: '학회', role: '프로토콜 조사', detail: '블록체인 구조 조사' }] };
+      const digital = catalogFor(p, 'digital'), risk = catalogFor(p, 'risk');
+      assert.equal(digital.items.find(i => i.title === 'Babylon 연구').recommended, 'detail');
+      assert.equal(risk.items.find(i => i.title === 'Babylon 연구').recommended, 'exclude');
+      assert.equal(risk.items.find(i => i.title === '재무위험관리사').recommended, 'brief');
+      assert.equal(risk.items.find(i => i.title === '정보처리기사').recommended, 'exclude');
+      assert.equal(risk.items.find(i => i.category === '학술 연구').recommended, 'exclude');
+      assert.equal(composition.inferCompositionFocus('리스크관리'), 'risk');
+      assert.equal(composition.inferCompositionFocus('매크로 리서치'), 'macro');
+      assert.equal(composition.inferCompositionFocus('운용지원'), 'bond');
+    });
+    test('full-career and high-school requirements cannot be excluded', () => {
+      const catalog = catalogFor(profile, 'general', [], '고등학교 포함하여 작성. 모든 경력을 기재해주세요.');
+      const plan = composition.defaultComposition(catalog);
+      assert.equal(catalog.items.filter(i => i.required).length, 3);
+      const required = catalog.items.find(i => i.required);
+      assert.throws(() => composition.resolveComposition(catalog, { ...plan, choices: plan.choices.map(c => c.id === required.id ? { ...c, level: 'exclude' } : c) }), /제외할 수/);
+    });
+    test('stale versions, roles, unknown and duplicate IDs and unconfirmed selections are rejected', () => {
+      const material = { id: 'review', title: '미확인', category: '학습', period: '', summary: '요약', detail: '미검증 수치', tags: ['risk'], status: 'review', source: '이전 글', updatedAt: 0 };
+      const catalog = catalogFor(profile, 'risk', [material]), plan = composition.defaultComposition(catalog);
+      for (const changed of [{ version: 'old' }, { roleRevision: 'old' }, { focus: 'equity' }]) assert.throws(() => composition.resolveComposition(catalog, { ...plan, ...changed }), /변경/);
+      assert.throws(() => composition.resolveComposition(catalog, { ...plan, choices: [{ id: 'unknown', level: 'brief' }] }), /없는 이력/);
+      assert.throws(() => composition.resolveComposition(catalog, { ...plan, choices: [{ id: 'material:review', level: 'detail' }] }), /확인하지/);
+      assert.throws(() => composition.parseComposition({ ...plan, choices: [plan.choices[0], plan.choices[0]] }), /중복/);
+      assert.throws(() => composition.parseComposition({ ...plan, choices: [{ id: 'x', level: 'brief', summary: '두\n줄' }] }));
+      assert.throws(() => composition.parseComposition({ ...plan, toString: true }));
+      const core = catalog.items.find(i => i.kind === 'education');
+      assert.throws(() => composition.resolveComposition(catalog, { ...plan, choices: [{ id: core.id, level: 'detail' }] }), /기본 항목/);
+    });
+    test('per-posting overrides change only exported explanation and do not mutate source records', () => {
+      const catalog = catalogFor(), plan = composition.defaultComposition(catalog), job = catalog.items.find(i => i.kind === 'work');
+      const chosen = { ...plan, choices: plan.choices.map(c => c.id === job.id ? { ...c, level: 'detail', summary: '이번 공고의 한 줄 설명', detail: '이번 공고에 맞춰 직접 확인한 설명' } : c) };
+      const result = buildFreeformDocument('회사', role, profile, null, { ...defaults, includeEssays: false, composition: chosen }, catalog);
+      assert.ok(JSON.stringify(result).includes('이번 공고의 한 줄 설명'));
+      assert.ok(JSON.stringify(result).includes('이번 공고에 맞춰 직접 확인한 설명'));
+      assert.equal(profile.workExperiences[0].duties, '사용자가 저장한 업무 내용');
+      assert.equal(job.detail, profile.workExperiences[0].duties);
     });
     test('military/personal details are optional; defaults from unsaved profiles are never facts', () => {
       assert.equal(JSON.stringify(built.pages).includes('비공개 주소'), false);
@@ -164,6 +219,37 @@ function entry(fields) { return { question: '지원동기', answer: '저장한 �
     assert.equal((await post({}, 'fixture', 'https://evil.example')).status, 403);
     assert.equal((await post({}, 'missing')).status, 404);
     assert.equal((await post({ mode: 'invalid' })).status, 400);
+    const get = (seq = 'fixture', query = '') => route.GET(new Request(`http://localhost:3000/api/test${query}`), { params: Promise.resolve({ seq }) });
+    const put = (plan, seq = 'fixture', origin = 'http://localhost:3000') => route.PUT(new Request('http://localhost:3000/api/test', { method: 'PUT', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify(plan) }), { params: Promise.resolve({ seq }) });
+    fs.writeFileSync('data/experience-cards.json', JSON.stringify({ cards: [
+      { id: 'EXP-01', context: '과거 기록', personal_actions: ['실제 수행 여부 확인 전'], result_limitations: ['수치 불일치'] },
+      { id: 'EXP-02', excluded: true, context: '제외된 경험', personal_actions: ['포함 금지'] },
+    ] }));
+    let catalogResponse = await (await get()).json();
+    assert.equal(catalogResponse.catalog.items.filter(i => i.status === 'review').length, 1);
+    const materialsRoute = load('app/api/application-materials/route.ts');
+    const save = (fields, origin = 'http://localhost:3000') => materialsRoute.PUT(new Request('http://localhost:3000/api/application-materials', { method: 'PUT', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify(fields) }));
+    const input = { title: '직접 확인한 경험', category: '개인 프로젝트', period: '', summary: '실제 자료 확인', detail: '실제로 수행한 범위만 정리했습니다.', tags: ['risk'], status: 'confirmed', source: '검토한 원본', originId: 'card:EXP-01' };
+    assert.equal((await save(input, 'https://evil.example')).status, 403);
+    assert.equal((await save({ ...input, summary: '' })).status, 400);
+    const added = await (await save(input)).json();
+    assert.ok(added.material.id);
+    assert.equal((await save({ ...input, id: added.material.id, expectedUpdatedAt: 0 })).status, 400);
+    catalogResponse = await (await get('fixture', '?focus=risk&reset=1')).json();
+    assert.equal(catalogResponse.catalog.items.filter(i => i.status === 'review').length, 0, 'imported cards disappear; excluded cards never appear');
+    assert.equal(catalogResponse.plan.choices.find(c => c.id === `material:${added.material.id}`).level, 'detail');
+    assert.equal((await put(catalogResponse.plan, 'fixture', 'https://evil.example')).status, 403);
+    assert.equal((await put({ ...catalogResponse.plan, version: 'old' })).status, 400);
+    assert.equal((await put(catalogResponse.plan)).status, 200);
+    assert.equal((await (await get()).json()).catalog.focus, 'risk', 'saved focus retained for the same role');
+    const changedProfile = { ...profile, skillsNote: '변경된 자료', updatedAt: Date.now() + 10 };
+    writeApplicantProfile(changedProfile);
+    assert.equal((await put(catalogResponse.plan)).status, 400);
+    assert.equal((await post({ ...defaults, composition: catalogResponse.plan })).status, 400, 'stale source snapshot cannot generate');
+    assert.match((await (await get()).json()).notice, /달라/);
+    assert.equal((await get('fixture', '?focus=invalid')).status, 400);
+    assert.equal((await get('missing')).status, 404);
+    passed++; console.log('PASS material confirmation, origin, concurrency, saved focus and source invalidation through routes');
     const response = await post(defaults);
     assert.equal(response.status, 202);
     const task = (await response.json()).task;

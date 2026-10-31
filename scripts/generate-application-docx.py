@@ -244,10 +244,16 @@ def filled_nodes(proto, payload):
                 if entry.get("meta"):
                     nodes.append(proto.paragraph("details.meta", entry["meta"], keep=True))
                 for line in entry["lines"]:
+                    following_heading = False
                     for j, part in enumerate(line["text"].replace("\r\n", "\n").split("\n")):
                         label = line["label"] if j == 0 else ""
                         pattern = 'essay.body' if essay_page else 'details.work.line'
-                        nodes.append(proto.paragraph(pattern, part, label=label, essay=essay_page))
+                        # Applicant-written [subheadings] must stay with their
+                        # following prose, including any intervening blank line.
+                        subheading = essay_page and bool(re.fullmatch(r'\[[^\[\]\n]{1,80}\]', part.strip()))
+                        keep = subheading or (following_heading and not part.strip())
+                        nodes.append(proto.paragraph(pattern, part, label=label, essay=essay_page, keep=keep))
+                        following_heading = bool(keep)
     return nodes
 
 
