@@ -3,7 +3,8 @@
  *
  * Findar(lib/sheet-sync.ts)가 지원 상태를 바꿀 때마다 이 웹 앱으로 POST를 보낸다.
  * 링크 열(F)의 KOFIA 공고 번호(seq=)로 기존 행을 찾아 단계·결과를 갱신하고, 없으면 새 행을 추가한다.
- * Findar에 직접 추가한 공고(seq가 manual-로 시작)는 링크가 없거나 협회 주소가 아니므로, 링크 칸 메모(findar:seq)로 찾는다.
+ * 직접 추가한 공고(manual-)와 회사 채용 사이트에서 모은 공고(greeting-·page-·api-·workday- 등, lib/job-source.ts)는
+ * 링크가 없거나 협회 주소가 아니므로, 링크 칸 메모(findar:seq)로 찾는다.
  *
  * 설치
  *  1. 지원 현황 시트에서 [확장 프로그램] → [Apps Script]를 열고 이 파일 내용을 그대로 붙여 넣는다.
@@ -27,7 +28,7 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var token = PropertiesService.getScriptProperties().getProperty("FINDAR_TOKEN");
     if (!token || data.token !== token) return json({ ok: false, error: "invalid token" });
-    if (!/^(\d+|manual-[a-z0-9]+)$/.test(String(data.seq))) return json({ ok: false, error: "invalid seq" });
+    if (!/^(\d+|(manual|greeting|saraminats|recruiter|page|api|workday|toss)-[A-Za-z0-9_.-]+)$/.test(String(data.seq))) return json({ ok: false, error: "invalid seq" });
 
     lock.waitLock(20000);
     var sheet = getTargetSheet();
